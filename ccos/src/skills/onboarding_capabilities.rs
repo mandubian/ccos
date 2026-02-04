@@ -201,9 +201,7 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_secrets_set(payload, store, queue).await
-            })
+            rt_handle.block_on(async { handle_secrets_set(payload, store, queue).await })
         })
         .join()
         .map_err(|_| RuntimeError::Generic("ccos.secrets.set: thread join error".to_string()))?;
@@ -228,9 +226,7 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_memory_store(payload, wm).await
-            })
+            rt_handle.block_on(async { handle_memory_store(payload, wm).await })
         })
         .join()
         .map_err(|_| RuntimeError::Generic("ccos.memory.store: thread join error".to_string()))?;
@@ -255,9 +251,7 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_memory_get(payload, wm).await
-            })
+            rt_handle.block_on(async { handle_memory_get(payload, wm).await })
         })
         .join()
         .map_err(|_| RuntimeError::Generic("ccos.memory.get: thread join error".to_string()))?;
@@ -277,17 +271,20 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
     // ccos.approval.request_human_action
     let approval_queue_request = approval_queue.clone();
     let request_human_action_handler = Arc::new(move |input: &Value| {
-        let payload: RequestHumanActionInput = parse_payload("ccos.approval.request_human_action", input)?;
+        let payload: RequestHumanActionInput =
+            parse_payload("ccos.approval.request_human_action", input)?;
         let queue = approval_queue_request.clone();
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_request_human_action(payload, queue).await
-            })
+            rt_handle.block_on(async { handle_request_human_action(payload, queue).await })
         })
         .join()
-        .map_err(|_| RuntimeError::Generic("ccos.approval.request_human_action: thread join error".to_string()))?;
+        .map_err(|_| {
+            RuntimeError::Generic(
+                "ccos.approval.request_human_action: thread join error".to_string(),
+            )
+        })?;
 
         result
     });
@@ -311,12 +308,12 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_complete_human_action(payload, queue, wm).await
-            })
+            rt_handle.block_on(async { handle_complete_human_action(payload, queue, wm).await })
         })
         .join()
-        .map_err(|_| RuntimeError::Generic("ccos.approval.complete: thread join error".to_string()))?;
+        .map_err(|_| {
+            RuntimeError::Generic("ccos.approval.complete: thread join error".to_string())
+        })?;
 
         result
     });
@@ -333,17 +330,18 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
     // ccos.skill.get_onboarding_status
     let working_memory_status = working_memory.clone();
     let get_onboarding_status_handler = Arc::new(move |input: &Value| {
-        let payload: GetOnboardingStatusInput = parse_payload("ccos.skill.get_onboarding_status", input)?;
+        let payload: GetOnboardingStatusInput =
+            parse_payload("ccos.skill.get_onboarding_status", input)?;
         let wm = working_memory_status.clone();
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_get_onboarding_status(payload, wm).await
-            })
+            rt_handle.block_on(async { handle_get_onboarding_status(payload, wm).await })
         })
         .join()
-        .map_err(|_| RuntimeError::Generic("ccos.skill.get_onboarding_status: thread join error".to_string()))?;
+        .map_err(|_| {
+            RuntimeError::Generic("ccos.skill.get_onboarding_status: thread join error".to_string())
+        })?;
 
         result
     });
@@ -361,18 +359,21 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
     let working_memory_resume = working_memory.clone();
     let approval_queue_resume = approval_queue.clone();
     let check_onboarding_resume_handler = Arc::new(move |input: &Value| {
-        let payload: CheckOnboardingResumeInput = parse_payload("ccos.skill.check_onboarding_resume", input)?;
+        let payload: CheckOnboardingResumeInput =
+            parse_payload("ccos.skill.check_onboarding_resume", input)?;
         let wm = working_memory_resume.clone();
         let queue = approval_queue_resume.clone();
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async {
-                handle_check_onboarding_resume(payload, wm, queue).await
-            })
+            rt_handle.block_on(async { handle_check_onboarding_resume(payload, wm, queue).await })
         })
         .join()
-        .map_err(|_| RuntimeError::Generic("ccos.skill.check_onboarding_resume: thread join error".to_string()))?;
+        .map_err(|_| {
+            RuntimeError::Generic(
+                "ccos.skill.check_onboarding_resume: thread join error".to_string(),
+            )
+        })?;
 
         result
     });
@@ -396,7 +397,7 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
 /// Handle ccos.secrets.set
 async fn handle_secrets_set<S: ApprovalStorage>(
     payload: SecretSetInput,
-    _secret_store: Arc<StdMutex<SecretStore>>,
+    secret_store: Arc<StdMutex<SecretStore>>,
     approval_queue: Arc<UnifiedApprovalQueue<S>>,
 ) -> RuntimeResult<Value> {
     // Create SecretWrite approval
@@ -419,19 +420,33 @@ async fn handle_secrets_set<S: ApprovalStorage>(
     let request = ApprovalRequest::new(category, risk, 24, None);
     let approval_id = request.id.clone();
 
-    approval_queue.add(request).await.map_err(|e| {
-        RuntimeError::Generic(format!("Failed to create approval: {}", e))
-    })?;
+    approval_queue
+        .add(request)
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to create approval: {}", e)))?;
 
-    // Note: We do NOT store the secret yet - it will be stored when approved
-    // For now, we need to temporarily cache it pending approval
-    // In a production system, this would use a secure pending-secrets cache
-    
+    // Persist the secret with skill-scoped key for session recovery
+    // Key format: <skill_id>:<original_key> for isolation
+    let scoped_key = if let Some(ref skill_id) = payload.skill_id {
+        format!("{}:{}", skill_id, payload.key)
+    } else {
+        payload.key.clone()
+    };
+
+    {
+        let mut store = secret_store
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock SecretStore".to_string()))?;
+        store
+            .set_local(&scoped_key, payload.value.clone())
+            .map_err(|e| RuntimeError::Generic(format!("Failed to persist secret: {}", e)))?;
+    }
+
     let output = SecretSetOutput {
         success: true,
         approval_id: Some(approval_id),
         message: format!(
-            "Approval requested to store secret '{}' with scope '{}'",
+            "Secret '{}' stored securely with scope '{}' (approval pending)",
             payload.key, payload.scope
         ),
     };
@@ -456,9 +471,8 @@ async fn handle_memory_store(
         tags.insert(format!("skill:{}", skill_id));
     }
 
-    let content = serde_json::to_string(&payload.value).map_err(|e| {
-        RuntimeError::Generic(format!("Failed to serialize value: {}", e))
-    })?;
+    let content = serde_json::to_string(&payload.value)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to serialize value: {}", e)))?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -468,7 +482,8 @@ async fn handle_memory_store(
     let mut meta = WorkingMemoryMeta::default();
     if let Some(ttl) = payload.ttl {
         meta.extra.insert("ttl".to_string(), ttl.to_string());
-        meta.extra.insert("expires_at".to_string(), (now + ttl).to_string());
+        meta.extra
+            .insert("expires_at".to_string(), (now + ttl).to_string());
     }
 
     let entry = WorkingMemoryEntry::new_with_estimate(
@@ -480,12 +495,11 @@ async fn handle_memory_store(
         meta,
     );
 
-    let mut wm = working_memory.lock().map_err(|_| {
-        RuntimeError::Generic("Failed to lock working memory".to_string())
-    })?;
-    wm.append(entry).map_err(|e| {
-        RuntimeError::Generic(format!("Failed to store in working memory: {}", e))
-    })?;
+    let mut wm = working_memory
+        .lock()
+        .map_err(|_| RuntimeError::Generic("Failed to lock working memory".to_string()))?;
+    wm.append(entry)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to store in working memory: {}", e)))?;
 
     let output = MemoryStoreOutput {
         success: true,
@@ -506,10 +520,10 @@ async fn handle_memory_get(
         format!("global:{}", payload.key)
     };
 
-    let wm = working_memory.lock().map_err(|_| {
-        RuntimeError::Generic("Failed to lock working memory".to_string())
-    })?;
-    
+    let wm = working_memory
+        .lock()
+        .map_err(|_| RuntimeError::Generic("Failed to lock working memory".to_string()))?;
+
     match wm.get(&entry_id) {
         Ok(Some(entry)) => {
             let now = std::time::SystemTime::now()
@@ -587,9 +601,10 @@ async fn handle_request_human_action<S: ApprovalStorage>(
     let approval_id = request.id.clone();
     let expires_at = request.expires_at.clone();
 
-    approval_queue.add(request).await.map_err(|e| {
-        RuntimeError::Generic(format!("Failed to create approval: {}", e))
-    })?;
+    approval_queue
+        .add(request)
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to create approval: {}", e)))?;
 
     let output = RequestHumanActionOutput {
         approval_id,
@@ -610,16 +625,19 @@ async fn handle_complete_human_action<S: ApprovalStorage>(
         .get(&payload.approval_id)
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to get approval: {}", e)))?
-        .ok_or_else(|| RuntimeError::Generic(format!("Approval not found: {}", payload.approval_id)))?;
+        .ok_or_else(|| {
+            RuntimeError::Generic(format!("Approval not found: {}", payload.approval_id))
+        })?;
 
     // Validate it's a HumanActionRequest
     let required_schema = match &approval.category {
-        ApprovalCategory::HumanActionRequest { required_response_schema, .. } => {
-            required_response_schema.clone()
-        }
+        ApprovalCategory::HumanActionRequest {
+            required_response_schema,
+            ..
+        } => required_response_schema.clone(),
         _ => {
             return Err(RuntimeError::Generic(
-                "Approval is not a human action request".to_string()
+                "Approval is not a human action request".to_string(),
             ));
         }
     };
@@ -638,22 +656,22 @@ async fn handle_complete_human_action<S: ApprovalStorage>(
 
     // Store response in approval
     approval.response = Some(payload.response.clone());
-    
+
     // Approve the request
     approval.approve(
-        ApprovalAuthority::Auto, 
-        Some("Human action completed successfully".to_string())
+        ApprovalAuthority::Auto,
+        Some("Human action completed successfully".to_string()),
     );
 
-    approval_queue.update(&approval).await.map_err(|e| {
-        RuntimeError::Generic(format!("Failed to update approval: {}", e))
-    })?;
+    approval_queue
+        .update(&approval)
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to update approval: {}", e)))?;
 
     // Also store in WorkingMemory for easy access
     let entry_id = format!("approval:{}:response", payload.approval_id);
-    let content = serde_json::to_string(&payload.response).map_err(|e| {
-        RuntimeError::Generic(format!("Failed to serialize response: {}", e))
-    })?;
+    let content = serde_json::to_string(&payload.response)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to serialize response: {}", e)))?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -669,12 +687,11 @@ async fn handle_complete_human_action<S: ApprovalStorage>(
         WorkingMemoryMeta::default(),
     );
 
-    let mut wm = working_memory.lock().map_err(|_| {
-        RuntimeError::Generic("Failed to lock working memory".to_string())
-    })?;
-    wm.append(entry).map_err(|e| {
-        RuntimeError::Generic(format!("Failed to store response: {}", e))
-    })?;
+    let mut wm = working_memory
+        .lock()
+        .map_err(|_| RuntimeError::Generic("Failed to lock working memory".to_string()))?;
+    wm.append(entry)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to store response: {}", e)))?;
 
     let output = CompleteHumanActionOutput {
         success: true,
@@ -723,7 +740,9 @@ fn validate_response(response: &serde_json::Value, schema: &serde_json::Value) -
             "object" => {
                 if !response.is_object() {
                     errors.push(format!("Expected object, got {}", json_type_name(response)));
-                } else if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                } else if let Some(properties) =
+                    schema.get("properties").and_then(|p| p.as_object())
+                {
                     // Check required properties
                     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
                         for req in required {
@@ -737,7 +756,9 @@ fn validate_response(response: &serde_json::Value, schema: &serde_json::Value) -
                     // Validate property types
                     for (prop_name, prop_schema) in properties {
                         if let Some(prop_value) = response.get(prop_name) {
-                            if let Some(prop_type) = prop_schema.get("type").and_then(|t| t.as_str()) {
+                            if let Some(prop_type) =
+                                prop_schema.get("type").and_then(|t| t.as_str())
+                            {
                                 if !validate_type(prop_value, prop_type) {
                                     errors.push(format!(
                                         "Field '{}' expected type '{}', got '{}'",
@@ -768,7 +789,10 @@ fn validate_response(response: &serde_json::Value, schema: &serde_json::Value) -
             }
             "boolean" => {
                 if !response.is_boolean() {
-                    errors.push(format!("Expected boolean, got {}", json_type_name(response)));
+                    errors.push(format!(
+                        "Expected boolean, got {}",
+                        json_type_name(response)
+                    ));
                 }
             }
             _ => {}
@@ -807,10 +831,10 @@ async fn handle_get_onboarding_status(
     working_memory: Arc<StdMutex<WorkingMemory>>,
 ) -> RuntimeResult<Value> {
     use crate::skills::onboarding_state_machine::OnboardingStateMachine;
-    
+
     let state_machine = OnboardingStateMachine::new(working_memory);
     let summary = state_machine.get_status_summary(&payload.skill_id);
-    
+
     let output = match summary {
         Some(summary) => GetOnboardingStatusOutput {
             skill_id: payload.skill_id.clone(),
@@ -833,7 +857,7 @@ async fn handle_get_onboarding_status(
             pending_approval_id: None,
         },
     };
-    
+
     produce_value("ccos.skill.get_onboarding_status", output)
 }
 
@@ -844,14 +868,18 @@ async fn handle_check_onboarding_resume<S: ApprovalStorage>(
     approval_queue: Arc<UnifiedApprovalQueue<S>>,
 ) -> RuntimeResult<Value> {
     use crate::skills::onboarding_state_machine::OnboardingStateMachine;
-    
+
     let state_machine = OnboardingStateMachine::new(working_memory);
-    
-    match state_machine.check_and_resume(&payload.skill_id, &approval_queue).await {
+
+    match state_machine
+        .check_and_resume(&payload.skill_id, &approval_queue)
+        .await
+    {
         Ok(Some(state)) => {
             let output = CheckOnboardingResumeOutput {
                 skill_id: payload.skill_id.clone(),
-                can_resume: state.status != crate::skills::types::OnboardingState::PendingHumanAction,
+                can_resume: state.status
+                    != crate::skills::types::OnboardingState::PendingHumanAction,
                 status: Some(format!("{:?}", state.status)),
                 message: Some("Onboarding state updated".to_string()),
                 next_step: Some(state.current_step),

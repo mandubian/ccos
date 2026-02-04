@@ -232,6 +232,14 @@ impl CausalChain {
                 result_action = result_action.with_session(sid);
             }
 
+            // Preserve correlation metadata from the call (e.g. run_id/step_id),
+            // so result records can be queried without joining to their parent call.
+            for key in ["run_id", "step_id"] {
+                if let Some(value) = action.metadata.get(key) {
+                    result_action.metadata.insert(key.to_string(), value.clone());
+                }
+            }
+
             // Attach metadata from result
             for (key, value) in result.metadata {
                 result_action.metadata.insert(key, value);
@@ -675,6 +683,28 @@ impl CausalChain {
         function_name: &str,
         args: Vec<Value>,
     ) -> Result<Action, RuntimeError> {
+        self.log_capability_call_with_metadata(
+            session_id,
+            plan_id,
+            intent_id,
+            _capability_id,
+            function_name,
+            args,
+            std::collections::HashMap::new(),
+        )
+    }
+
+    /// Record a capability call in the causal chain with extra metadata for correlation.
+    pub fn log_capability_call_with_metadata(
+        &mut self,
+        session_id: Option<&str>,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+        _capability_id: &CapabilityId,
+        function_name: &str,
+        args: Vec<Value>,
+        metadata: std::collections::HashMap<String, Value>,
+    ) -> Result<Action, RuntimeError> {
         // Build action
         let mut action = Action::new(
             ActionType::CapabilityCall,
@@ -688,21 +718,25 @@ impl CausalChain {
             action = action.with_session(sid);
         }
 
+        // Attach metadata prior to signing so it participates in integrity verification.
+        for (k, v) in metadata {
+            action.metadata.insert(k, v);
+        }
+
         // Sign
         let signature = self.signing.sign_action(&action);
-        let mut signed_action = action.clone();
-        signed_action
+        action
             .metadata
             .insert("signature".to_string(), Value::String(signature));
 
         // Append ledger and metrics
-        self.ledger.append_action(&signed_action)?;
-        self.metrics.record_action(&signed_action)?;
+        self.ledger.append_action(&action)?;
+        self.metrics.record_action(&action)?;
 
         // Log structured line
-        self.log_action_json(&signed_action, "capability_call");
+        self.log_action_json(&action, "capability_call");
 
-        Ok(signed_action)
+        Ok(action)
     }
 
     pub fn append(&mut self, action: &Action) -> Result<String, RuntimeError> {

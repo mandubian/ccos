@@ -20,6 +20,45 @@ pub struct SpawnResult {
     pub message: String,
 }
 
+/// Configuration for spawning an agent
+#[derive(Debug, Clone, Default)]
+pub struct SpawnConfig {
+    /// Maximum steps the agent can execute (0 = unlimited)
+    pub max_steps: u32,
+    /// Maximum duration in seconds (0 = unlimited)
+    pub max_duration_secs: u64,
+    /// Budget policy: "hard_stop" or "pause_approval"
+    pub budget_policy: Option<String>,
+    /// Optional run ID for correlation
+    pub run_id: Option<String>,
+}
+
+impl SpawnConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_steps(mut self, max_steps: u32) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
+    pub fn with_max_duration_secs(mut self, secs: u64) -> Self {
+        self.max_duration_secs = secs;
+        self
+    }
+
+    pub fn with_budget_policy(mut self, policy: impl Into<String>) -> Self {
+        self.budget_policy = Some(policy.into());
+        self
+    }
+
+    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.run_id = Some(run_id.into());
+        self
+    }
+}
+
 /// Trait for spawning agent runtimes
 pub trait AgentSpawner: Send + Sync + std::fmt::Debug {
     /// Spawn an agent runtime for the given session
@@ -27,6 +66,7 @@ pub trait AgentSpawner: Send + Sync + std::fmt::Debug {
         &self,
         session_id: String,
         token: String,
+        config: SpawnConfig,
     ) -> Pin<Box<dyn Future<Output = RuntimeResult<SpawnResult>> + Send>>;
 }
 
@@ -45,12 +85,14 @@ impl AgentSpawner for LogOnlySpawner {
         &self,
         session_id: String,
         token: String,
+        config: SpawnConfig,
     ) -> Pin<Box<dyn Future<Output = RuntimeResult<SpawnResult>> + Send>> {
         Box::pin(async move {
             log::info!(
-                "[LogOnlySpawner] WOULD SPAWN AGENT for session {} with token {}...",
+                "[LogOnlySpawner] WOULD SPAWN AGENT for session {} with token {}... config={:?}",
                 session_id,
-                &token[..8.min(token.len())]
+                &token[..8.min(token.len())],
+                config
             );
 
             // Simulate some delay
@@ -93,15 +135,17 @@ impl AgentSpawner for ProcessSpawner {
         &self,
         session_id: String,
         token: String,
+        config: SpawnConfig,
     ) -> Pin<Box<dyn Future<Output = RuntimeResult<SpawnResult>> + Send>> {
         let binary = self.agent_binary.clone();
         let env_vars = self.env_vars.clone();
 
         Box::pin(async move {
             log::info!(
-                "[ProcessSpawner] Spawning agent process for session {}: {}",
+                "[ProcessSpawner] Spawning agent process for session {}: {} config={:?}",
                 session_id,
-                binary
+                binary,
+                config
             );
 
             let mut cmd = Command::new(&binary);
@@ -112,6 +156,21 @@ impl AgentSpawner for ProcessSpawner {
                 .stdin(Stdio::null())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+
+            // Add budget parameters if set
+            if config.max_steps > 0 {
+                cmd.arg("--max-steps").arg(config.max_steps.to_string());
+            }
+            if config.max_duration_secs > 0 {
+                cmd.arg("--max-duration-secs")
+                    .arg(config.max_duration_secs.to_string());
+            }
+            if let Some(policy) = &config.budget_policy {
+                cmd.arg("--budget-policy").arg(policy);
+            }
+            if let Some(run_id) = &config.run_id {
+                cmd.arg("--run-id").arg(run_id);
+            }
 
             // Add environment variables
             for (key, value) in env_vars {
@@ -178,7 +237,11 @@ mod tests {
     async fn test_log_only_spawner() {
         let spawner = LogOnlySpawner::new();
         let result = spawner
-            .spawn("test-session".to_string(), "test-token".to_string())
+            .spawn(
+                "test-session".to_string(),
+                "test-token".to_string(),
+                SpawnConfig::default(),
+            )
             .await
             .unwrap();
 

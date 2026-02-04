@@ -2,7 +2,7 @@
 //!
 //! Interactive CLI to talk to CCOS Chat Gateway.
 //! It sends messages to the gateway's loopback connector and
-//! polls the mock-moltbook status to see agent responses.
+//! optionally polls an external status endpoint to see agent responses.
 
 use clap::Parser;
 use colored::*;
@@ -17,8 +17,9 @@ struct Args {
     #[arg(long, default_value = "http://localhost:8833")]
     connector_url: String,
 
-    #[arg(long, default_value = "http://localhost:8765")]
-    moltbook_url: String,
+    /// Optional external status endpoint to poll for posts (e.g., http://localhost:8765)
+    #[arg(long)]
+    status_url: Option<String>,
 
     #[arg(long, default_value = "demo-secret-key")]
     secret: String,
@@ -26,7 +27,7 @@ struct Args {
     #[arg(long, default_value = "user1")]
     user_id: String,
 
-    #[arg(long, default_value = "moltbook-demo")]
+    #[arg(long, default_value = "chat-demo")]
     channel_id: String,
 }
 
@@ -42,7 +43,9 @@ async fn main() -> anyhow::Result<()> {
     );
     println!("{}", "=========================================".blue());
     println!("Connector: {}", args.connector_url.yellow());
-    println!("Moltbook:  {}", args.moltbook_url.yellow());
+    if let Some(ref status_url) = args.status_url {
+        println!("Status:    {}", status_url.yellow());
+    }
     println!("Channel:   {}", args.channel_id.green());
     println!("User:      {}", args.user_id.green());
     println!(
@@ -52,75 +55,74 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", "Type 'exit' or 'quit' to stop.".dimmed());
     println!("{}", "=========================================".blue());
 
-    let mut last_post_id: Option<String> = None;
+    // Spawn external status poller (only if status_url is provided)
+    if let Some(status_url) = args.status_url.clone() {
+        let poller_client = client.clone();
+        let mut poller_last_post_id: Option<String> = None;
 
-    // First, sync with existing posts
-    if let Ok(status) = fetch_status(&client, &args.moltbook_url).await {
-        if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
-            if let Some(last) = posts.last() {
-                last_post_id = last
-                    .get("id")
-                    .and_then(|id| id.as_str().map(|s| s.to_string()));
-            }
-        }
-    }
-
-    // Spawn post poller
-    let poller_client = client.clone();
-    let poller_moltbook_url = args.moltbook_url.clone();
-    let mut poller_last_post_id = last_post_id.clone();
-
-    tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_secs(2)).await;
-            if let Ok(status) = fetch_status(&poller_client, &poller_moltbook_url).await {
-                if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
-                    let mut new_posts = Vec::new();
-                    let mut found_last = poller_last_post_id.is_none();
-
-                    for post in posts {
-                        let id = post
-                            .get("id")
-                            .and_then(|id| id.as_str())
-                            .unwrap_or_default();
-                        if !found_last {
-                            if Some(id.to_string()) == poller_last_post_id {
-                                found_last = true;
-                            }
-                            continue;
-                        }
-                        new_posts.push(post);
-                    }
-
-                    for post in new_posts {
-                        let id = post
-                            .get("id")
-                            .and_then(|id| id.as_str())
-                            .unwrap_or_default();
-                        let content = post
-                            .get("content")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or_default();
-                        let agent_id = post
-                            .get("agent_id")
-                            .and_then(|a| a.as_str())
-                            .unwrap_or("agent");
-
-                        println!(
-                            "\n{} {}: {}",
-                            ">>>".green().bold(),
-                            agent_id.cyan(),
-                            content
-                        );
-                        print!("{} ", "You:".yellow().bold());
-                        io::stdout().flush().unwrap();
-
-                        poller_last_post_id = Some(id.to_string());
-                    }
+        // First, sync with existing posts
+        if let Ok(status) = fetch_status(&poller_client, &status_url).await {
+            if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
+                if let Some(last) = posts.last() {
+                    poller_last_post_id = last
+                        .get("id")
+                        .and_then(|id| id.as_str().map(|s| s.to_string()));
                 }
             }
         }
-    });
+
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_secs(2)).await;
+                if let Ok(status) = fetch_status(&poller_client, &status_url).await {
+                    if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
+                        let mut new_posts = Vec::new();
+                        let mut found_last = poller_last_post_id.is_none();
+
+                        for post in posts {
+                            let id = post
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or_default();
+                            if !found_last {
+                                if Some(id.to_string()) == poller_last_post_id {
+                                    found_last = true;
+                                }
+                                continue;
+                            }
+                            new_posts.push(post);
+                        }
+
+                        for post in new_posts {
+                            let id = post
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or_default();
+                            let content = post
+                                .get("content")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or_default();
+                            let agent_id = post
+                                .get("agent_id")
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("agent");
+
+                            println!(
+                                "\n{} {}: {}",
+                                ">>>".green().bold(),
+                                agent_id.cyan(),
+                                content
+                            );
+                            print!("{} ", "You:".yellow().bold());
+                            io::stdout().flush().unwrap();
+
+                            poller_last_post_id = Some(id.to_string());
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     // Spawn direct message poller
     let direct_client = client.clone();

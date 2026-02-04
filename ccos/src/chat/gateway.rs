@@ -18,10 +18,11 @@ use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::capabilities::registry::CapabilityRegistry;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
+use crate::chat::run::{new_shared_run_store, BudgetContext, Run, SharedRunStore};
 use crate::chat::{
     attach_label, record_chat_audit_event, register_chat_capabilities, AgentSpawner, ChatDataLabel,
     ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
-    QuarantineStore, SessionRegistry, SpawnerFactory,
+    QuarantineStore, SessionRegistry, SpawnConfig, SpawnerFactory,
 };
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
@@ -61,6 +62,8 @@ struct GatewayState {
     session_registry: SessionRegistry,
     /// Agent spawner for launching agent runtimes
     spawner: Arc<dyn AgentSpawner>,
+    /// Run store for managing autonomous runs
+    run_store: SharedRunStore,
 }
 
 impl ChatGateway {
@@ -101,6 +104,7 @@ impl ChatGateway {
         // Initialize session management
         let session_registry = SessionRegistry::new();
         let spawner = SpawnerFactory::create();
+        let run_store = new_shared_run_store();
 
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
@@ -113,6 +117,7 @@ impl ChatGateway {
             policy_pack_version: config.policy_pack_version.clone(),
             session_registry,
             spawner: spawner.into(),
+            run_store,
         });
 
         let gateway = ChatGateway {
@@ -138,6 +143,11 @@ impl ChatGateway {
             .route("/chat/audit", get(audit_handler))
             .route("/chat/events/:session_id", get(events_handler))
             .route("/chat/session/:session_id", get(get_session_handler))
+            .route("/chat/run", post(create_run_handler).get(list_runs_handler))
+            .route("/chat/run/:run_id", get(get_run_handler))
+            .route("/chat/run/:run_id/actions", get(list_run_actions_handler))
+            .route("/chat/run/:run_id/cancel", post(cancel_run_handler))
+            .route("/chat/run/:run_id/transition", post(transition_run_handler))
             .with_state(app_state);
 
         let listener = TcpListener::bind(config.bind_addr.as_str())
@@ -158,7 +168,32 @@ impl ChatGateway {
             envelope.channel_id
         );
         let session_id = format!("chat:{}:{}", envelope.channel_id, envelope.sender_id);
-        let run_id = format!("chat-run-{}", Utc::now().timestamp_millis());
+        // If there's an active run for this session, correlate inbound messages to it.
+        // If a run is paused waiting for an external event, auto-resume it on inbound message.
+        // Otherwise fall back to an ephemeral run id for audit correlation.
+        let run_id = {
+            let mut chosen: Option<String> = None;
+            if let Ok(mut store) = self.state.run_store.lock() {
+                if let Some(active) = store
+                    .get_active_run_for_session(&session_id)
+                    .map(|r| r.id.clone())
+                {
+                    chosen = Some(active);
+                } else if let Some(paused_id) =
+                    store.get_latest_paused_external_run_id_for_session(&session_id)
+                {
+                    // Resume automatically.
+                    let _ = store.update_run_state(&paused_id, crate::chat::run::RunState::Active);
+                    chosen = Some(paused_id);
+                } else if let Some(paused_approval_id) =
+                    store.get_latest_paused_approval_run_id_for_session(&session_id)
+                {
+                    // Correlate without auto-resuming (requires explicit approval/resume).
+                    chosen = Some(paused_approval_id);
+                }
+            }
+            chosen.unwrap_or_else(|| format!("chat-run-{}", Utc::now().timestamp_millis()))
+        };
         let step_id = format!("message-ingest-{}", envelope.id);
         envelope.session_id = Some(session_id.clone());
         envelope.run_id = Some(run_id.clone());
@@ -229,11 +264,17 @@ impl ChatGateway {
                 envelope.sender_id
             );
 
-            // Spawn agent for this session
+            // Legacy spawn: agent spawned per-session with default budget
+            // For budget-controlled runs, use POST /chat/run which spawns with Run's budget
+            // This fallback allows existing integrations to work without Run creation
             match self
                 .state
                 .spawner
-                .spawn(session.session_id.clone(), token.clone())
+                .spawn(
+                    session.session_id.clone(),
+                    token.clone(),
+                    SpawnConfig::default(),
+                )
                 .await
             {
                 Ok(spawn_result) => {
@@ -245,7 +286,7 @@ impl ChatGateway {
                             .await;
                     }
                     log::info!(
-                        "[Gateway] Spawned agent for session {}: {}",
+                        "[Gateway] Spawned agent for session {} (legacy/default budget): {}",
                         session.session_id,
                         spawn_result.message
                     );
@@ -334,20 +375,38 @@ impl ChatGateway {
             .get("session_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let run_id = inputs
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let step_id = inputs
+            .get("step_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let plan_id = format!("chat-plan-{}", Utc::now().timestamp_millis());
         let intent_id = session_id.clone().unwrap_or_else(|| plan_id.clone());
 
         let action = match self.state.chain.lock() {
-            Ok(mut chain) => chain
-                .log_capability_call(
-                    session_id.as_deref(),
-                    &plan_id,
-                    &intent_id,
-                    &capability_id.to_string(),
-                    capability_id,
-                    rtfs_args,
-                )
-                .ok(),
+            Ok(mut chain) => {
+                let mut meta = HashMap::new();
+                if let Some(rid) = &run_id {
+                    meta.insert("run_id".to_string(), Value::String(rid.clone()));
+                }
+                if let Some(sid) = &step_id {
+                    meta.insert("step_id".to_string(), Value::String(sid.clone()));
+                }
+                chain
+                    .log_capability_call_with_metadata(
+                        session_id.as_deref(),
+                        &plan_id,
+                        &intent_id,
+                        &capability_id.to_string(),
+                        capability_id,
+                        rtfs_args,
+                        meta,
+                    )
+                    .ok()
+            }
             Err(_) => None,
         };
 
@@ -444,6 +503,8 @@ async fn inbox_handler(
 #[derive(Debug, Deserialize)]
 struct AuditQuery {
     limit: Option<usize>,
+    run_id: Option<String>,
+    session_id: Option<String>,
 }
 
 async fn audit_handler(
@@ -463,7 +524,27 @@ async fn audit_handler(
     actions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     let mut events = Vec::new();
-    for action in actions.into_iter().take(limit) {
+    for action in actions.into_iter() {
+        if let Some(run_id) = &params.run_id {
+            let rid = action
+                .metadata
+                .get("run_id")
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            if rid != run_id {
+                continue;
+            }
+        }
+        if let Some(session_id) = &params.session_id {
+            let sid = action
+                .metadata
+                .get("session_id")
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            if sid != session_id {
+                continue;
+            }
+        }
         let mut meta_json = serde_json::Map::new();
         for (key, value) in &action.metadata {
             let json_val = rtfs_value_to_json(value)
@@ -486,6 +567,10 @@ async fn audit_handler(
             message_id: get_str("message_id"),
             payload_classification: get_str("payload_classification"),
         });
+
+        if events.len() >= limit {
+            break;
+        }
     }
 
     Ok(Json(ChatAuditResponse { events }))
@@ -557,6 +642,11 @@ async fn execute_handler(
         }));
     }
 
+    fn allowed_while_paused(capability_id: &str) -> bool {
+        capability_id.starts_with("ccos.chat.egress.")
+            || capability_id.starts_with("ccos.chat.transform.")
+    }
+
     let redacted_inputs = redact_json_for_logs(&payload.inputs);
     log::info!(
         "[Gateway] Executing capability {} for session {} (agent PID: {:?}) with inputs: {}",
@@ -565,6 +655,117 @@ async fn execute_handler(
         session.agent_pid,
         redacted_inputs
     );
+
+    // Best-effort: if this execute is correlated to a known Run, enforce run state/budget and update its step counters.
+    // (Runs are created via POST /chat/run and correlated via the run_id input.)
+    if let Some(run_id) = payload.inputs.get("run_id").and_then(|v| v.as_str()) {
+        let step_id = payload
+            .inputs
+            .get("step_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let mut budget_exceeded_reason: Option<String> = None;
+        let mut budget_exceeded_prev_state: Option<String> = None;
+        if let Ok(mut store) = state.run_store.lock() {
+            if let Some(run) = store.get_run_mut(run_id) {
+                if run.state.is_terminal() && !allowed_while_paused(&payload.capability_id) {
+                    return Ok(Json(ExecuteResponse {
+                        success: false,
+                        result: None,
+                        error: Some(format!(
+                            "Run is terminal ({:?}); refusing to execute capability {}",
+                            run.state, payload.capability_id
+                        )),
+                    }));
+                }
+                if run.state.is_paused() && !allowed_while_paused(&payload.capability_id) {
+                    return Ok(Json(ExecuteResponse {
+                        success: false,
+                        result: None,
+                        error: Some(format!(
+                            "Run is paused ({:?}); refusing to execute capability {}",
+                            run.state, payload.capability_id
+                        )),
+                    }));
+                }
+
+                if let Some(exceeded) = run.check_budget() {
+                    budget_exceeded_reason = Some(format!("{:?}", exceeded));
+                    budget_exceeded_prev_state = Some(format!("{:?}", run.state));
+                    // Pause the run by default when budget is exceeded.
+                    run.transition(crate::chat::run::RunState::PausedApproval {
+                        reason: budget_exceeded_reason.clone().unwrap_or_default(),
+                    });
+                } else {
+                    // Budget ok: increment step counter for correlated calls.
+                    run.consumption.steps_taken = run.consumption.steps_taken.saturating_add(1);
+                    if step_id.is_some() {
+                        run.current_step_id = step_id;
+                    }
+                    run.updated_at = Utc::now();
+                }
+            }
+        }
+
+        if let Some(reason) = budget_exceeded_reason {
+            // Best-effort audit: record both the transition + the budget-exceeded reason.
+            let step = step_id.as_deref().unwrap_or("budget");
+
+            let mut transition_meta = HashMap::new();
+            if let Some(prev) = budget_exceeded_prev_state {
+                transition_meta.insert("previous_state".to_string(), Value::String(prev));
+            }
+            transition_meta.insert(
+                "new_state".to_string(),
+                Value::String("PausedApproval".to_string()),
+            );
+            transition_meta.insert("reason".to_string(), Value::String(reason.clone()));
+            transition_meta.insert(
+                "rule_id".to_string(),
+                Value::String("chat.run.budget".to_string()),
+            );
+            let _ = record_chat_audit_event(
+                &state.chain,
+                "chat",
+                "chat",
+                &payload.session_id,
+                run_id,
+                step,
+                "run.transition",
+                transition_meta,
+            );
+
+            let mut meta = HashMap::new();
+            meta.insert(
+                "capability_id".to_string(),
+                Value::String(payload.capability_id.clone()),
+            );
+            meta.insert("reason".to_string(), Value::String(reason.clone()));
+            meta.insert("rule_id".to_string(), Value::String("chat.run.budget".to_string()));
+            let _ = record_chat_audit_event(
+                &state.chain,
+                "chat",
+                "chat",
+                &payload.session_id,
+                run_id,
+                step,
+                "run.budget_exceeded",
+                meta,
+            );
+
+            if !allowed_while_paused(&payload.capability_id) {
+                return Ok(Json(ExecuteResponse {
+                    success: false,
+                    result: None,
+                    error: Some(format!(
+                        "Run budget exceeded ({}); refusing to execute capability {}",
+                        reason, payload.capability_id
+                    )),
+                }));
+            }
+        }
+    }
 
     // Forward to capability marketplace (which enforces its own policy/approvals)
     let gateway = ChatGateway { state };
@@ -594,10 +795,10 @@ async fn execute_handler(
                 );
             }
             Ok(Json(ExecuteResponse {
-            success,
-            result: Some(result),
-            error: None,
-        }))
+                success,
+                result: Some(result),
+                error: None,
+            }))
         }
         Err(e) => Ok(Json(ExecuteResponse {
             success: false,
@@ -854,5 +1055,703 @@ async fn list_capabilities_handler(
 
     Ok(Json(CapabilitiesListResponse {
         capabilities: infos,
+    }))
+}
+
+// =============================================================================
+// Run Orchestration Endpoints
+// =============================================================================
+
+/// Create a new run
+#[derive(Debug, Deserialize)]
+struct CreateRunRequest {
+    session_id: String,
+    goal: String,
+    #[serde(default)]
+    budget: Option<BudgetContextRequest>,
+    completion_predicate: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BudgetContextRequest {
+    max_steps: Option<u32>,
+    max_duration_secs: Option<u64>,
+    max_tokens: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateRunResponse {
+    run_id: String,
+    session_id: String,
+    goal: String,
+    state: String,
+    correlation_id: String,
+}
+
+async fn create_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<CreateRunRequest>,
+) -> Result<Json<CreateRunResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Validate token against session
+    let session = state
+        .session_registry
+        .validate_token(&payload.session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Create budget from request
+    let budget = payload.budget.as_ref().map(|b| BudgetContext {
+        max_steps: b.max_steps.unwrap_or(50),
+        max_duration_secs: b.max_duration_secs.unwrap_or(300),
+        max_tokens: b.max_tokens,
+        max_retries_per_step: 3,
+    });
+
+    // Create SpawnConfig from budget
+    let spawn_config = if let Some(ref b) = payload.budget {
+        SpawnConfig::new()
+            .with_max_steps(b.max_steps.unwrap_or(50))
+            .with_max_duration_secs(b.max_duration_secs.unwrap_or(300))
+            .with_budget_policy("pause_approval")
+    } else {
+        SpawnConfig::default()
+    };
+
+    // Create the run
+    let mut run = Run::new(payload.session_id.clone(), payload.goal.clone(), budget);
+    if let Some(predicate) = payload.completion_predicate {
+        run.completion_predicate = Some(predicate);
+    }
+
+    let run_id = run.id.clone();
+    let correlation_id = run.correlation_id.clone();
+    let state_str = format!("{:?}", run.state);
+
+    // Store the run (refuse if another active run exists for the session).
+    {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if store.get_active_run_for_session(&payload.session_id).is_some() {
+            return Err(StatusCode::CONFLICT);
+        }
+        store.create_run(run);
+    }
+
+    // Persist run creation to the causal chain (minimal audit trail).
+    {
+        let mut meta = HashMap::new();
+        meta.insert("goal".to_string(), Value::String(payload.goal.clone()));
+        meta.insert(
+            "correlation_id".to_string(),
+            Value::String(correlation_id.clone()),
+        );
+        meta.insert(
+            "rule_id".to_string(),
+            Value::String("chat.run.create".to_string()),
+        );
+        let _ = record_chat_audit_event(
+            &state.chain,
+            "chat",
+            "chat",
+            &payload.session_id,
+            &run_id,
+            "run.create",
+            "run.create",
+            meta,
+        );
+    }
+
+    // Spawn agent for this run with budget from SpawnConfig
+    let spawn_config = spawn_config.with_run_id(&run_id);
+    match state
+        .spawner
+        .spawn(
+            session.session_id.clone(),
+            session.auth_token.clone(),
+            spawn_config,
+        )
+        .await
+    {
+        Ok(spawn_result) => {
+            if let Some(pid) = spawn_result.pid {
+                let _ = state
+                    .session_registry
+                    .set_agent_pid(&session.session_id, pid)
+                    .await;
+            }
+            log::info!(
+                "[Gateway] Spawned agent for run {} (session {}): {}",
+                run_id,
+                payload.session_id,
+                spawn_result.message
+            );
+        }
+        Err(e) => {
+            log::error!("[Gateway] Failed to spawn agent for run {}: {}", run_id, e);
+            // Don't fail the run creation - the run exists but agent spawn failed
+        }
+    }
+
+    // Kick off the run by enqueueing a synthetic system message with the goal.
+    // This keeps the Gateway/Agent generic: a Run is simply a goal message delivered to the agent.
+    let channel_id = payload
+        .session_id
+        .split(':')
+        .nth(1)
+        .unwrap_or("default")
+        .to_string();
+    let kickoff = format!(
+        "Run started ({}). Goal:\n{}",
+        run_id,
+        payload.goal
+    );
+    if let Err(e) = state
+        .session_registry
+        .push_message_to_session(
+            &payload.session_id,
+            channel_id,
+            kickoff,
+            "system".to_string(),
+        )
+        .await
+    {
+        log::warn!(
+            "[Gateway] Failed to enqueue run kickoff message for {}: {}",
+            payload.session_id,
+            e
+        );
+    }
+
+    log::info!(
+        "[Gateway] Created run {} for session {} with goal: {}",
+        run_id,
+        payload.session_id,
+        payload.goal
+    );
+
+    Ok(Json(CreateRunResponse {
+        run_id,
+        session_id: payload.session_id,
+        goal: payload.goal,
+        state: state_str,
+        correlation_id,
+    }))
+}
+
+/// Get run status
+#[derive(Debug, Serialize)]
+struct GetRunResponse {
+    run_id: String,
+    session_id: String,
+    goal: String,
+    state: String,
+    steps_taken: u32,
+    elapsed_secs: u64,
+    budget_elapsed_secs: u64,
+    budget_max_steps: u32,
+    budget_max_duration_secs: u64,
+    budget_max_tokens: Option<u64>,
+    created_at: String,
+    updated_at: String,
+    current_step_id: Option<String>,
+    completion_predicate: Option<String>,
+}
+
+async fn get_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<GetRunResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Resolve the owning session_id for authorization (drop lock before await).
+    let session_id = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store
+            .get_run(&run_id)
+            .map(|r| r.session_id.clone())
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    // Validate token against the owning session
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let store = state
+        .run_store
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(GetRunResponse {
+        run_id: run.id.clone(),
+        session_id: run.session_id.clone(),
+        goal: run.goal.clone(),
+        state: format!("{:?}", run.state),
+        steps_taken: run.consumption.steps_taken,
+        elapsed_secs: run.elapsed_secs(),
+        budget_elapsed_secs: run.budget_elapsed_secs(),
+        budget_max_steps: run.budget.max_steps,
+        budget_max_duration_secs: run.budget.max_duration_secs,
+        budget_max_tokens: run.budget.max_tokens,
+        created_at: run.created_at.to_rfc3339(),
+        updated_at: run.updated_at.to_rfc3339(),
+        current_step_id: run.current_step_id.clone(),
+        completion_predicate: run.completion_predicate.clone(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListRunsQuery {
+    session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RunSummaryResponse {
+    run_id: String,
+    goal: String,
+    state: String,
+    steps_taken: u32,
+    elapsed_secs: u64,
+    created_at: String,
+    updated_at: String,
+    current_step_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListRunsResponse {
+    session_id: String,
+    runs: Vec<RunSummaryResponse>,
+}
+
+async fn list_runs_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<ListRunsQuery>,
+) -> Result<Json<ListRunsResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Validate token against session
+    let _session = state
+        .session_registry
+        .validate_token(&query.session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let store = state
+        .run_store
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut runs = store.get_runs_for_session(&query.session_id);
+
+    // Present latest-first for convenience.
+    runs.sort_by_key(|r| r.updated_at);
+    runs.reverse();
+
+    let runs = runs
+        .into_iter()
+        .map(|run| RunSummaryResponse {
+            run_id: run.id.clone(),
+            goal: run.goal.clone(),
+            state: format!("{:?}", run.state),
+            steps_taken: run.consumption.steps_taken,
+            elapsed_secs: run.elapsed_secs(),
+            created_at: run.created_at.to_rfc3339(),
+            updated_at: run.updated_at.to_rfc3339(),
+            current_step_id: run.current_step_id.clone(),
+        })
+        .collect();
+
+    Ok(Json(ListRunsResponse {
+        session_id: query.session_id,
+        runs,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListRunActionsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunActionEntryResponse {
+    action_id: String,
+    parent_action_id: Option<String>,
+    action_type: String,
+    function_name: Option<String>,
+    timestamp: u64,
+    run_id: Option<String>,
+    step_id: Option<String>,
+    success: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListRunActionsResponse {
+    run_id: String,
+    actions: Vec<RunActionEntryResponse>,
+}
+
+async fn list_run_actions_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+    Query(params): Query<ListRunActionsQuery>,
+) -> Result<Json<ListRunActionsResponse>, StatusCode> {
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Resolve owning session for authorization.
+    let session_id = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store
+            .get_run(&run_id)
+            .map(|r| r.session_id.clone())
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let limit = params.limit.unwrap_or(200).min(2000);
+    let guard = state
+        .chain
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut actions = Vec::new();
+    for action in guard.get_all_actions().iter().rev() {
+        let action_run_id = action
+            .metadata
+            .get("run_id")
+            .and_then(|v| v.as_string());
+        if action_run_id != Some(&run_id) {
+            continue;
+        }
+
+        let step_id = action
+            .metadata
+            .get("step_id")
+            .and_then(|v| v.as_string())
+            .map(|s| s.to_string());
+
+        actions.push(RunActionEntryResponse {
+            action_id: action.action_id.clone(),
+            parent_action_id: action.parent_action_id.clone(),
+            action_type: format!("{:?}", action.action_type),
+            function_name: action.function_name.clone(),
+            timestamp: action.timestamp,
+            run_id: action_run_id.map(|s| s.to_string()),
+            step_id,
+            success: action.result.as_ref().map(|r| r.success),
+        });
+
+        if actions.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(Json(ListRunActionsResponse { run_id, actions }))
+}
+
+/// Cancel a run
+#[derive(Debug, Serialize)]
+struct CancelRunResponse {
+    run_id: String,
+    cancelled: bool,
+    previous_state: String,
+}
+
+async fn cancel_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<CancelRunResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Get run info in a block scope to ensure guard is dropped
+    let (previous_state, session_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        (format!("{:?}", run.state), run.session_id.clone())
+    }; // Guard dropped here
+
+    // Validate session ownership (async)
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Re-acquire lock and cancel
+    let cancelled = {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store.cancel_run(&run_id)
+    }; // Guard dropped here
+
+    log::info!(
+        "[Gateway] Cancelled run {}: previous_state={}, cancelled={}",
+        run_id,
+        previous_state,
+        cancelled
+    );
+
+    // Persist run cancellation to the causal chain (minimal audit trail).
+    {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "previous_state".to_string(),
+            Value::String(previous_state.clone()),
+        );
+        meta.insert("cancelled".to_string(), Value::Boolean(cancelled));
+        meta.insert(
+            "rule_id".to_string(),
+            Value::String("chat.run.cancel".to_string()),
+        );
+        let _ = record_chat_audit_event(
+            &state.chain,
+            "chat",
+            "chat",
+            &session_id,
+            &run_id,
+            "run.cancel",
+            "run.cancel",
+            meta,
+        );
+    }
+
+    Ok(Json(CancelRunResponse {
+        run_id,
+        cancelled,
+        previous_state,
+    }))
+}
+
+/// Transition a run to a new state (generic administrative endpoint).
+#[derive(Debug, Deserialize)]
+struct TransitionRunRequest {
+    new_state: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    budget: Option<BudgetContextRequest>,
+}
+
+#[derive(Debug, Serialize)]
+struct TransitionRunResponse {
+    run_id: String,
+    previous_state: String,
+    new_state: String,
+    transitioned: bool,
+}
+
+async fn transition_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+    Json(payload): Json<TransitionRunRequest>,
+) -> Result<Json<TransitionRunResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Get run info in a block scope to ensure guard is dropped
+    let (previous_state, session_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        (format!("{:?}", run.state), run.session_id.clone())
+    };
+
+    // Validate session ownership (async)
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Parse requested state
+    let new_state = match payload.new_state.as_str() {
+        "Active" => crate::chat::run::RunState::Active,
+        "Done" => crate::chat::run::RunState::Done,
+        "Cancelled" => crate::chat::run::RunState::Cancelled,
+        "Failed" => crate::chat::run::RunState::Failed {
+            error: payload
+                .reason
+                .clone()
+                .unwrap_or_else(|| "run marked failed".to_string()),
+        },
+        "PausedApproval" => crate::chat::run::RunState::PausedApproval {
+            reason: payload
+                .reason
+                .clone()
+                .unwrap_or_else(|| "paused pending approval".to_string()),
+        },
+        "PausedExternalEvent" => crate::chat::run::RunState::PausedExternalEvent {
+            event_type: payload
+                .reason
+                .clone()
+                .unwrap_or_else(|| "external event".to_string()),
+        },
+        _ => {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    // Optional completion predicate enforcement for Done.
+    if matches!(new_state, crate::chat::run::RunState::Done) {
+        let predicate = {
+            let store = state
+                .run_store
+                .lock()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            store
+                .get_run(&run_id)
+                .and_then(|r| r.completion_predicate.clone())
+        };
+
+        if let Some(pred) = predicate {
+            let pred = pred.trim().to_string();
+            if pred.eq_ignore_ascii_case("never") {
+                return Err(StatusCode::CONFLICT);
+            }
+
+            if let Some(cap_id) = pred
+                .strip_prefix("capability_succeeded:")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                let ok = state
+                    .chain
+                    .lock()
+                    .ok()
+                    .map(|chain| {
+                        chain.get_all_actions().iter().any(|a| {
+                            a.action_type == crate::types::ActionType::CapabilityResult
+                                && a.function_name.as_deref() == Some(cap_id)
+                                && a.metadata
+                                    .get("run_id")
+                                    .and_then(|v| v.as_string())
+                                    == Some(&run_id)
+                                && a.result.as_ref().map(|r| r.success).unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !ok {
+                    return Err(StatusCode::CONFLICT);
+                }
+            }
+        }
+    }
+
+    // Re-acquire lock and transition (and optionally reset/update budget).
+    let transitioned = {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if let Some(run) = store.get_run_mut(&run_id) {
+            if let Some(b) = &payload.budget {
+                run.budget.max_steps = b.max_steps.unwrap_or(run.budget.max_steps);
+                run.budget.max_duration_secs =
+                    b.max_duration_secs.unwrap_or(run.budget.max_duration_secs);
+                run.budget.max_tokens = b.max_tokens.or(run.budget.max_tokens);
+            }
+
+            if matches!(new_state, crate::chat::run::RunState::Active) {
+                // Resuming a run: reset the budget window so "continue" can actually progress.
+                run.reset_budget_window();
+            }
+
+            run.transition(new_state.clone());
+            true
+        } else {
+            false
+        }
+    };
+
+    // Persist transition to the causal chain (minimal audit trail).
+    {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "previous_state".to_string(),
+            Value::String(previous_state.clone()),
+        );
+        meta.insert(
+            "new_state".to_string(),
+            Value::String(payload.new_state.clone()),
+        );
+        if let Some(reason) = &payload.reason {
+            meta.insert("reason".to_string(), Value::String(reason.clone()));
+        }
+        meta.insert(
+            "rule_id".to_string(),
+            Value::String("chat.run.transition".to_string()),
+        );
+        let _ = record_chat_audit_event(
+            &state.chain,
+            "chat",
+            "chat",
+            &session_id,
+            &run_id,
+            "run.transition",
+            "run.transition",
+            meta,
+        );
+    }
+
+    Ok(Json(TransitionRunResponse {
+        run_id,
+        previous_state,
+        new_state: payload.new_state,
+        transitioned,
     }))
 }

@@ -154,9 +154,7 @@ curl -X POST http://localhost:8080/chat/send \
   -d '{
     "channel_id": "test-channel",
     "content": "Please summarize this message for me",
-    "session_id": "sess_abc123",
-    "run_id": "run_001",
-    "step_id": "step_001"
+    "session_id": "sess_abc123"
   }'
 ```
 
@@ -167,7 +165,42 @@ curl -X POST http://localhost:8080/chat/send \
 
 ---
 
-## 8. Enable LLM Processing (Optional)
+## 8. Create a Run (Autonomy Core)
+
+Runs let an external system submit a goal without a chat message, while keeping correlation/auditing and a clear pause/resume story.
+
+Create a run for the session:
+
+```bash
+curl -X POST http://localhost:8080/chat/run \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Token: eyJ0b2tlbiI6InRlc3QifQ==" \
+  -d '{
+    "session_id": "sess_abc123",
+    "goal": "Demo goal: list capabilities and report them back to the channel",
+    "completion_predicate": "manual",
+    "budget": { "max_steps": 20, "max_duration_secs": 60 }
+  }'
+```
+
+Then inspect status and trace:
+
+```bash
+curl -H "X-Agent-Token: eyJ0b2tlbiI6InRlc3QifQ==" \
+  http://localhost:8080/chat/run/<run_id>
+
+curl -H "X-Agent-Token: eyJ0b2tlbiI6InRlc3QifQ==" \
+  "http://localhost:8080/chat/run/<run_id>/actions?limit=50"
+```
+
+Notes:
+- Creating a run enqueues a kickoff system message: `Run started (<run_id>). Goal: ...`.
+- The gateway enforces run state + budget in `/chat/execute` (non-chat capabilities are refused while paused/terminal or budget-exceeded).
+- You can pause/resume with `POST /chat/run/<run_id>/transition`.
+
+---
+
+## 9. Enable LLM Processing (Optional)
 
 To see the full planning loop, restart the agent with LLM enabled:
 
@@ -193,7 +226,7 @@ Now when you send a message, the agent will:
 
 ---
 
-## 9. Using Configuration Profiles (Optional)
+## 10. Using Configuration Profiles (Optional)
 
 Instead of specifying all options via CLI, you can use a configuration file:
 
@@ -260,7 +293,7 @@ export CCOS_AGENT_CONFIG_PATH="config/agent_config.toml"
 
 ---
 
-## 10. Test Capability Execution
+## 11. Test Capability Execution
 
 The agent can execute capabilities through the Gateway. Let's list available capabilities:
 
@@ -291,7 +324,7 @@ curl -X GET http://localhost:8080/chat/capabilities \
 
 ---
 
-## 10. Security Demonstration
+## 12. Security Demonstration
 
 ### 10.1 Token Validation
 
@@ -329,7 +362,7 @@ curl http://localhost:8080/chat/events/sess_other \
 
 ---
 
-## 11. Complete Skill Onboarding Flow
+## 13. Complete Skill Onboarding Flow
 
 Now let's walk through a complete skill onboarding with the Mock Moltbook server:
 
@@ -364,7 +397,7 @@ The agent executes onboarding capabilities through the Gateway:
    ```
 
 2. **Store Secret** (requires approval):
-   The secret would be stored with approval required.
+   The secret can be stored in `SecretStore` (`.ccos/secrets.toml`). In addition, the agent can optionally persist discovered per-skill bearer tokens by starting it with `--persist-skill-secrets` (or `CCOS_AGENT_PERSIST_SKILL_SECRETS=1`) so subsequent steps can reuse Authorization across restarts.
 
 3. **Human Verification**:
    The agent creates an approval request for human action.
@@ -378,7 +411,7 @@ After all onboarding steps complete, the agent can post to Moltbook's feed.
 
 ---
 
-## 12. Cleanup
+## 14. Cleanup
 
 Stop all services:
 
@@ -396,7 +429,7 @@ rm -rf /tmp/ccos_test
 
 ---
 
-## 13. Architecture Summary
+## 15. Architecture Summary
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -431,7 +464,7 @@ rm -rf /tmp/ccos_test
 
 ---
 
-## 14. Automated Demo Script
+## 16. Automated Demo Script
 
 For a quick demonstration of the full Gateway-Agent architecture with Moltbook:
 
@@ -464,7 +497,7 @@ This script will:
 
 ---
 
-## 15. Next Steps
+## 17. Next Steps
 
 - **Read the full architecture spec**: [CCOS Gateway-Agent Architecture](ccos-gateway-agent-architecture.md)
 - **Explore skill onboarding**: [Skill Onboarding Specification](spec-skill-onboarding.md)

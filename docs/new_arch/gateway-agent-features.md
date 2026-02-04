@@ -1,7 +1,7 @@
 # CCOS Gateway-Agent Feature Reference
 
 **Version**: 1.0  
-**Last Updated**: 2026-02-01
+**Last Updated**: 2026-02-04
 
 ---
 
@@ -49,8 +49,14 @@
 | GET | `/chat/capabilities` | Yes | List available capabilities |
 | GET | `/chat/events/:session_id` | Yes | Poll for new messages |
 | GET | `/chat/session/:session_id` | Optional | Get session information |
-| GET | `/chat/audit` | No | View audit trail |
+| GET | `/chat/audit` | No | View audit trail (supports `?session_id=...` and/or `?run_id=...`) |
 | POST | `/chat/send` | No | Send outbound message |
+| POST | `/chat/run` | Yes (X-Agent-Token) | Create a Run (goal) for a session; enqueues a kickoff system message |
+| GET | `/chat/run/:run_id` | Yes (X-Agent-Token) | Get a Run by id (session-bound) |
+| GET | `/chat/run?session_id=...` | Yes (X-Agent-Token) | List Runs for a session (latest first) |
+| GET | `/chat/run/:run_id/actions` | Yes (X-Agent-Token) | List causal-chain actions for a Run (latest first) |
+| POST | `/chat/run/:run_id/transition` | Yes (X-Agent-Token) | Transition Run state (optionally update budget; budget window resets when transitioning to Active) |
+| POST | `/chat/run/:run_id/cancel` | Yes (X-Agent-Token) | Cancel a Run |
 
 ### Authentication & Authorization
 
@@ -62,6 +68,17 @@
 | **Status Checking** | Validates session is Active, not Suspended/Expired |
 | **Capability Checking** | Validates capability exists and is registered |
 | **Approval Enforcement** | Blocks capabilities requiring unapproved approvals |
+
+### Runs (Autonomy Core)
+
+| Feature | Description |
+|---------|-------------|
+| **Run Lifecycle** | Runs are session-bound goals with a state machine (Active / PausedApproval / PausedExternalEvent / Done / Failed / Cancelled). |
+| **Single Active Run** | `POST /chat/run` returns `409` if the session already has an active run (prevents competing orchestration loops). |
+| **Kickoff Message** | Creating a run enqueues a synthetic system message into the session inbox: `Run started (<run_id>). Goal: ...`. This starts execution without requiring a user chat message. |
+| **Inbound Correlation** | Inbound chat messages correlate to the active run; otherwise to the latest paused run (PausedExternalEvent auto-resumes to Active; PausedApproval correlates without resuming). |
+| **Run Budget Gate** | `/chat/execute` enforces run state + budget: non-chat capabilities are refused while paused/terminal; if budget exceeded, the run transitions to PausedApproval and the call is refused. Chat egress/transform capabilities remain allowed so the system can communicate pause/next-steps. |
+| **Completion Predicates** | Gateway enforces `completion_predicate=never` (Done transition rejected) and supports `capability_succeeded:<capability_id>` (Done allowed only if that capability succeeded within the run). |
 
 ### Audit & Logging
 
@@ -126,6 +143,15 @@ The LLM returns plans in this JSON structure:
 | **Error Handling** | Handles success/failure responses |
 | **Input Augmentation** | Auto-adds session_id, run_id, step_id to inputs |
 | **Retry Logic** | Configurable retry on transient failures |
+| **Plan Safety Checks** | Skips executing malformed actions (e.g. refuses to call `ccos.skill.execute` if `operation` is missing) to avoid failing runs on planner mistakes. |
+
+### Run Awareness
+
+| Feature | Description |
+|---------|-------------|
+| **Run ID Propagation** | Agent can be started with `--run-id` / `CCOS_RUN_ID`; outbound capability calls include `run_id` for correlation. |
+| **Run State Transitions** | Agent calls the Gateway `/chat/run/:run_id/transition` endpoint to pause/resume (e.g. on budget exhaustion) and to mark basic outcomes (Done/Failed) when predicates allow it. |
+| **No Demo Coupling** | Agent summaries and next-steps messaging are generic; demo-specific onboarding text is handled by the demo skill and/or external system. |
 
 ### Skill System
 
@@ -137,7 +163,9 @@ The LLM returns plans in this JSON structure:
 | **Onboarding Tracking** | Maintains onboarding state |
 | **State Machine** | NOT_LOADED → LOADED → NEEDS_SETUP → OPERATIONAL |
 | **Human Action Requests** | Creates approval requests for human steps |
-| **Secret Management** | Requests secret storage through Gateway |
+| **Secret Management** | Secrets are stored in the Gateway’s `SecretStore` (`.ccos/secrets.toml`) and injected at execution time; the agent does not receive secret values. The agent can optionally persist per-skill bearer tokens for reuse across restarts. |
+| **Authorization Injection (Bearer)** | When a per-skill bearer token is known (from onboarding or SecretStore), the agent automatically adds `Authorization: Bearer ...` to skill calls (both direct per-skill capabilities and the `ccos.skill.execute` wrapper). |
+| **Skill Load Guardrails** | `ccos.skill.load` rejects non-skill-looking URLs by default; use `force=true` to override (e.g. to avoid accidentally treating arbitrary `x.com/...` links as skills). |
 
 ---
 
@@ -258,10 +286,10 @@ X-Agent-Token: <token>
 | Feature | Gateway | Agent |
 |---------|---------|-------|
 | Filesystem Access | Yes (managed) | No |
-| Network Egress | Yes (controlled) | No (only to Gateway) |
+| Network Egress | Yes (controlled) | Limited (talks only to Gateway in the default deployment) |
 | Secret Access | Yes (injected) | No |
 | Direct API Calls | Yes (via capabilities) | No |
-| Persistent State | Yes | No |
+| Persistent State | Yes | Optional: per-skill bearer token persistence to `.ccos/secrets.toml` when enabled |
 
 ### Token Security
 
@@ -384,8 +412,7 @@ NOT_LOADED → LOADED → NEEDS_SETUP → PENDING_HUMAN_ACTION → OPERATIONAL
 
 | Capability ID | Purpose | Approval |
 |--------------|---------|----------|
-| `ccos.secrets.set` | Store secret value | SecretWrite |
-| `ccos.secrets.get` | Retrieve secret | No (injected) |
+| `ccos.secrets.set` | Store secret value in SecretStore (approval recorded) | SecretWrite |
 | `ccos.memory.store` | Persist state | No |
 | `ccos.memory.get` | Retrieve state | No |
 | `ccos.approval.request_human_action` | Request human action | Creates approval |
@@ -442,10 +469,12 @@ Environment variables:
 | `--session-id` | Required | Session identifier |
 | `--gateway-url` | `http://localhost:8080` | Gateway URL |
 | `--poll-interval-ms` | `1000` | Polling interval in milliseconds |
+| `--run-id` | None | Correlate all capability calls to a Run (for autonomy workflows) |
 | `--enable-llm` | `false` | Enable LLM processing |
 | `--llm-provider` | `local` | LLM provider (openai/anthropic/local) |
 | `--llm-api-key` | None | API key for LLM provider |
 | `--llm-model` | `gpt-3.5-turbo` | Model name |
+| `--persist-skill-secrets` | `false` | Persist discovered per-skill bearer tokens to SecretStore (`.ccos/secrets.toml`) for reuse across restarts |
 
 ### Agent Configuration File
 
@@ -484,10 +513,12 @@ All CLI arguments can also be set via environment:
 | `CCOS_AGENT_TOKEN` | `--token` |
 | `CCOS_SESSION_ID` | `--session-id` |
 | `CCOS_GATEWAY_URL` | `--gateway-url` |
+| `CCOS_RUN_ID` | `--run-id` |
 | `CCOS_AGENT_ENABLE_LLM` | `--enable-llm` |
 | `CCOS_LLM_PROVIDER` | `--llm-provider` |
 | `CCOS_LLM_API_KEY` | `--llm-api-key` |
 | `CCOS_LLM_MODEL` | `--llm-model` |
+| `CCOS_AGENT_PERSIST_SKILL_SECRETS` | `--persist-skill-secrets` |
 
 ---
 

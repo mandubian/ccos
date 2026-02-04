@@ -13,6 +13,9 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 | **[CCOS Gateway-Agent Architecture](ccos-gateway-agent-architecture.md)** | Complete architecture specification | System architects, security engineers |
 | **[Gateway-Agent Quick Start](gateway-agent-quickstart.md)** | Step-by-step setup guide | Developers, operators |
 | **[Feature Reference](gateway-agent-features.md)** | Detailed feature documentation | Developers, integrators |
+| **[Autonomy Implementation Plan](autonomy-implementation-plan.md)** | What’s implemented vs next for Runs/autonomy | Developers, architects |
+| **[Autonomy Backlog](ccos-chat-gateway-autonomy-backlog.md)** | Remaining work items for autonomy hardening | Maintainers |
+| **[Budget Enforcement Spec](spec-resource-budget-enforcement.md)** | Current + planned budget enforcement semantics | Developers, operators |
 | **[Skill Onboarding Specification](spec-skill-onboarding.md)** | Multi-step skill onboarding | Skill developers |
 | **[Skill Interpreter Specification](spec-skill-interpreter.md)** | Skill parsing and execution | Skill developers |
 
@@ -115,6 +118,9 @@ docs/new_arch/
 ├── ccos-gateway-agent-architecture.md     # Complete architecture spec
 ├── gateway-agent-quickstart.md            # Step-by-step guide
 ├── gateway-agent-features.md              # Feature reference
+├── autonomy-implementation-plan.md        # Autonomy plan + status
+├── ccos-chat-gateway-autonomy-backlog.md  # Autonomy backlog
+├── spec-resource-budget-enforcement.md    # Budget enforcement spec
 ├── spec-skill-onboarding.md               # Skill onboarding spec
 └── spec-skill-interpreter.md              # Skill interpreter spec
 ```

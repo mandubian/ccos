@@ -703,7 +703,7 @@ The Gateway leverages these existing CCOS capabilities:
 | Capability | Used For | Gateway Role |
 |------------|----------|--------------|
 | `ccos.secrets.set` | Storing agent credentials | Forwards agent requests |
-| `ccos.secrets.get` | Retrieving secrets for injection | Injects before execution |
+| *(no direct secrets-get capability)* | Secret injection | Secrets are resolved from `SecretStore` (`.ccos/secrets.toml`) and injected at execution time by the capability marketplace/executors; secret values are not returned to the agent |
 | `ccos.memory.store` | Persisting onboarding state | Forwards agent requests |
 | `ccos.memory.get` | Retrieving onboarding state | Forwards agent requests |
 | `ccos.chat.egress.prepare_outbound` | Preparing messages for send | Direct use |
@@ -809,12 +809,12 @@ Agent: Continues with approved action
 ```
 Scenario: Agent wants to call Moltbook API
 
-1. Agent knows it needs secret "MOLTBOOK_SECRET"
-2. Agent calls Gateway: ccos.secrets.get("MOLTBOOK_SECRET")
-3. Gateway checks: Does this session have access?
-4. Gateway injects secret into HTTP request headers
-5. Gateway makes actual HTTP call to Moltbook
-6. Gateway returns response to Agent (secret never exposed)
+1. Agent executes an operation (e.g. `ccos.skill.execute` or a derived per-skill capability)
+2. Gateway executes the operation via the capability marketplace
+3. Executor resolves required secrets from `SecretStore` (`.ccos/secrets.toml`) with env-var fallback
+4. Gateway injects secrets into HTTP request headers (e.g. `Authorization: Bearer ...`)
+5. Gateway makes the actual HTTP call
+6. Gateway returns response to Agent (secrets never exposed)
 ```
 
 ---

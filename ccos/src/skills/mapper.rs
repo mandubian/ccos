@@ -380,8 +380,8 @@ impl SkillMapper {
                                         );
                                         template_replace_secrets(&mut final_params, &skill_secrets);
 
-        let inputs_json = rtfs_value_to_json(inputs)?;
-        match inputs_json {
+                                        let inputs_json = rtfs_value_to_json(inputs)?;
+                                        match inputs_json {
                                             serde_json::Value::Object(obj) => {
                                                 for (k, v) in obj {
                                                     // Special case: if "body" is an object/array,
@@ -401,19 +401,22 @@ impl SkillMapper {
                                                 }
                                             }
                                             serde_json::Value::Null => {}
-            other => {
-                final_params.insert("input".to_string(), other);
-            }
-        }
+                                            other => {
+                                                final_params.insert("input".to_string(), other);
+                                            }
+                                        }
 
-        ensure_json_body_for_write(&mut final_params);
-        log_skill_params(&first_mapped.capability_id, &final_params);
+                                        ensure_json_body_for_write(&mut final_params);
+                                        log_skill_params(
+                                            &first_mapped.capability_id,
+                                            &final_params,
+                                        );
 
-        let rtfs_params_json = serde_json::Value::Object(
-            final_params
-                .into_iter()
-                .collect::<serde_json::Map<_, _>>(),
-        );
+                                        let rtfs_params_json = serde_json::Value::Object(
+                                            final_params
+                                                .into_iter()
+                                                .collect::<serde_json::Map<_, _>>(),
+                                        );
                                         let rtfs_params = json_to_rtfs_value(&rtfs_params_json)?;
 
                                         let fetch_result = marketplace
@@ -922,7 +925,7 @@ fn validate_skill_inputs(
     if let Some(missing) = missing_required_inputs(inputs, schema) {
         if !missing.is_empty() {
             return Err(RuntimeError::Generic(format!(
-                "Missing required inputs for {}: {}",
+                "PROMPT_MISSING_INPUT: Missing required inputs for {}: {}. Please provide these values to continue.",
                 cap_id,
                 missing.join(", ")
             )));
@@ -934,14 +937,13 @@ fn validate_skill_inputs(
     let context = VerificationContext::capability_boundary(cap_id);
     validator
         .validate_with_config(inputs, schema, &config, &context)
-        .map_err(|e| RuntimeError::Generic(format!("Input validation failed for {}: {}", cap_id, e)))?;
+        .map_err(|e| {
+            RuntimeError::Generic(format!("Input validation failed for {}: {}", cap_id, e))
+        })?;
     Ok(())
 }
 
-fn missing_required_inputs(
-    inputs: &Value,
-    schema: &rtfs::ast::TypeExpr,
-) -> Option<Vec<String>> {
+fn missing_required_inputs(inputs: &Value, schema: &rtfs::ast::TypeExpr) -> Option<Vec<String>> {
     let schema_json = schema.to_json().ok()?;
     let required = schema_json
         .get("required")
@@ -989,7 +991,10 @@ fn ensure_json_body_for_write(params: &mut HashMap<String, serde_json::Value>) {
         return;
     }
     if !params.contains_key("body") {
-        params.insert("body".to_string(), serde_json::Value::String("{}".to_string()));
+        params.insert(
+            "body".to_string(),
+            serde_json::Value::String("{}".to_string()),
+        );
     }
     let body_is_json = params
         .get("body")
@@ -1130,6 +1135,8 @@ mod tests {
     use crate::approval::{ApprovalCategory, ApprovalFilter, UnifiedApprovalQueue};
     use crate::capabilities::registry::CapabilityRegistry;
     use crate::skills::types::SkillOperation;
+    use rtfs::ast::TypeExpr;
+    use rtfs::runtime::values::Value;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1260,5 +1267,40 @@ mod tests {
         assert!(found_secret, "Secret approval should be enqueued");
         assert!(found_skill_approval, "Skill approval should be enqueued");
         assert!(found_sandbox, "Sandbox approval should be enqueued");
+    }
+
+    #[test]
+    fn test_missing_required_inputs() {
+        // Create a map type with one required and one optional field
+        let type_str = "[:map [:name :string] [:age :int ?]]";
+        let schema = TypeExpr::from_str(type_str).unwrap();
+
+        // Case 1: All required present
+        let mut inputs_map = HashMap::new();
+        inputs_map.insert(
+            MapKey::String("name".to_string()),
+            Value::String("Alice".to_string()),
+        );
+        let inputs = Value::Map(inputs_map);
+        let missing = missing_required_inputs(&inputs, &schema).unwrap();
+        assert!(missing.is_empty());
+
+        // Case 2: Required missing
+        let inputs = Value::Map(HashMap::new());
+        let missing = missing_required_inputs(&inputs, &schema).unwrap();
+        assert_eq!(missing, vec!["name".to_string()]);
+    }
+
+    #[test]
+    fn test_validate_skill_inputs_prompt() {
+        let type_str = "[:map [:query :string]]";
+        let schema = TypeExpr::from_str(type_str).unwrap();
+        let inputs = Value::Map(HashMap::new());
+
+        let result = validate_skill_inputs(&inputs, &schema, "test-cap");
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("PROMPT_MISSING_INPUT"));
+        assert!(err.contains("query"));
     }
 }

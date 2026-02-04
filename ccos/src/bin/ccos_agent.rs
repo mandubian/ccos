@@ -11,13 +11,15 @@
 
 use ccos::chat::agent_llm::{AgentLlmClient, LlmConfig};
 use ccos::config::types::AgentConfig;
+use ccos::secrets::SecretStore;
+use ccos::utils::fs::get_workspace_root;
 use chrono::Utc;
 use clap::Parser;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -47,6 +49,10 @@ struct Args {
     /// Session ID assigned by the Gateway
     #[arg(long, env = "CCOS_SESSION_ID")]
     session_id: String,
+
+    /// Optional Run ID for correlation (provided by Gateway when using /chat/run)
+    #[arg(long, env = "CCOS_RUN_ID")]
+    run_id: Option<String>,
 
     /// Agent ID (from config or env)
     #[arg(long, env = "CCOS_AGENT_ID")]
@@ -87,6 +93,27 @@ struct Args {
     /// Allowlist of agent context keys to share with LLM (comma-separated)
     #[arg(long, env = "CCOS_LLM_CONTEXT_ALLOWLIST", value_delimiter = ',')]
     llm_context_allowlist: Option<Vec<String>>,
+
+    // ── Budget Enforcement ──────────────────────────────────────────────────
+    /// Maximum steps (actions) the agent can execute before pausing (0 = unlimited)
+    #[arg(long, env = "CCOS_AGENT_MAX_STEPS", default_value = "0")]
+    max_steps: u32,
+
+    /// Maximum duration in seconds the agent can run before pausing (0 = unlimited)
+    #[arg(long, env = "CCOS_AGENT_MAX_DURATION_SECS", default_value = "0")]
+    max_duration_secs: u64,
+
+    /// Budget policy: "hard_stop" (exit) or "pause_approval" (wait for approval)
+    #[arg(
+        long,
+        env = "CCOS_AGENT_BUDGET_POLICY",
+        default_value = "pause_approval"
+    )]
+    budget_policy: String,
+
+    /// Persist discovered per-skill bearer tokens to .ccos/secrets.toml (opt-in).
+    #[arg(long, env = "CCOS_AGENT_PERSIST_SKILL_SECRETS", default_value = "false")]
+    persist_skill_secrets: bool,
 }
 
 impl Args {
@@ -303,10 +330,20 @@ struct AgentRuntime {
     loaded_skill_urls: HashSet<String>,
     loaded_skill_ids: HashSet<String>,
     loaded_skill_capabilities: HashSet<String>,
+    // Ephemeral per-skill bearer tokens (e.g. secrets returned by register-agent during onboarding).
+    // This avoids prompting the LLM with secrets while still enabling authenticated follow-up calls.
+    skill_bearer_tokens: HashMap<String, String>,
     capability_required: HashMap<String, Vec<String>>,
     agent_id: Option<String>,
     agent_name: Option<String>,
     llm_context_allowlist: Vec<String>,
+    // ── Budget Tracking ─────────────────────────────────────────────────────
+    /// Number of actions executed since agent start
+    step_count: u32,
+    /// Timestamp when the agent started
+    start_time: Instant,
+    /// Whether the agent is paused due to budget exhaustion
+    budget_paused: bool,
 }
 
 impl AgentRuntime {
@@ -318,16 +355,13 @@ impl AgentRuntime {
 
         let agent_id = args.agent_id.clone();
         let agent_name = args.agent_name.clone();
-        let llm_context_allowlist = args
-            .llm_context_allowlist
-            .clone()
-            .unwrap_or_else(|| {
-                vec![
-                    "agent_id".to_string(),
-                    "agent_name".to_string(),
-                    "llm_model".to_string(),
-                ]
-            });
+        let llm_context_allowlist = args.llm_context_allowlist.clone().unwrap_or_else(|| {
+            vec![
+                "agent_id".to_string(),
+                "agent_name".to_string(),
+                "llm_model".to_string(),
+            ]
+        });
 
         // Initialize LLM client if enabled
         let llm_client = if args.enable_llm {
@@ -376,10 +410,91 @@ impl AgentRuntime {
             loaded_skill_urls: HashSet::new(),
             loaded_skill_ids: HashSet::new(),
             loaded_skill_capabilities: HashSet::new(),
+            skill_bearer_tokens: HashMap::new(),
             capability_required: HashMap::new(),
             agent_id,
             agent_name,
             llm_context_allowlist,
+            // Budget tracking
+            step_count: 0,
+            start_time: Instant::now(),
+            budget_paused: false,
+        }
+    }
+
+    // ── Budget Enforcement Helpers ──────────────────────────────────────────
+
+    /// Check if the agent has exceeded its budget
+    /// Returns (exceeded, reason) tuple
+    fn check_budget(&self) -> (bool, Option<String>) {
+        // Check step limit
+        if self.args.max_steps > 0 && self.step_count >= self.args.max_steps {
+            return (
+                true,
+                Some(format!(
+                    "Step limit exceeded: {}/{}",
+                    self.step_count, self.args.max_steps
+                )),
+            );
+        }
+
+        // Check duration limit
+        if self.args.max_duration_secs > 0 {
+            let elapsed = self.start_time.elapsed().as_secs();
+            if elapsed >= self.args.max_duration_secs {
+                return (
+                    true,
+                    Some(format!(
+                        "Duration limit exceeded: {}s/{}s",
+                        elapsed, self.args.max_duration_secs
+                    )),
+                );
+            }
+        }
+
+        (false, None)
+    }
+
+    /// Increment step counter and return the new count
+    fn increment_step(&mut self) -> u32 {
+        self.step_count += 1;
+        self.step_count
+    }
+
+    /// Handle budget exhaustion according to policy
+    /// Returns true if the action should be skipped (budget exceeded), false otherwise
+    async fn handle_budget_exceeded(&mut self, reason: &str, event: &ChatEvent) -> bool {
+        warn!("[Budget] {}", reason);
+
+        if self.args.budget_policy == "hard_stop" {
+            error!("[Budget] Hard stop: agent shutting down due to budget exhaustion");
+            // Send a message to the user before stopping
+            let _ = self
+                .send_response(
+                    event,
+                    &format!("⚠️ Budget exceeded: {}. Agent is stopping.", reason),
+                )
+                .await;
+            let _ = self
+                .transition_run_state("Failed", Some(reason))
+                .await;
+            // Exit the process
+            std::process::exit(0);
+        } else {
+            // pause_approval: set paused flag and notify
+            self.budget_paused = true;
+            info!("[Budget] Paused: waiting for approval to continue");
+            let _ = self.send_response(
+                event,
+                &format!(
+                    "⏸️ Budget limit reached: {}. Agent is paused. Reply 'continue' to resume with a new budget.",
+                    reason
+                ),
+            ).await;
+            let _ = self
+                .transition_run_state("PausedApproval", Some(reason))
+                .await;
+            true // skip further actions
         }
     }
 
@@ -466,10 +581,7 @@ impl AgentRuntime {
                     if let Some(schema) = &c.input_schema {
                         format!(
                             "- {} ({}) - {} | inputs: {}",
-                            c.id,
-                            c.version,
-                            c.description,
-                            schema
+                            c.id, c.version, c.description, schema
                         )
                     } else {
                         format!("- {} ({}) - {}", c.id, c.version, c.description)
@@ -528,6 +640,32 @@ impl AgentRuntime {
         // Store in history
         self.message_history.push(event.clone());
 
+        // Check if the agent is paused and the user sent "continue"
+        if self.budget_paused {
+            let content_lower = event.content.to_lowercase();
+            if content_lower.contains("continue") || content_lower.contains("resume") {
+                info!("[Budget] Resuming: user sent continue command");
+                self.budget_paused = false;
+                // Reset counters for new budget window
+                self.step_count = 0;
+                self.start_time = Instant::now();
+                let _ = self
+                    .send_response(&event, "▶️ Resuming! Budget has been reset.")
+                    .await;
+                let _ = self.transition_run_state("Active", Some("resumed by user")).await;
+                return Ok(());
+            } else {
+                // Agent is paused, only respond to "continue"
+                let _ = self
+                    .send_response(
+                        &event,
+                        "⏸️ I'm currently paused due to budget limits. Reply 'continue' to resume.",
+                    )
+                    .await;
+                return Ok(());
+            }
+        }
+
         if let Some(_) = &self.llm_client {
             self.process_with_llm(event).await?;
         } else {
@@ -550,7 +688,12 @@ impl AgentRuntime {
         );
         inputs.insert(
             "run_id".to_string(),
-            serde_json::json!(format!("resp-{}", event.id)),
+            serde_json::json!(
+                self.args
+                    .run_id
+                    .clone()
+                    .unwrap_or_else(|| format!("resp-{}", event.id))
+            ),
         );
         inputs.insert(
             "step_id".to_string(),
@@ -574,6 +717,74 @@ impl AgentRuntime {
             &format!("I am a simple agent. You said: {}", event.content),
         )
         .await
+    }
+
+    async fn transition_run_state(
+        &self,
+        new_state: &str,
+        reason: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let Some(run_id) = &self.args.run_id else {
+            return Ok(());
+        };
+
+        let url = format!(
+            "{}/chat/run/{}/transition",
+            self.args.gateway_url.trim_end_matches('/'),
+            run_id
+        );
+        let mut body = serde_json::json!({ "new_state": new_state });
+        if let Some(reason) = reason {
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("reason".to_string(), serde_json::json!(reason));
+            }
+        }
+
+        // Best-effort: run transitions are advisory; don't fail the agent loop if they fail.
+        let resp = self
+            .client
+            .post(url)
+            .header("X-Agent-Token", &self.args.token)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("run transition failed: {} {}", status, text);
+        }
+
+        Ok(())
+    }
+
+    async fn fetch_run_completion_predicate(&self) -> anyhow::Result<Option<String>> {
+        let Some(run_id) = &self.args.run_id else {
+            return Ok(None);
+        };
+
+        let url = format!(
+            "{}/chat/run/{}",
+            self.args.gateway_url.trim_end_matches('/'),
+            run_id
+        );
+        let resp = self
+            .client
+            .get(url)
+            .header("X-Agent-Token", &self.args.token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+
+        let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        Ok(json
+            .get("completion_predicate")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()))
     }
 
     /// Process message using LLM
@@ -616,6 +827,21 @@ impl AgentRuntime {
 
                     // Execute planned actions through Gateway
                     for (idx, action) in plan.actions.iter().enumerate() {
+                        // ── Budget Check ────────────────────────────────────
+                        let (exceeded, reason) = self.check_budget();
+                        if exceeded {
+                            if let Some(reason) = reason {
+                                if self.handle_budget_exceeded(&reason, &event).await {
+                                    // Skip remaining actions
+                                    failed_actions.push(format!(
+                                        "{}: skipped (budget exceeded)",
+                                        action.capability_id
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+
                         info!(
                             "Executing action {}/{}: {}",
                             idx + 1,
@@ -677,14 +903,20 @@ impl AgentRuntime {
                                 "session_id".to_string(),
                                 serde_json::json!(self.args.session_id),
                             );
-                            obj.insert(
-                                "run_id".to_string(),
-                                serde_json::json!(format!("run-{}-{}", event.id, idx)),
-                            );
-                            obj.insert(
-                                "step_id".to_string(),
-                                serde_json::json!(format!("step-{}-{}", event.id, idx)),
-                            );
+                            let run_id = obj
+                                .get("run_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| self.args.run_id.clone())
+                                .unwrap_or_else(|| format!("run-{}-{}", event.id, idx));
+                            obj.insert("run_id".to_string(), serde_json::json!(run_id.clone()));
+
+                            let step_id = obj
+                                .get("step_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| format!("{}-step-{}-{}", run_id, event.id, idx));
+                            obj.insert("step_id".to_string(), serde_json::json!(step_id));
 
                             // AUTO-FIX: Mark all LLM-planned outbound messages as public for egress
                             if action.capability_id == "ccos.chat.egress.send_outbound"
@@ -705,6 +937,16 @@ impl AgentRuntime {
                                             serde_json::json!(last_skill_id),
                                         );
                                     }
+                                }
+
+                                // Guardrail: if the LLM "asked a question" but still planned a skill.execute
+                                // without specifying an operation, don't execute (it will always fail).
+                                // We'll just rely on the natural-language response we already sent.
+                                if obj.get("operation").and_then(|v| v.as_str()).is_none() {
+                                    warn!(
+                                        "Skipping ccos.skill.execute: missing operation (LLM plan likely needs clarification)"
+                                    );
+                                    skip_action = true;
                                 }
 
                                 let operation = obj.get("operation").and_then(|v| v.as_str());
@@ -750,12 +992,24 @@ impl AgentRuntime {
                                         }
                                     }
                                 }
+
+                                // Best-effort: if we already have a bearer token for this skill,
+                                // inject it into params.headers.Authorization unless the LLM provided one.
+                                self.maybe_inject_wrapper_skill_auth(obj);
                             }
                         }
 
                         if skip_action {
                             continue;
                         }
+
+                        // Best-effort: if a direct skill capability is being called (skill.op),
+                        // inject Authorization header from cached onboarding secret.
+                        Self::maybe_inject_direct_skill_auth(
+                            &self.skill_bearer_tokens,
+                            &action.capability_id,
+                            &mut inputs,
+                        );
 
                         match self.execute_capability(&action.capability_id, inputs).await {
                             Ok(response) => {
@@ -785,14 +1039,9 @@ impl AgentRuntime {
                                     if action.capability_id == "ccos.skill.load" {
                                         skill_load_failures.push(error_msg.clone());
                                     }
-                                    warn!(
-                                        "Action {} failed: {}",
-                                        action.capability_id, error_msg
-                                    );
-                                    failed_actions.push(format!(
-                                        "{}: {}",
-                                        action.capability_id, error_msg
-                                    ));
+                                    warn!("Action {} failed: {}", action.capability_id, error_msg);
+                                    failed_actions
+                                        .push(format!("{}: {}", action.capability_id, error_msg));
                                     continue;
                                 }
                                 let redacted_response = serde_json::to_value(&response)
@@ -812,9 +1061,11 @@ impl AgentRuntime {
                                         }
                                     }
                                 }
-                                if action.capability_id == "ccos.skill.execute" && response.success {
+                                if action.capability_id == "ccos.skill.execute" && response.success
+                                {
                                     if let Some(result) = &response.result {
-                                        if let Some(body) = result.get("body").and_then(|v| v.as_str())
+                                        if let Some(body) =
+                                            result.get("body").and_then(|v| v.as_str())
                                         {
                                             if let Ok(json) =
                                                 serde_json::from_str::<serde_json::Value>(body)
@@ -827,11 +1078,50 @@ impl AgentRuntime {
                                                         agent_id
                                                     );
                                                 }
+
+                                                // Cache onboarding secret (if any) for subsequent authenticated calls.
+                                                if let Some(secret) =
+                                                    json.get("secret").and_then(|v| v.as_str())
+                                                {
+                                                    if let Some(skill_id) = action
+                                                        .inputs
+                                                        .get("skill")
+                                                        .and_then(|v| v.as_str())
+                                                    {
+                                                        self.skill_bearer_tokens.insert(
+                                                            skill_id.to_string(),
+                                                            secret.to_string(),
+                                                        );
+
+                                                        if self.args.persist_skill_secrets {
+                                                            let key = Self::secret_store_key_for_skill(skill_id);
+                                                            match SecretStore::new(Some(get_workspace_root())) {
+                                                                Ok(mut store) => {
+                                                                    if let Err(e) = store.set_local(&key, secret.to_string()) {
+                                                                        warn!("Failed to persist skill token to SecretStore ({}): {}", key, e);
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    warn!("Failed to open SecretStore for persistence: {}", e);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
+
+                                // If a skill operation is executed directly and returns a secret, cache it.
+                                if response.success {
+                                    self.maybe_cache_secret_from_response(
+                                        &action.capability_id,
+                                        &response,
+                                    );
+                                }
                                 completed_actions.push(action_summary);
+                                self.increment_step();
 
                                 // Check if this was a skill load and we need to continue onboarding
                                 if action.capability_id == "ccos.skill.load" && response.success {
@@ -859,10 +1149,14 @@ impl AgentRuntime {
                                             "Skill loaded: id={}, requires_approval={}, capabilities=[{}]",
                                             loaded_skill_id, requires_approval, loaded_caps
                                         );
-                                        if let Some(skill_id) = result.get("skill_id").and_then(|v| v.as_str()) {
+                                        if let Some(skill_id) =
+                                            result.get("skill_id").and_then(|v| v.as_str())
+                                        {
                                             self.last_loaded_skill_id = Some(skill_id.to_string());
                                             self.loaded_skill_ids.insert(skill_id.to_string());
-                                            if let Some(url) = result.get("url").and_then(|v| v.as_str()) {
+                                            if let Some(url) =
+                                                result.get("url").and_then(|v| v.as_str())
+                                            {
                                                 self.loaded_skill_urls.insert(url.to_string());
                                             }
                                         }
@@ -872,7 +1166,8 @@ impl AgentRuntime {
                                             .and_then(|v| v.as_array())
                                         {
                                             for cap in caps.iter().filter_map(|c| c.as_str()) {
-                                                self.loaded_skill_capabilities.insert(cap.to_string());
+                                                self.loaded_skill_capabilities
+                                                    .insert(cap.to_string());
                                             }
                                         }
                                         let _ = self.fetch_capabilities().await;
@@ -919,6 +1214,50 @@ impl AgentRuntime {
                         }
                     }
 
+                    // If this agent is running under a Run, best-effort transition the Run based on outcome.
+                    // This keeps the Gateway/Agent generic: the agent reports Done/Failed/Paused when it knows.
+                    if self.args.run_id.is_some() {
+                        let has_follow_up = !follow_up_events.is_empty();
+
+                        if self.budget_paused {
+                            // Budget pause transitions are handled where the pause is triggered.
+                        } else if !failed_actions.is_empty() {
+                            // Truncate to keep audit small.
+                            let reason = failed_actions
+                                .join("; ");
+                            let reason = if reason.len() > 500 {
+                                format!("{}...", &reason[..500])
+                            } else {
+                                reason
+                            };
+                            let _ = self.transition_run_state("Failed", Some(&reason)).await;
+                        } else if !missing_inputs.is_empty() || !skill_load_failures.is_empty() {
+                            let _ = self
+                                .transition_run_state(
+                                    "PausedExternalEvent",
+                                    Some("awaiting_user_input"),
+                                )
+                                .await;
+                        } else if !plan.actions.is_empty() && !has_follow_up {
+                            let predicate = self
+                                .fetch_run_completion_predicate()
+                                .await
+                                .ok()
+                                .flatten();
+                            let should_done = match predicate.as_deref() {
+                                Some("manual") | Some("never") => false,
+                                Some("always") => true,
+                                // If a predicate is set but we don't understand it, don't auto-complete.
+                                Some(_) => false,
+                                // Default: treat lack of a predicate as "finish when this step completed".
+                                None => true,
+                            };
+                            if should_done {
+                                let _ = self.transition_run_state("Done", None).await;
+                            }
+                        }
+                    }
+
                     // Send follow-up summary (what actually happened + next steps).
                     if !completed_actions.is_empty() || !failed_actions.is_empty() {
                         let mut summary = String::new();
@@ -951,8 +1290,9 @@ impl AgentRuntime {
                                 ));
                             }
                         } else if skill_load_failures.is_empty() {
-                            summary.push_str("- Tell me if you want me to continue onboarding.\n");
-                            summary.push_str("- If human verification is required, share your X username; after posting the verification tweet, share its URL.\n");
+                            // Heuristic next-steps for multi-stage onboarding flows:
+                            summary.push_str("- Tell me if you want me to continue.\n");
+                            summary.push_str("- If a capability requires extra inputs or a human action (e.g., a URL/code), provide what it asks for and I'll proceed.\n");
                         }
 
                         info!("Agent summary: {}", summary);
@@ -1125,6 +1465,151 @@ impl AgentRuntime {
         }
     }
 
+    fn maybe_inject_wrapper_skill_auth(
+        &self,
+        obj: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        let Some(skill_id) = obj.get("skill").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let token = self
+            .skill_bearer_tokens
+            .get(skill_id)
+            .cloned()
+            .or_else(|| Self::load_skill_token_from_secret_store(skill_id));
+        let Some(token) = token else { return };
+
+        // Ensure params.headers.Authorization exists (but don't override if present).
+        let params = obj
+            .entry("params".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(params_obj) = params.as_object_mut() else {
+            return;
+        };
+        let headers = params_obj
+            .entry("headers".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(headers_obj) = headers.as_object_mut() else {
+            return;
+        };
+
+        if headers_obj
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("authorization"))
+        {
+            return;
+        }
+
+        headers_obj.insert(
+            "Authorization".to_string(),
+            serde_json::json!(format!("Bearer {}", token)),
+        );
+    }
+
+    fn maybe_inject_direct_skill_auth(
+        tokens: &HashMap<String, String>,
+        capability_id: &str,
+        inputs: &mut serde_json::Value,
+    ) {
+        // Only apply to "<skill>.<op>" style capabilities (and skip ccos.*).
+        if capability_id.starts_with("ccos.") {
+            return;
+        }
+
+        let Some((skill_id, _op)) = capability_id.split_once('.') else {
+            return;
+        };
+        let token = tokens
+            .get(skill_id)
+            .cloned()
+            .or_else(|| Self::load_skill_token_from_secret_store(skill_id));
+        let Some(token) = token else { return };
+        let Some(obj) = inputs.as_object_mut() else {
+            return;
+        };
+
+        let headers = obj
+            .entry("headers".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(headers_obj) = headers.as_object_mut() else {
+            return;
+        };
+        if headers_obj
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("authorization"))
+        {
+            return;
+        }
+
+        headers_obj.insert(
+            "Authorization".to_string(),
+            serde_json::json!(format!("Bearer {}", token)),
+        );
+    }
+
+    fn maybe_cache_secret_from_response(
+        &mut self,
+        capability_id: &str,
+        response: &ExecuteResponse,
+    ) {
+        // Works for direct skill operations: the HTTP executor returns {"status","body","headers"}.
+        if capability_id.starts_with("ccos.") {
+            return;
+        }
+        let Some((skill_id, _op)) = capability_id.split_once('.') else {
+            return;
+        };
+        let Some(result) = response.result.as_ref() else {
+            return;
+        };
+        let Some(body) = result.get("body").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+            return;
+        };
+        let Some(secret) = json.get("secret").and_then(|v| v.as_str()) else {
+            return;
+        };
+
+        self.skill_bearer_tokens
+            .insert(skill_id.to_string(), secret.to_string());
+
+        if self.args.persist_skill_secrets {
+            let key = Self::secret_store_key_for_skill(skill_id);
+            match SecretStore::new(Some(get_workspace_root())) {
+                Ok(mut store) => {
+                    if let Err(e) = store.set_local(&key, secret.to_string()) {
+                        warn!("Failed to persist skill token to SecretStore ({}): {}", key, e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to open SecretStore for persistence: {}", e);
+                }
+            }
+        }
+    }
+
+    fn secret_store_key_for_skill(skill_id: &str) -> String {
+        let mut out = String::from("CCOS_SKILL_");
+        for ch in skill_id.chars() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch.to_ascii_uppercase());
+            } else {
+                out.push('_');
+            }
+        }
+        out.push_str("_BEARER_TOKEN");
+        out
+    }
+
+    fn load_skill_token_from_secret_store(skill_id: &str) -> Option<String> {
+        let key = Self::secret_store_key_for_skill(skill_id);
+        SecretStore::new(Some(get_workspace_root()))
+            .ok()
+            .and_then(|store| store.get(&key))
+    }
+
     fn allowed_context_value(&self, key: &str) -> Option<String> {
         if self.llm_context_allowlist.iter().any(|k| k == key) {
             self.context_value(key)
@@ -1161,7 +1646,11 @@ impl AgentRuntime {
             if exec_resp.success {
                 info!("Capability {} executed successfully", capability_id);
             } else {
-                warn!("Capability {} failed: {:?}", capability_id, exec_resp.error);
+                warn!(
+                    "Capability {} failed: {}",
+                    capability_id,
+                    redact_text_for_logs(&format!("{:?}", exec_resp.error))
+                );
             }
             Ok(exec_resp)
         } else {
