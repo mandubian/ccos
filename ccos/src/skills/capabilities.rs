@@ -77,6 +77,12 @@ pub async fn register_skill_capabilities(
             RuntimeError::Generic(format!("ccos.skill.load: {}", err))
         })?;
 
+        if loaded.skill.id == "unnamed-skill" || loaded.capabilities_to_register.is_empty() {
+            return Err(RuntimeError::Generic(
+                "ccos.skill.load: skill is missing an id or has no capabilities".to_string(),
+            ));
+        }
+
         let output = SkillLoadOutput {
             skill_id: loaded.skill.id,
             name: loaded.skill.name,
@@ -115,6 +121,29 @@ pub async fn register_skill_capabilities(
                         "Skill not loaded: {}",
                         payload.skill_id
                     )));
+                }
+
+                if !payload.operation.contains('.') {
+                    let known_ops = mapper
+                        .get_skill(&payload.skill_id)
+                        .map(|skill| {
+                            skill
+                                .operations
+                                .iter()
+                                .map(|op| op.name.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if !known_ops.is_empty()
+                        && !known_ops.iter().any(|op| op == &payload.operation)
+                    {
+                        return Err(RuntimeError::Generic(format!(
+                            "Unknown operation for {}: {}. Available: {}",
+                            payload.skill_id,
+                            payload.operation,
+                            known_ops.join(", ")
+                        )));
+                    }
                 }
 
                 let cap_id = if payload.operation.contains('.') {

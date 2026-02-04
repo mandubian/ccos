@@ -1,4 +1,7 @@
 #!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
 set -e
 
 # run_demo_moltbook.sh - Demo script for Gateway + Agent + Moltbook skill onboarding
@@ -46,7 +49,7 @@ cleanup() {
     pkill -f ccos-agent 2>/dev/null || true
     echo -e "${GREEN}✓ Cleanup complete${NC}"
 }
-trap cleanup EXIT
+trap cleanup INT TERM EXIT
 
 # Set environment
 export RUST_LOG="info,ccos_agent=debug"
@@ -112,6 +115,7 @@ export OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     --bind-addr 127.0.0.1:8822 \
     --connector-bind-addr 127.0.0.1:8833 \
     --connector-secret "demo-secret-key" \
+    --min-send-interval-ms 0 \
     --allow-senders "user1" \
     --allow-channels "moltbook-demo" \
     --mentions "@agent" \

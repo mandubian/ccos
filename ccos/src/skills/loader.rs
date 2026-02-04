@@ -4,6 +4,8 @@
 
 use super::parser::{parse_skill_yaml, ParseError};
 use super::types::{Skill, SkillOperation};
+use rtfs::ast::{Keyword, MapTypeEntry, PrimitiveType, TypeExpr};
+use serde_json::Value as JsonValue;
 
 /// Error type for skill loading
 #[derive(Debug)]
@@ -211,6 +213,7 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
                     current_section.clone()
                 };
 
+                let input_schema = extract_input_schema_from_code(&code_block_content);
                 operations.push(SkillOperation {
                     name: op_name,
                     description: current_section_text.trim().to_string(),
@@ -218,7 +221,7 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
                     method: extract_method_from_curl(&code_block_content),
                     command: Some(code_block_content.trim().to_string()),
                     runtime: extract_runtime_from_code(&code_block_content),
-                    input_schema: None,
+                    input_schema,
                     output_schema: None,
                 });
                 code_block_content.clear();
@@ -317,6 +320,78 @@ fn extract_endpoint_from_curl(code: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_input_schema_from_code(code: &str) -> Option<TypeExpr> {
+    let body_json = extract_body_json_from_code(code)?;
+    Some(type_expr_from_json_value(&body_json))
+}
+
+fn extract_body_json_from_code(code: &str) -> Option<JsonValue> {
+    let lines: Vec<&str> = code.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.to_lowercase().starts_with("body:") {
+            continue;
+        }
+        let mut body = trimmed
+            .split_once(':')
+            .map(|(_, rest)| rest.trim().to_string())
+            .unwrap_or_default();
+        if body.is_empty() {
+            for next in lines.iter().skip(idx + 1) {
+                let next_trimmed = next.trim();
+                if next_trimmed.is_empty() {
+                    break;
+                }
+                let lower = next_trimmed.to_lowercase();
+                if lower.starts_with("returns") || lower.starts_with("headers") {
+                    break;
+                }
+                body.push_str(next_trimmed);
+            }
+        }
+        if body.is_empty() {
+            return None;
+        }
+        if let Ok(json) = serde_json::from_str::<JsonValue>(&body) {
+            return Some(json);
+        }
+    }
+    None
+}
+
+fn type_expr_from_json_value(value: &JsonValue) -> TypeExpr {
+    match value {
+        JsonValue::Object(map) => {
+            let entries = map
+                .iter()
+                .map(|(k, v)| MapTypeEntry {
+                    key: Keyword(k.to_string()),
+                    value_type: Box::new(type_expr_from_json_value(v)),
+                    optional: false,
+                })
+                .collect();
+            TypeExpr::Map { entries, wildcard: None }
+        }
+        JsonValue::Array(items) => {
+            let inner = items
+                .get(0)
+                .map(type_expr_from_json_value)
+                .unwrap_or(TypeExpr::Any);
+            TypeExpr::Vector(Box::new(inner))
+        }
+        JsonValue::String(_) => TypeExpr::Primitive(PrimitiveType::String),
+        JsonValue::Number(n) => {
+            if n.is_i64() {
+                TypeExpr::Primitive(PrimitiveType::Int)
+            } else {
+                TypeExpr::Primitive(PrimitiveType::Float)
+            }
+        }
+        JsonValue::Bool(_) => TypeExpr::Primitive(PrimitiveType::Bool),
+        JsonValue::Null => TypeExpr::Any,
+    }
 }
 
 fn extract_method_from_curl(code: &str) -> Option<String> {

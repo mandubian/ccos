@@ -406,6 +406,7 @@ The following are important but **not blocking for Phase 0-2**:
 - **Attachment pipeline**: media parsing is a large attack surface; keep it sandboxed (`docs/ccos/specs/022-sandbox-isolation.md`).
 
 ## Next Actions (Concrete)
+- Draft the autonomy backlog: [docs/new_arch/ccos-chat-gateway-autonomy-backlog.md](ccos-chat-gateway-autonomy-backlog.md)
 - **Choose MVP connector target** (lowest-risk onboarding + strongest allowlist/activation controls), then implement it against `043-chat-connector-adapter.md`.
 - **Wire a gateway/daemon “chat mode” execution path**:
   - connector → `MessageEnvelope` with quarantine pointers

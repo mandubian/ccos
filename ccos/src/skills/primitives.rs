@@ -291,20 +291,26 @@ impl PrimitiveMapper {
             if in_body {
                 body.push_str(trimmed);
                 body.push('\n');
-            } else if let Some((key, value)) = trimmed.split_once(':') {
-                if key.to_lowercase() == "headers" {
-                    // Skip the "Headers:" line itself if it's just a marker
-                    continue;
-                }
-                headers.insert(
-                    key.trim().to_string(),
-                    serde_json::Value::String(value.trim().to_string()),
-                );
             } else if trimmed.to_lowercase().starts_with("body:") {
                 in_body = true;
                 if let Some((_, json_body)) = trimmed.split_once(':') {
                     body.push_str(json_body.trim());
                 }
+            } else if trimmed.to_lowercase().starts_with("headers:") {
+                if let Some((_, header_blob)) = trimmed.split_once(':') {
+                    let header_blob = header_blob.trim();
+                    if let Some((key, value)) = header_blob.split_once(':') {
+                        headers.insert(
+                            key.trim().to_string(),
+                            serde_json::Value::String(value.trim().to_string()),
+                        );
+                    }
+                }
+            } else if let Some((key, value)) = trimmed.split_once(':') {
+                headers.insert(
+                    key.trim().to_string(),
+                    serde_json::Value::String(value.trim().to_string()),
+                );
             }
         }
 
