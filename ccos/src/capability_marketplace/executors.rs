@@ -1,6 +1,7 @@
 use super::types::*;
 use crate::secrets::SecretStore;
 use crate::utils::fs::get_workspace_root;
+use crate::utils::log_redaction::{redact_json_for_logs, redact_text_for_logs};
 use crate::utils::value_conversion::{self, json_to_rtfs_value};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as Base64Engine;
@@ -1178,7 +1179,7 @@ impl CapabilityExecutor for HttpExecutor {
         context: &ExecutionContext<'_>,
     ) -> RuntimeResult<Value> {
         if let ProviderType::Http(http) = provider {
-            let (url, method, headers_owned, body) = match inputs {
+            let (url, method, mut headers_owned, mut body) = match inputs {
                 Value::Map(map) => {
                     let url = map
                         .get(&MapKey::String("url".to_string()))
@@ -1285,11 +1286,38 @@ impl CapabilityExecutor for HttpExecutor {
             let method_enum =
                 reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
 
-            tracing::info!("[HttpExecutor] Sending {} request to {}", method_enum, url);
             let mut req = client.request(method_enum, &url);
             if let Some(token) = &http.auth_token {
                 req = req.bearer_auth(token);
             }
+
+            let method_upper = method.to_ascii_uppercase();
+            let is_write = matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH");
+            let has_content_type = headers_owned
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("content-type"));
+            if is_write && body.is_empty() {
+                body = "{}".to_string();
+                if !has_content_type {
+                    headers_owned.insert(
+                        "Content-Type".to_string(),
+                        "application/json".to_string(),
+                    );
+                }
+            }
+
+            let redacted_url = redact_text_for_logs(&url);
+            let has_content_type = headers_owned
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("content-type"));
+            tracing::info!(
+                "[HttpExecutor] Sending {} request to {} (body_len={}, content_type={})",
+                method_upper,
+                redacted_url,
+                body.len(),
+                has_content_type
+            );
+
             for (key, val) in headers_owned.iter() {
                 req = req.header(key, val);
             }
@@ -1321,10 +1349,14 @@ impl CapabilityExecutor for HttpExecutor {
                 )));
             }
 
+            let redacted_body = match serde_json::from_str::<serde_json::Value>(&resp_body) {
+                Ok(json) => redact_json_for_logs(&json).to_string(),
+                Err(_) => redact_text_for_logs(&resp_body),
+            };
             tracing::info!(
                 "[HttpExecutor] Received status {} with body: {}",
                 status,
-                resp_body
+                redacted_body
             );
             let mut response_map = std::collections::HashMap::new();
             response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));

@@ -23,6 +23,7 @@ use crate::chat::{
     ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
     QuarantineStore, SessionRegistry, SpawnerFactory,
 };
+use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
 use super::connector::{
@@ -556,12 +557,13 @@ async fn execute_handler(
         }));
     }
 
+    let redacted_inputs = redact_json_for_logs(&payload.inputs);
     log::info!(
         "[Gateway] Executing capability {} for session {} (agent PID: {:?}) with inputs: {}",
         payload.capability_id,
         session.session_id,
         session.agent_pid,
-        payload.inputs
+        redacted_inputs
     );
 
     // Forward to capability marketplace (which enforces its own policy/approvals)
@@ -570,11 +572,33 @@ async fn execute_handler(
         .execute_capability(&payload.capability_id, payload.inputs)
         .await
     {
-        Ok((result, success)) => Ok(Json(ExecuteResponse {
+        Ok((result, success)) => {
+            if payload.capability_id == "ccos.skill.load" && success {
+                let skill_id = result
+                    .get("skill_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let cap_count = result
+                    .get("registered_capabilities")
+                    .or_else(|| result.get("capabilities"))
+                    .and_then(|v| v.as_array())
+                    .map(|caps| caps.len())
+                    .unwrap_or(0);
+                let requires_approval = result
+                    .get("requires_approval")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                log::info!(
+                    "[Gateway] Skill load result: id={}, registered_capabilities={}, requires_approval={}",
+                    skill_id, cap_count, requires_approval
+                );
+            }
+            Ok(Json(ExecuteResponse {
             success,
             result: Some(result),
             error: None,
-        })),
+        }))
+        }
         Err(e) => Ok(Json(ExecuteResponse {
             success: false,
             result: None,
@@ -717,11 +741,13 @@ async fn events_handler(
 
     if session.is_none() {
         let stored_token = state.session_registry.get_token(&session_id).await;
+        let redacted_received = redact_token_for_logs(token);
+        let redacted_stored = stored_token.as_deref().map(redact_token_for_logs);
         log::warn!(
             "[Gateway] Auth failed for session {}. Received token: '{}', Stored token: '{:?}'",
             session_id,
-            token,
-            stored_token
+            redacted_received,
+            redacted_stored
         );
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -791,6 +817,7 @@ struct CapabilityInfo {
     name: String,
     description: String,
     version: String,
+    input_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -821,6 +848,7 @@ async fn list_capabilities_handler(
             name: cap.name,
             description: cap.description,
             version: cap.version,
+            input_schema: cap.input_schema.as_ref().and_then(|ts| ts.to_json().ok()),
         })
         .collect();
 

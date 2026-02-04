@@ -15,13 +15,16 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::secrets::SecretStore;
 use crate::skills::types::Skill;
 use crate::utils::fs::get_workspace_root;
+use crate::utils::log_redaction::redact_json_for_logs;
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use futures::future::BoxFuture;
 use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::info;
 
 /// Error type for skill operations
 #[derive(Debug)]
@@ -322,6 +325,7 @@ impl SkillMapper {
                                 let marketplace = self.marketplace.clone();
                                 let op_name = op.name.clone();
                                 let skill_id = skill.id.clone();
+                                let op_input_schema = op.input_schema.clone();
                                 let first_cmd = first_cmd.to_string();
                                 let skill_secrets = skill.secrets.clone();
                                 let cap_id_for_handler = cap_id.clone();
@@ -332,6 +336,7 @@ impl SkillMapper {
                                     let marketplace = marketplace.clone();
                                     let op_name = op_name.clone();
                                     let skill_id = skill_id.clone();
+                                    let op_input_schema = op_input_schema.clone();
                                     let first_cmd = first_cmd.clone();
                                     let primitive_mapper = PrimitiveMapper::new();
                                     let skill_secrets = skill_secrets.clone();
@@ -344,6 +349,10 @@ impl SkillMapper {
                                         // Check approval status before execution
                                         check_approval_status(&cap_id).await?;
 
+                                        if let Some(schema) = op_input_schema.as_ref() {
+                                            validate_skill_inputs(&inputs_cloned, schema, &cap_id)?;
+                                        }
+
                                         let inputs = &inputs_cloned;
                                         let first_mapped = primitive_mapper
                                             .map_command(&first_cmd)
@@ -355,6 +364,7 @@ impl SkillMapper {
                                             })?;
 
                                         let mut final_params = first_mapped.params.clone();
+                                        log_skill_op(&cap_id, &skill_id, &op_name);
 
                                         // Inject secrets into headers
                                         inject_secrets_into_params(
@@ -370,8 +380,8 @@ impl SkillMapper {
                                         );
                                         template_replace_secrets(&mut final_params, &skill_secrets);
 
-                                        let inputs_json = rtfs_value_to_json(inputs)?;
-                                        match inputs_json {
+        let inputs_json = rtfs_value_to_json(inputs)?;
+        match inputs_json {
                                             serde_json::Value::Object(obj) => {
                                                 for (k, v) in obj {
                                                     // Special case: if "body" is an object/array,
@@ -391,16 +401,19 @@ impl SkillMapper {
                                                 }
                                             }
                                             serde_json::Value::Null => {}
-                                            other => {
-                                                final_params.insert("input".to_string(), other);
-                                            }
-                                        }
+            other => {
+                final_params.insert("input".to_string(), other);
+            }
+        }
 
-                                        let rtfs_params_json = serde_json::Value::Object(
-                                            final_params
-                                                .into_iter()
-                                                .collect::<serde_json::Map<_, _>>(),
-                                        );
+        ensure_json_body_for_write(&mut final_params);
+        log_skill_params(&first_mapped.capability_id, &final_params);
+
+        let rtfs_params_json = serde_json::Value::Object(
+            final_params
+                .into_iter()
+                .collect::<serde_json::Map<_, _>>(),
+        );
                                         let rtfs_params = json_to_rtfs_value(&rtfs_params_json)?;
 
                                         let fetch_result = marketplace
@@ -495,6 +508,7 @@ impl SkillMapper {
                     let command = op.command.clone();
                     let op_name = op.name.clone();
                     let skill_id = skill.id.clone();
+                    let op_input_schema = op.input_schema.clone();
                     let skill_secrets = skill.secrets.clone();
                     let cap_id_for_handler = cap_id.clone();
                     let skill_cloned = skill.clone();
@@ -505,6 +519,7 @@ impl SkillMapper {
                         let command = command.clone();
                         let op_name = op_name.clone();
                         let skill_id = skill_id.clone();
+                        let op_input_schema = op_input_schema.clone();
                         let primitive_mapper = PrimitiveMapper::new();
                         let skill_secrets = skill_secrets.clone();
                         let cap_id = cap_id_for_handler.clone();
@@ -516,10 +531,15 @@ impl SkillMapper {
                             // Check approval status before execution
                             check_approval_status(&cap_id).await?;
 
+                            if let Some(schema) = op_input_schema.as_ref() {
+                                validate_skill_inputs(&inputs_cloned, schema, &cap_id)?;
+                            }
+
                             let inputs = &inputs_cloned;
                             // 1. If we have a command, map it to a primitive
                             if let Some(cmd) = command {
                                 if let Some(mapped) = primitive_mapper.map_command(&cmd) {
+                                    log_skill_op(&cap_id, &skill_id, &op_name);
                                     // Merge inputs with mapped params
                                     let mut final_params = mapped.params.clone();
 
@@ -559,6 +579,9 @@ impl SkillMapper {
                                             final_params.insert("input".to_string(), other);
                                         }
                                     }
+
+                                    ensure_json_body_for_write(&mut final_params);
+                                    log_skill_params(&mapped.capability_id, &final_params);
 
                                     // Convert merged params back to RTFS Value
                                     let rtfs_params_json = serde_json::Value::Object(
@@ -887,6 +910,108 @@ fn inject_secrets_into_params(params: &mut HashMap<String, serde_json::Value>, s
                     );
                 }
             }
+        }
+    }
+}
+
+fn validate_skill_inputs(
+    inputs: &Value,
+    schema: &rtfs::ast::TypeExpr,
+    cap_id: &str,
+) -> RuntimeResult<()> {
+    if let Some(missing) = missing_required_inputs(inputs, schema) {
+        if !missing.is_empty() {
+            return Err(RuntimeError::Generic(format!(
+                "Missing required inputs for {}: {}",
+                cap_id,
+                missing.join(", ")
+            )));
+        }
+    }
+
+    let validator = TypeValidator::default();
+    let config = TypeCheckingConfig::default();
+    let context = VerificationContext::capability_boundary(cap_id);
+    validator
+        .validate_with_config(inputs, schema, &config, &context)
+        .map_err(|e| RuntimeError::Generic(format!("Input validation failed for {}: {}", cap_id, e)))?;
+    Ok(())
+}
+
+fn missing_required_inputs(
+    inputs: &Value,
+    schema: &rtfs::ast::TypeExpr,
+) -> Option<Vec<String>> {
+    let schema_json = schema.to_json().ok()?;
+    let required = schema_json
+        .get("required")
+        .and_then(|v| v.as_array())?
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        return Some(vec![]);
+    }
+    let inputs_json = rtfs_value_to_json(inputs).ok()?;
+    let present = inputs_json
+        .as_object()
+        .map(|m| m.keys().cloned().collect::<std::collections::HashSet<_>>())
+        .unwrap_or_default();
+    let missing = required
+        .into_iter()
+        .filter(|k| !present.contains(k))
+        .collect::<Vec<_>>();
+    Some(missing)
+}
+
+fn log_skill_params(capability_id: &str, params: &HashMap<String, serde_json::Value>) {
+    let map: serde_json::Map<String, serde_json::Value> =
+        params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let json = serde_json::Value::Object(map);
+    let redacted = redact_json_for_logs(&json);
+    info!("Skill call: {} params={}", capability_id, redacted);
+}
+
+fn log_skill_op(capability_id: &str, skill_id: &str, op_name: &str) {
+    info!(
+        "Skill operation: skill_id={}, op={}, capability={}",
+        skill_id, op_name, capability_id
+    );
+}
+
+fn ensure_json_body_for_write(params: &mut HashMap<String, serde_json::Value>) {
+    let Some(method) = params.get("method").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let method = method.to_ascii_uppercase();
+    let is_write = matches!(method.as_str(), "POST" | "PUT" | "PATCH");
+    if !is_write {
+        return;
+    }
+    if !params.contains_key("body") {
+        params.insert("body".to_string(), serde_json::Value::String("{}".to_string()));
+    }
+    let body_is_json = params
+        .get("body")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            let trimmed = s.trim();
+            trimmed.starts_with('{') || trimmed.starts_with('[')
+        })
+        .unwrap_or(false);
+    if !body_is_json {
+        return;
+    }
+    let headers = params
+        .entry("headers".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if let serde_json::Value::Object(map) = headers {
+        let has_ct = map.keys().any(|k| k.eq_ignore_ascii_case("content-type"));
+        if !has_ct {
+            map.insert(
+                "Content-Type".to_string(),
+                serde_json::Value::String("application/json".to_string()),
+            );
         }
     }
 }

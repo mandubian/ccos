@@ -15,10 +15,13 @@ use chrono::Utc;
 use clap::Parser;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
+
+use ccos::utils::log_redaction::{redact_json_for_logs, redact_text_for_logs};
 
 /// Agent CLI arguments
 #[derive(Parser, Debug)]
@@ -44,6 +47,14 @@ struct Args {
     /// Session ID assigned by the Gateway
     #[arg(long, env = "CCOS_SESSION_ID")]
     session_id: String,
+
+    /// Agent ID (from config or env)
+    #[arg(long, env = "CCOS_AGENT_ID")]
+    agent_id: Option<String>,
+
+    /// Agent display name (optional)
+    #[arg(long, env = "CCOS_AGENT_NAME")]
+    agent_name: Option<String>,
 
     /// Polling interval in milliseconds
     #[arg(long, default_value = "1000")]
@@ -72,6 +83,10 @@ struct Args {
     /// LLM Base URL
     #[arg(long, env = "CCOS_LLM_BASE_URL")]
     llm_base_url: Option<String>,
+
+    /// Allowlist of agent context keys to share with LLM (comma-separated)
+    #[arg(long, env = "CCOS_LLM_CONTEXT_ALLOWLIST", value_delimiter = ',')]
+    llm_context_allowlist: Option<Vec<String>>,
 }
 
 impl Args {
@@ -82,6 +97,16 @@ impl Args {
             match load_agent_config(config_path) {
                 Ok(config) => {
                     info!("Loaded agent configuration from: {}", config_path);
+
+                    if self.agent_id.is_none() {
+                        self.agent_id = Some(config.agent_id.clone());
+                    }
+                    if self.agent_name.is_none() {
+                        self.agent_name = config.agent_name.clone();
+                    }
+                    if self.llm_context_allowlist.is_none() {
+                        self.llm_context_allowlist = config.llm_context_allowlist.clone();
+                    }
 
                     // Apply config values only if CLI args are at defaults
                     // Gateway URL - could be derived from network config if needed
@@ -242,7 +267,7 @@ struct ExecuteRequest {
 }
 
 /// Execute response
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ExecuteResponse {
     success: bool,
     result: Option<serde_json::Value>,
@@ -257,6 +282,8 @@ struct CapabilityInfo {
     name: String,
     description: String,
     version: String,
+    #[serde(default)]
+    input_schema: Option<serde_json::Value>,
 }
 
 /// Capabilities response
@@ -272,6 +299,14 @@ struct AgentRuntime {
     message_history: Vec<ChatEvent>,
     llm_client: Option<AgentLlmClient>,
     capabilities: Vec<String>,
+    last_loaded_skill_id: Option<String>,
+    loaded_skill_urls: HashSet<String>,
+    loaded_skill_ids: HashSet<String>,
+    loaded_skill_capabilities: HashSet<String>,
+    capability_required: HashMap<String, Vec<String>>,
+    agent_id: Option<String>,
+    agent_name: Option<String>,
+    llm_context_allowlist: Vec<String>,
 }
 
 impl AgentRuntime {
@@ -280,6 +315,19 @@ impl AgentRuntime {
             .timeout(Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client");
+
+        let agent_id = args.agent_id.clone();
+        let agent_name = args.agent_name.clone();
+        let llm_context_allowlist = args
+            .llm_context_allowlist
+            .clone()
+            .unwrap_or_else(|| {
+                vec![
+                    "agent_id".to_string(),
+                    "agent_name".to_string(),
+                    "llm_model".to_string(),
+                ]
+            });
 
         // Initialize LLM client if enabled
         let llm_client = if args.enable_llm {
@@ -324,6 +372,14 @@ impl AgentRuntime {
             message_history: Vec::new(),
             llm_client,
             capabilities: Vec::new(),
+            last_loaded_skill_id: None,
+            loaded_skill_urls: HashSet::new(),
+            loaded_skill_ids: HashSet::new(),
+            loaded_skill_capabilities: HashSet::new(),
+            capability_required: HashMap::new(),
+            agent_id,
+            agent_name,
+            llm_context_allowlist,
         }
     }
 
@@ -391,10 +447,34 @@ impl AgentRuntime {
 
         if response.status().is_success() {
             let caps_resp: CapabilitiesListResponse = response.json().await?;
+            self.capability_required.clear();
             self.capabilities = caps_resp
                 .capabilities
                 .into_iter()
-                .map(|c| format!("- {} ({}) - {}", c.id, c.version, c.description))
+                .filter(|c| {
+                    c.id != "ccos.chat.egress.prepare_outbound"
+                        && !c.id.starts_with("ccos.chat.transform.")
+                })
+                .map(|c| {
+                    if let Some(schema) = &c.input_schema {
+                        if let Some(required) = Self::extract_required_fields(schema) {
+                            if !required.is_empty() {
+                                self.capability_required.insert(c.id.clone(), required);
+                            }
+                        }
+                    }
+                    if let Some(schema) = &c.input_schema {
+                        format!(
+                            "- {} ({}) - {} | inputs: {}",
+                            c.id,
+                            c.version,
+                            c.description,
+                            schema
+                        )
+                    } else {
+                        format!("- {} ({}) - {}", c.id, c.version, c.description)
+                    }
+                })
                 .collect();
             info!(
                 "Fetched {} capabilities from Gateway",
@@ -437,11 +517,12 @@ impl AgentRuntime {
 
     /// Process a single event
     async fn process_event(&mut self, event: ChatEvent) -> anyhow::Result<()> {
+        let redacted_preview = redact_text_for_logs(&event.content);
         info!(
             "[Agent] Received event from {} (ID: {}): {}",
             event.sender,
             event.id,
-            &event.content[..50.min(event.content.len())]
+            &redacted_preview[..50.min(redacted_preview.len())]
         );
 
         // Store in history
@@ -498,7 +579,10 @@ impl AgentRuntime {
     /// Process message using LLM
     async fn process_with_llm(&mut self, event: ChatEvent) -> anyhow::Result<()> {
         if let Some(llm) = &self.llm_client {
-            info!("Processing message with LLM: {}", event.content);
+            info!(
+                "Processing message with LLM: {}",
+                redact_text_for_logs(&event.content)
+            );
 
             // Build context from message history
             let context: Vec<String> = self
@@ -507,17 +591,28 @@ impl AgentRuntime {
                 .map(|e| format!("{}: {}", e.sender, e.content))
                 .collect();
 
+            let agent_context = self.build_llm_context();
+
             // Process with LLM
             match llm
-                .process_message(&event.content, &context, &self.capabilities)
+                .process_message(&event.content, &context, &self.capabilities, &agent_context)
                 .await
             {
                 Ok(plan) => {
                     info!("LLM understanding: {}", plan.understanding);
                     info!("Planned {} actions", plan.actions.len());
 
+                    // Hybrid: send immediate response first (what we're about to do).
+                    if !plan.response.is_empty() {
+                        self.send_response(&event, &plan.response).await?;
+                    }
+
                     // Collect follow-up events (e.g., continue after skill load)
                     let mut follow_up_events: Vec<ChatEvent> = Vec::new();
+                    let mut failed_actions: Vec<String> = Vec::new();
+                    let mut completed_actions: Vec<String> = Vec::new();
+                    let mut missing_inputs: Vec<(String, Vec<String>)> = Vec::new();
+                    let mut skill_load_failures: Vec<String> = Vec::new();
 
                     // Execute planned actions through Gateway
                     for (idx, action) in plan.actions.iter().enumerate() {
@@ -529,8 +624,54 @@ impl AgentRuntime {
                         );
                         info!("Reasoning: {}", action.reasoning);
 
+                        if action.capability_id == "ccos.skill.load" {
+                            let existing_url = action
+                                .inputs
+                                .get("url")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            if let Some(url) = existing_url {
+                                if self.loaded_skill_urls.contains(&url) {
+                                    completed_actions.push(format!(
+                                        "ccos.skill.load (skipped, already loaded url: {})",
+                                        url
+                                    ));
+
+                                    let known_skill_id = self
+                                        .last_loaded_skill_id
+                                        .clone()
+                                        .unwrap_or_else(|| "unknown".to_string());
+                                    let caps = if self.loaded_skill_capabilities.is_empty() {
+                                        "<none>".to_string()
+                                    } else {
+                                        let mut caps: Vec<String> = self
+                                            .loaded_skill_capabilities
+                                            .iter()
+                                            .cloned()
+                                            .collect();
+                                        caps.sort();
+                                        caps.join(", ")
+                                    };
+                                    let follow_up_content = format!(
+                                        "The skill is already loaded. Skill ID: {}\n\nRegistered capabilities:\n{}\n\nPlease continue with onboarding using ccos.skill.execute for the steps required.",
+                                        known_skill_id, caps
+                                    );
+                                    let follow_up_event = ChatEvent {
+                                        id: format!("followup-{}", event.id),
+                                        channel_id: event.channel_id.clone(),
+                                        content: follow_up_content,
+                                        sender: "system".to_string(),
+                                        timestamp: Utc::now().to_rfc3339(),
+                                    };
+                                    follow_up_events.push(follow_up_event);
+                                    continue;
+                                }
+                            }
+                        }
+
                         // Add session/run/step IDs to inputs
                         let mut inputs = action.inputs.clone();
+                        let mut skip_action = false;
                         if let Some(obj) = inputs.as_object_mut() {
                             obj.insert(
                                 "session_id".to_string(),
@@ -546,26 +687,216 @@ impl AgentRuntime {
                             );
 
                             // AUTO-FIX: Mark all LLM-planned outbound messages as public for egress
-                            if action.capability_id == "ccos.chat.egress.send_outbound" {
+                            if action.capability_id == "ccos.chat.egress.send_outbound"
+                                || action.capability_id == "ccos.chat.egress.prepare_outbound"
+                            {
                                 obj.insert(
                                     "content_class".to_string(),
                                     serde_json::json!("public"),
                                 );
                             }
+
+                            if action.capability_id == "ccos.skill.execute" {
+                                if let Some(last_skill_id) = &self.last_loaded_skill_id {
+                                    let skill_value = obj.get("skill").and_then(|v| v.as_str());
+                                    if skill_value.is_none() {
+                                        obj.insert(
+                                            "skill".to_string(),
+                                            serde_json::json!(last_skill_id),
+                                        );
+                                    }
+                                }
+
+                                let operation = obj.get("operation").and_then(|v| v.as_str());
+                                let skill = obj.get("skill").and_then(|v| v.as_str());
+                                let cap_id = match (operation, skill) {
+                                    (Some(op), _) if op.contains('.') => Some(op.to_string()),
+                                    (Some(op), Some(sk)) => Some(format!("{}.{}", sk, op)),
+                                    _ => None,
+                                };
+
+                                if let Some(cap_id) = cap_id {
+                                    if let Some(required) =
+                                        self.capability_required.get(&cap_id).cloned()
+                                    {
+                                        let params_value = obj
+                                            .entry("params".to_string())
+                                            .or_insert_with(|| serde_json::json!({}));
+                                        if let Some(pmap) = params_value.as_object_mut() {
+                                            for field in &required {
+                                                if !pmap.contains_key(field) {
+                                                    if let Some(value) =
+                                                        self.autofill_value_for_field(field)
+                                                    {
+                                                        pmap.insert(
+                                                            field.to_string(),
+                                                            serde_json::json!(value),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            let missing = required
+                                                .into_iter()
+                                                .filter(|k| !pmap.contains_key(k))
+                                                .collect::<Vec<_>>();
+                                            if !missing.is_empty() {
+                                                missing_inputs.push((cap_id.clone(), missing));
+                                                failed_actions.push(format!(
+                                                    "{}: missing required inputs",
+                                                    cap_id
+                                                ));
+                                                skip_action = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if skip_action {
+                            continue;
                         }
 
                         match self.execute_capability(&action.capability_id, inputs).await {
                             Ok(response) => {
-                                info!("Action {} succeeded: {:?}", action.capability_id, response);
+                                if !response.success {
+                                    let error_msg = response
+                                        .error
+                                        .clone()
+                                        .or_else(|| {
+                                            response.result.as_ref().and_then(|r| {
+                                                r.get("error")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string())
+                                            })
+                                        })
+                                        .unwrap_or_else(|| "Unknown error".to_string());
+                                    if let Some((cap_id, missing)) =
+                                        Self::parse_missing_inputs(&error_msg)
+                                    {
+                                        missing_inputs.push((cap_id, missing));
+                                    } else {
+                                        let missing = Self::extract_missing_fields(&error_msg);
+                                        if !missing.is_empty() {
+                                            missing_inputs
+                                                .push((action.capability_id.clone(), missing));
+                                        }
+                                    }
+                                    if action.capability_id == "ccos.skill.load" {
+                                        skill_load_failures.push(error_msg.clone());
+                                    }
+                                    warn!(
+                                        "Action {} failed: {}",
+                                        action.capability_id, error_msg
+                                    );
+                                    failed_actions.push(format!(
+                                        "{}: {}",
+                                        action.capability_id, error_msg
+                                    ));
+                                    continue;
+                                }
+                                let redacted_response = serde_json::to_value(&response)
+                                    .ok()
+                                    .map(|value| redact_json_for_logs(&value).to_string())
+                                    .unwrap_or_else(|| "<non-serializable response>".to_string());
+                                info!(
+                                    "Action {} succeeded: {}",
+                                    action.capability_id, redacted_response
+                                );
+                                let mut action_summary = action.capability_id.clone();
+                                if action.capability_id == "ccos.skill.load" && response.success {
+                                    if let Some(result) = &response.result {
+                                        if let Some(skill_id) = result.get("skill_id") {
+                                            action_summary =
+                                                format!("ccos.skill.load (skill_id: {})", skill_id);
+                                        }
+                                    }
+                                }
+                                if action.capability_id == "ccos.skill.execute" && response.success {
+                                    if let Some(result) = &response.result {
+                                        if let Some(body) = result.get("body").and_then(|v| v.as_str())
+                                        {
+                                            if let Ok(json) =
+                                                serde_json::from_str::<serde_json::Value>(body)
+                                            {
+                                                if let Some(agent_id) =
+                                                    json.get("agent_id").and_then(|v| v.as_str())
+                                                {
+                                                    action_summary = format!(
+                                                        "ccos.skill.execute (registered agent_id: {})",
+                                                        agent_id
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                completed_actions.push(action_summary);
 
                                 // Check if this was a skill load and we need to continue onboarding
                                 if action.capability_id == "ccos.skill.load" && response.success {
                                     if let Some(result) = &response.result {
-                                        if let Some(skill_def) = result.get("skill_definition") {
+                                        let loaded_skill_id = result
+                                            .get("skill_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("unknown");
+                                        let loaded_caps = result
+                                            .get("registered_capabilities")
+                                            .or_else(|| result.get("capabilities"))
+                                            .and_then(|v| v.as_array())
+                                            .map(|caps| {
+                                                caps.iter()
+                                                    .filter_map(|c| c.as_str())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            })
+                                            .unwrap_or_else(|| "<none>".to_string());
+                                        let requires_approval = result
+                                            .get("requires_approval")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        info!(
+                                            "Skill loaded: id={}, requires_approval={}, capabilities=[{}]",
+                                            loaded_skill_id, requires_approval, loaded_caps
+                                        );
+                                        if let Some(skill_id) = result.get("skill_id").and_then(|v| v.as_str()) {
+                                            self.last_loaded_skill_id = Some(skill_id.to_string());
+                                            self.loaded_skill_ids.insert(skill_id.to_string());
+                                            if let Some(url) = result.get("url").and_then(|v| v.as_str()) {
+                                                self.loaded_skill_urls.insert(url.to_string());
+                                            }
+                                        }
+                                        if let Some(caps) = result
+                                            .get("registered_capabilities")
+                                            .or_else(|| result.get("capabilities"))
+                                            .and_then(|v| v.as_array())
+                                        {
+                                            for cap in caps.iter().filter_map(|c| c.as_str()) {
+                                                self.loaded_skill_capabilities.insert(cap.to_string());
+                                            }
+                                        }
+                                        let _ = self.fetch_capabilities().await;
+                                        if result.get("skill_definition").is_some() {
+                                            let skill_id = result
+                                                .get("skill_id")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            let cap_lines = result
+                                                .get("registered_capabilities")
+                                                .or_else(|| result.get("capabilities"))
+                                                .and_then(|v| v.as_array())
+                                                .map(|caps| {
+                                                    caps.iter()
+                                                        .filter_map(|c| c.as_str())
+                                                        .map(|c| format!("- {}", c))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n")
+                                                })
+                                                .unwrap_or_else(|| "- <none>".to_string());
                                             // Create a follow-up to continue onboarding
                                             let follow_up_content = format!(
-                                                "The skill has been loaded. Here is the skill definition:\n{}\n\nPlease continue with the onboarding process to make this skill operational. Execute all necessary onboarding steps.",
-                                                skill_def
+                                                "The skill has been loaded. Skill ID: {}\n\nRegistered capabilities:\n{}\n\nPlease continue with the onboarding process to make this skill operational. Use ccos.skill.execute with this skill_id and the capability names above.",
+                                                skill_id, cap_lines
                                             );
                                             let follow_up_event = ChatEvent {
                                                 id: format!("followup-{}", event.id),
@@ -583,15 +914,50 @@ impl AgentRuntime {
                             }
                             Err(e) => {
                                 warn!("Action {} failed: {}", action.capability_id, e);
+                                failed_actions.push(format!("{}: {}", action.capability_id, e));
                             }
                         }
                     }
 
-                    // Send response back to user if available
-                    if !plan.response.is_empty() {
-                        info!("Agent response: {}", plan.response);
+                    // Send follow-up summary (what actually happened + next steps).
+                    if !completed_actions.is_empty() || !failed_actions.is_empty() {
+                        let mut summary = String::new();
+                        if !completed_actions.is_empty() {
+                            summary.push_str("Completed:\n");
+                            for item in &completed_actions {
+                                summary.push_str(&format!("- {}\n", item));
+                            }
+                        }
+                        if !failed_actions.is_empty() {
+                            if !summary.is_empty() {
+                                summary.push_str("\n");
+                            }
+                            summary.push_str("Failed:\n");
+                            for failure in &failed_actions {
+                                summary.push_str(&format!("- {}\n", failure));
+                            }
+                        }
+
+                        summary.push_str("\nNext:\n");
+                        if !skill_load_failures.is_empty() {
+                            summary.push_str("- The skill failed to load. Please provide a valid skill URL (Markdown/YAML/JSON), or the correct skill id/registry entry.\n");
+                        }
+                        if !missing_inputs.is_empty() {
+                            for (cap_id, missing) in &missing_inputs {
+                                summary.push_str(&format!(
+                                    "- Please provide {} for {}.\n",
+                                    missing.join(", "),
+                                    cap_id
+                                ));
+                            }
+                        } else if skill_load_failures.is_empty() {
+                            summary.push_str("- Tell me if you want me to continue onboarding.\n");
+                            summary.push_str("- If human verification is required, share your X username; after posting the verification tweet, share its URL.\n");
+                        }
+
+                        info!("Agent summary: {}", summary);
                         let mut inputs = serde_json::Map::new();
-                        inputs.insert("content".to_string(), serde_json::json!(plan.response));
+                        inputs.insert("content".to_string(), serde_json::json!(summary));
                         inputs.insert(
                             "channel_id".to_string(),
                             serde_json::json!(event.channel_id),
@@ -681,6 +1047,90 @@ impl AgentRuntime {
             .await?;
 
         Ok(())
+    }
+
+    fn parse_missing_inputs(error_msg: &str) -> Option<(String, Vec<String>)> {
+        let prefix = "Missing required inputs for ";
+        let start = error_msg.find(prefix)?;
+        let remainder = &error_msg[start + prefix.len()..];
+        let (cap_id, rest) = remainder.split_once(':')?;
+        let missing = rest
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return None;
+        }
+        Some((cap_id.trim().to_string(), missing))
+    }
+
+    fn extract_missing_fields(error_msg: &str) -> Vec<String> {
+        let mut fields = Vec::new();
+        let mut rest = error_msg;
+        let needle = "missing field `";
+        while let Some(start) = rest.find(needle) {
+            let after = &rest[start + needle.len()..];
+            if let Some(end) = after.find('`') {
+                let field = after[..end].trim();
+                if !field.is_empty() && !fields.contains(&field.to_string()) {
+                    fields.push(field.to_string());
+                }
+                rest = &after[end + 1..];
+            } else {
+                break;
+            }
+        }
+        fields
+    }
+
+    fn extract_required_fields(schema: &serde_json::Value) -> Option<Vec<String>> {
+        let required = schema
+            .get("required")
+            .and_then(|v| v.as_array())?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+        Some(required)
+    }
+
+    fn build_llm_context(&self) -> String {
+        let mut lines = Vec::new();
+        for key in &self.llm_context_allowlist {
+            if let Some(val) = self.context_value(key) {
+                lines.push(format!("{}: {}", key, val));
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn context_value(&self, key: &str) -> Option<String> {
+        match key {
+            "agent_id" => self.agent_id.clone(),
+            "agent_name" => self.agent_name.clone(),
+            "llm_model" => self.args.llm_model.clone(),
+            _ => None,
+        }
+    }
+
+    fn autofill_value_for_field(&self, field: &str) -> Option<String> {
+        match field {
+            "name" | "agent_name" => self
+                .allowed_context_value("agent_name")
+                .or_else(|| self.allowed_context_value("agent_id")),
+            "model" | "llm_model" => self.allowed_context_value("llm_model"),
+            "agent_id" => self.allowed_context_value("agent_id"),
+            _ => None,
+        }
+    }
+
+    fn allowed_context_value(&self, key: &str) -> Option<String> {
+        if self.llm_context_allowlist.iter().any(|k| k == key) {
+            self.context_value(key)
+        } else {
+            None
+        }
     }
 
     /// Execute a capability through the Gateway

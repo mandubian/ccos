@@ -20,6 +20,12 @@ pub struct AgentConfig {
     pub version: String,
     /// Unique agent identifier
     pub agent_id: String,
+    /// Optional display name for the agent
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    /// Optional allowlist of agent context fields to share with the LLM
+    #[serde(default)]
+    pub llm_context_allowlist: Option<Vec<String>>,
     /// Agent profile type
     pub profile: String,
     /// Orchestrator configuration
@@ -80,6 +86,8 @@ impl Default for AgentConfig {
         Self {
             version: "0.1".to_string(),
             agent_id: "agent.default".to_string(),
+            agent_name: None,
+            llm_context_allowlist: None,
             profile: "local".to_string(),
             orchestrator: OrchestratorConfig::default(),
             network: NetworkConfig::default(),

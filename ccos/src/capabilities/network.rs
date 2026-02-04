@@ -144,6 +144,7 @@ pub async fn register_network_capabilities(
                 let mut request = client.request(method_enum, &url);
 
                 // Add headers if provided
+                let mut has_content_type = false;
                 if let Some(Value::Map(hdrs)) = headers_map {
                     for (key, value) in hdrs.iter() {
                         let key_str = match key {
@@ -151,6 +152,9 @@ pub async fn register_network_capabilities(
                             MapKey::Keyword(k) => k.0.clone(),
                             MapKey::Integer(i) => i.to_string(),
                         };
+                        if key_str.eq_ignore_ascii_case("content-type") {
+                            has_content_type = true;
+                        }
                         if let Value::String(val_str) = value {
                             request = request.header(key_str, val_str);
                         }
@@ -159,6 +163,11 @@ pub async fn register_network_capabilities(
 
                 // Add body if provided
                 if let Some(body_str) = body {
+                    let trimmed = body_str.trim();
+                    let looks_json = trimmed.starts_with('{') || trimmed.starts_with('[');
+                    if looks_json && !has_content_type {
+                        request = request.header("Content-Type", "application/json");
+                    }
                     request = request.body(body_str);
                 }
 

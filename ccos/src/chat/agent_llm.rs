@@ -55,14 +55,15 @@ impl AgentLlmClient {
         message: &str,
         context: &[String],
         capabilities: &[String],
+        agent_context: &str,
     ) -> anyhow::Result<AgentPlan> {
         match self.config.provider.as_str() {
             "openai" | "openrouter" | "google" | "gemini" => {
-                self.process_with_openai(message, context, capabilities)
+                self.process_with_openai(message, context, capabilities, agent_context)
                     .await
             }
             "anthropic" => {
-                self.process_with_anthropic(message, context, capabilities)
+                self.process_with_anthropic(message, context, capabilities, agent_context)
                     .await
             }
             _ => {
@@ -82,6 +83,7 @@ impl AgentLlmClient {
         message: &str,
         _context: &[String], // context handling to be added
         capabilities: &[String],
+        agent_context: &str,
     ) -> anyhow::Result<AgentPlan> {
         let base_url = self
             .config
@@ -104,6 +106,12 @@ impl AgentLlmClient {
             capabilities.join("\n")
         };
 
+        let context_block = if agent_context.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\nAgent context (safe metadata):\n{}\n", agent_context)
+        };
+
         let system_prompt = format!(
             r#"You are a CCOS agent. Your job is to:
 1. Understand the user's message
@@ -114,9 +122,12 @@ IMPORTANT: You receive the ACTUAL message content directly, not UUID pointers. T
 
 When working with skills:
 - Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions.
-- Once loaded, the skill_definition will contain onboarding steps and available operations.
-- Execute each onboarding step using ccos.skill.execute with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
-- PLAN AND EXECUTE ALL onboarding steps until the skill is fully operational.
+- Once loaded, the skill_definition will describe available operations and any setup requirements.
+- Use ccos.skill.execute for any required skill operation (onboarding or otherwise) with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
+- Plan and execute the steps required to fulfill the user's request using the available skill operations.
+- Do not guess or invent skill URLs. If the user did not provide a URL and none is available in context, ask the user for the correct skill URL.
+- Only use operations explicitly listed in Registered capabilities; do not invent operation names (e.g. "skill_definition"). If unsure, ask the user or check the registered capabilities list.
+{}
 
 You have access to these capabilities:
 {}
@@ -132,7 +143,8 @@ Respond in JSON format:
     }}
   ],
   "response": "natural language response to user"
-}}"#,
+            }}"#,
+            context_block,
             caps_list
         );
 
@@ -218,6 +230,7 @@ Respond in JSON format:
         message: &str,
         _context: &[String],
         capabilities: &[String],
+        agent_context: &str,
     ) -> anyhow::Result<AgentPlan> {
         let url = "https://api.anthropic.com/v1/messages";
 
@@ -225,6 +238,12 @@ Respond in JSON format:
             "- ccos.chat.egress.* - Send outbound messages\n- ccos.skill.* - Load and execute skills".to_string()
         } else {
             capabilities.join("\n")
+        };
+
+        let context_block = if agent_context.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\nAgent context (safe metadata):\n{}\n", agent_context)
         };
 
         let system_prompt = format!(
@@ -237,9 +256,12 @@ IMPORTANT: You receive the ACTUAL message content directly, not UUID pointers. T
 
 When working with skills:
 - Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions.
-- Once loaded, the skill_definition will contain onboarding steps and available operations.
-- Execute each onboarding step using ccos.skill.execute with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
-- PLAN AND EXECUTE ALL onboarding steps until the skill is fully operational.
+- Once loaded, the skill_definition will describe available operations and any setup requirements.
+- Use ccos.skill.execute for any required skill operation (onboarding or otherwise) with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
+- Plan and execute the steps required to fulfill the user's request using the available skill operations.
+- Do not guess or invent skill URLs. If the user did not provide a URL and none is available in context, ask the user for the correct skill URL.
+- Only use operations explicitly listed in Registered capabilities; do not invent operation names (e.g. "skill_definition"). If unsure, ask the user or check the registered capabilities list.
+{}
 
 You have access to these capabilities:
 {}
@@ -254,8 +276,9 @@ Respond in JSON format:
       "inputs": {{ "param": "value" }}
     }}
   ],
-  "response": "natural language response to user"
+            "response": "natural language response to user"
 }}"#,
+            context_block,
             caps_list
         );
 

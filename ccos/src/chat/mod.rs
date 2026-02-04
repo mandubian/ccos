@@ -957,7 +957,7 @@ pub async fn register_chat_capabilities(
             &*marketplace,
             "ccos.skill.load",
             "Load Skill",
-            "Load a skill definition from a URL and register its capabilities. Returns skill_id, status, and the skill_definition content. For local development skills, use http://localhost:8765/skill.md if not overridden.",
+            "Load a skill definition from a URL and register its capabilities. Returns skill_id, status, and the skill_definition content.",
             Arc::new(move |inputs: &Value| {
                 let inputs = inputs.clone();
                 let marketplace = Arc::clone(&marketplace_for_skill_load);
@@ -979,16 +979,32 @@ pub async fn register_chat_capabilities(
                             if response.status().is_success() {
                                 response.text().await.unwrap_or_default()
                             } else {
-                                format!("Error fetching skill: HTTP {}", response.status())
+                                return Err(RuntimeError::Generic(format!(
+                                    "ccos.skill.load: Error fetching skill: HTTP {}",
+                                    response.status()
+                                )));
                             }
                         }
-                        Err(e) => format!("Error fetching skill: {}", e),
+                        Err(e) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "ccos.skill.load: Error fetching skill: {}",
+                                e
+                            )))
+                        }
                     };
                     
                     // Parse the skill definition using the real parser
-                    let skill = parse_skill_markdown(&skill_content)
-                        .map_err(|e| RuntimeError::Generic(format!("Parse error: {}", e)))?;
+                    let skill = parse_skill_markdown(&skill_content).map_err(|e| {
+                        RuntimeError::Generic(format!("ccos.skill.load: Parse error: {}", e))
+                    })?;
                     let skill_id = skill.id.clone();
+
+                    if skill_id == "unnamed-skill" || skill.operations.is_empty() {
+                        return Err(RuntimeError::Generic(
+                            "ccos.skill.load: skill is missing an id or has no operations"
+                                .to_string(),
+                        ));
+                    }
                     
                     // Extract base URL (scheme + host + port) from the full URL
                     let base_url = extract_base_url(&url);
@@ -1011,6 +1027,7 @@ pub async fn register_chat_capabilities(
                                 &format!("{} endpoint for {}.{}: {}", op.method.as_deref().unwrap_or("POST"), skill_id, op.name, endpoint),
                                 &full_url,
                                 op.method.as_deref().unwrap_or("POST"),
+                                op.input_schema.clone(),
                             )?;
                             
                             if let Err(e) = marketplace.register_capability_manifest(manifest).await {
@@ -1039,6 +1056,10 @@ pub async fn register_chat_capabilities(
                             MapKey::String("registered_capabilities".to_string()),
                             Value::Vector(caps),
                         );
+                    } else {
+                        return Err(RuntimeError::Generic(
+                            "ccos.skill.load: skill registered no capabilities".to_string(),
+                        ));
                     }
                     
                     Ok(Value::Map(result_map))
@@ -1076,19 +1097,43 @@ pub async fn register_chat_capabilities(
                             .map(|s| s.to_string())
                             .ok_or_else(|| RuntimeError::Generic("Missing operation parameter".to_string()))?;
 
-                        // Extract parameters (everything except skill and operation)
+                        // Extract parameters (everything except control keys),
+                        // and flatten a nested "params" map when present.
                         let mut params_map = HashMap::new();
+                        let mut nested_params: Option<HashMap<MapKey, Value>> = None;
+
                         for (k, v) in map {
                             let key_str = match k {
                                 MapKey::String(s) => s.clone(),
                                 MapKey::Keyword(Keyword(s)) => s.clone(),
                                 _ => continue,
                             };
-                            if key_str != "skill" && key_str != "operation" {
-                                params_map.insert(k.clone(), v.clone());
+
+                            if key_str == "params" {
+                                if let Value::Map(inner) = v {
+                                    nested_params = Some(inner.clone());
+                                }
+                                continue;
+                            }
+
+                            if key_str == "skill"
+                                || key_str == "operation"
+                                || key_str == "session_id"
+                                || key_str == "run_id"
+                                || key_str == "step_id"
+                            {
+                                continue;
+                            }
+
+                            params_map.insert(k.clone(), v.clone());
+                        }
+
+                        if let Some(inner) = nested_params {
+                            for (k, v) in inner {
+                                params_map.insert(k, v);
                             }
                         }
-                        
+
                         Ok((skill, operation, Value::Map(params_map)))
                     } else {
                         Err(RuntimeError::Generic("Expected map inputs".to_string()))
@@ -1147,6 +1192,7 @@ fn create_http_capability_manifest(
     description: &str,
     endpoint_url: &str,
     method: &str,
+    input_schema: Option<rtfs::ast::TypeExpr>,
 ) -> RuntimeResult<CapabilityManifest> {
     use crate::capability_marketplace::types::HttpCapability;
     
@@ -1170,7 +1216,7 @@ fn create_http_capability_manifest(
         description: description.to_string(),
         provider: ProviderType::Http(http_cap),
         version: "0.1.0".to_string(),
-        input_schema: None,
+        input_schema,
         output_schema: None,
         attestation: None,
         provenance: None,
@@ -1510,4 +1556,3 @@ pub async fn approve_request(
 ) -> RuntimeResult<()> {
     queue.approve(approval_id, by, reason).await
 }
-
