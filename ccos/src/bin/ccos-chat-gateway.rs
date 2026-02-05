@@ -51,6 +51,18 @@ struct ServeArgs {
     #[arg(long, default_value = "chat-mode-v0")]
     policy_pack_version: String,
 
+    /// Comma-separated allowlist of outbound HTTP hosts for governed egress.
+    ///
+    /// If omitted, the gateway defaults to allowing only localhost/127.0.0.1.
+    #[arg(long, value_delimiter = ',')]
+    http_allow_hosts: Vec<String>,
+
+    /// Comma-separated allowlist of outbound HTTP ports for governed egress.
+    ///
+    /// If omitted, all ports are allowed (subject to host allowlist).
+    #[arg(long, value_delimiter = ',')]
+    http_allow_ports: Vec<u16>,
+
     #[arg(long, value_delimiter = ',')]
     allow_senders: Vec<String>,
 
@@ -123,6 +135,8 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
         quarantine_key_env: args.quarantine_key_env,
         policy_pack_version: args.policy_pack_version,
         connector,
+        http_allow_hosts: args.http_allow_hosts,
+        http_allow_ports: args.http_allow_ports,
     };
 
     ChatGateway::start(config)

@@ -78,7 +78,17 @@ async fn test_prepare_outbound_and_redacted_approval() {
     let storage = FileApprovalStorage::new(dir.path().join("approvals")).expect("storage");
     let queue = UnifiedApprovalQueue::new(Arc::new(storage));
 
-    let marketplace = Arc::new(marketplace); register_chat_capabilities(marketplace.clone(), quarantine, chain, Some(queue.clone()), None, None)
+    let resource_store = ccos::chat::new_shared_resource_store();
+    let marketplace = Arc::new(marketplace);
+    register_chat_capabilities(
+        marketplace.clone(),
+        quarantine,
+        chain,
+        Some(queue.clone()),
+        resource_store,
+        None,
+        None,
+    )
         .await
         .expect("register");
 
@@ -192,7 +202,17 @@ async fn test_verify_redaction_requires_approval() {
     let storage = FileApprovalStorage::new(dir.path().join("approvals")).expect("storage");
     let queue = UnifiedApprovalQueue::new(Arc::new(storage));
 
-    let marketplace = Arc::new(marketplace); register_chat_capabilities(marketplace.clone(), quarantine, chain, Some(queue.clone()), None, None)
+    let resource_store = ccos::chat::new_shared_resource_store();
+    let marketplace = Arc::new(marketplace);
+    register_chat_capabilities(
+        marketplace.clone(),
+        quarantine,
+        chain,
+        Some(queue.clone()),
+        resource_store,
+        None,
+        None,
+    )
         .await
         .expect("register");
 

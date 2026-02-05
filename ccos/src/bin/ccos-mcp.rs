@@ -3910,8 +3910,8 @@ fn register_ccos_tools(
         }),
     );
 
-    // ccos_fetch_url - Simple URL content fetcher for agents
-    // This is a convenience tool for simple URL fetching - uses reqwest directly
+    // ccos_fetch_url - Governed URL content fetcher for agents
+    // This MUST route through CCOS governed egress (ccos.network.http-fetch).
     server.register_tool(
         "ccos_fetch_url",
         "Fetch content from a URL. Use this to read remote files, API documentation, skill definitions, or any web content. Returns the raw text content. For JSON APIs, the response will be the JSON text which you can parse.",
@@ -3929,8 +3929,11 @@ fn register_ccos_tools(
             },
             "required": ["url"]
         }),
-        Box::new(move |params| {
-            Box::pin(async move {
+        Box::new({
+            let ccos = ccos.clone();
+            move |params| {
+                let ccos = ccos.clone();
+                Box::pin(async move {
                 let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 let headers = params.get("headers").and_then(|v| v.as_object());
                 
@@ -3941,60 +3944,70 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Use reqwest directly for simple URL fetching
-                let client = match reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build() {
-                        Ok(c) => c,
-                        Err(e) => return Ok(json!({
-                            "success": false,
-                            "error": format!("Failed to create HTTP client: {}", e)
-                        })),
-                    };
+                let marketplace = ccos.get_capability_marketplace();
+                let mut fetch_inputs: std::collections::HashMap<rtfs::ast::MapKey, rtfs::runtime::values::Value> =
+                    std::collections::HashMap::new();
+                fetch_inputs.insert(
+                    rtfs::ast::MapKey::String("url".to_string()),
+                    rtfs::runtime::values::Value::String(url.to_string()),
+                );
+                fetch_inputs.insert(
+                    rtfs::ast::MapKey::String("method".to_string()),
+                    rtfs::runtime::values::Value::String("GET".to_string()),
+                );
 
-                let mut request = client.get(url);
-                
-                // Add any custom headers
                 if let Some(hdrs) = headers {
-                    for (key, value) in hdrs {
-                        if let Some(val_str) = value.as_str() {
-                            request = request.header(key.as_str(), val_str);
+                    let mut hmap: std::collections::HashMap<rtfs::ast::MapKey, rtfs::runtime::values::Value> =
+                        std::collections::HashMap::new();
+                    for (k, v) in hdrs {
+                        if let Some(vs) = v.as_str() {
+                            hmap.insert(
+                                rtfs::ast::MapKey::String(k.to_string()),
+                                rtfs::runtime::values::Value::String(vs.to_string()),
+                            );
                         }
+                    }
+                    if !hmap.is_empty() {
+                        fetch_inputs.insert(
+                            rtfs::ast::MapKey::String("headers".to_string()),
+                            rtfs::runtime::values::Value::Map(hmap),
+                        );
                     }
                 }
 
-                match request.send().await {
-                    Ok(response) => {
-                        let status = response.status().as_u16();
-                        let content_type = response.headers()
-                            .get("content-type")
-                            .and_then(|v| v.to_str().ok())
+                let fetched = marketplace
+                    .execute_capability("ccos.network.http-fetch", &rtfs::runtime::values::Value::Map(fetch_inputs))
+                    .await;
+
+                match fetched {
+                    Ok(v) => {
+                        let json_v = ccos::utils::value_conversion::rtfs_value_to_json(&v)
+                            .unwrap_or_else(|_| json!({}));
+                        let status = json_v.get("status").and_then(|s| s.as_u64()).unwrap_or(0);
+                        let content_type = json_v
+                            .get("headers")
+                            .and_then(|h| h.get("content-type").or_else(|| h.get("Content-Type")))
+                            .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
-                        
-                        match response.text().await {
-                            Ok(body) => Ok(json!({
-                                "success": true,
-                                "url": url,
-                                "status": status,
-                                "content_type": content_type,
-                                "content": body,
-                                "hint": "The content field contains the raw text. For markdown files like skill.md, read the content to understand the API. For OpenAPI specs, the content is JSON you can parse."
-                            })),
-                            Err(e) => Ok(json!({
-                                "success": false,
-                                "url": url,
-                                "status": status,
-                                "error": format!("Failed to read response body: {}", e)
-                            }))
-                        }
+                        let content = json_v.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                        Ok(json!({
+                            "success": status < 400,
+                            "url": url,
+                            "status": status,
+                            "content_type": content_type,
+                            "content": content,
+                            "usage": json_v.get("usage").cloned(),
+                            "hint": "Fetched via governed egress (ccos.network.http-fetch). The content field contains the raw text."
+                        }))
                     }
                     Err(e) => Ok(json!({
                         "success": false,
                         "url": url,
                         "error": format!("HTTP request failed: {}", e)
-                    }))
+                    })),
                 }
             })
+            }
         }),
     );
 }

@@ -1,0 +1,62 @@
+id: moltbook-agent-skill
+name: Moltbook Agent Skill
+description: Manage your Moltbook agent and claim your human identity.
+version: 1.0.0
+capabilities:
+  - ccos.network.http-fetch
+operations:
+  - name: register-agent
+    description: Register a new agent in Moltbook
+    endpoint: https://api.moltbook.com/api/register-agent
+    method: POST
+    input_schema:
+      type: map
+      entries:
+        - key: name
+          value_type: string
+        - key: model
+          value_type: string
+  - name: human-claim
+    description: Claim a human identity on X
+    endpoint: https://api.moltbook.com/api/human-claim
+    method: POST
+    input_schema:
+      type: map
+      entries:
+        - key: human_x_username
+          value_type: string
+onboarding:
+  required: true
+  steps:
+    - id: register
+      type: api_call
+      operation: register-agent
+      params:
+        name: "CCOS-Agent-{{run_id}}"
+        model: "gpt-4o"
+      store:
+        - from: "agent_id"
+          to: "memory:moltbook.agent_id"
+        - from: "secret"
+          to: "secret:MOLTBOOK_SECRET"
+          requires_approval: true
+    - id: claim
+      type: human_action
+      action:
+        action_type: human_input
+        title: "Claim Moltbook Identity"
+        instructions: "Please enter your X username (e.g., @my_handle) to link your human identity to this agent."
+        required_response:
+          type: object
+          properties:
+            username:
+              type: string
+      store:
+        - from: "username"
+          to: "memory:moltbook.human_username"
+    - id: submit_claim
+      type: api_call
+      operation: human-claim
+      depends_on: ["claim"]
+      params:
+        human_x_username: "{{memory:moltbook.human_username}}"

@@ -68,84 +68,63 @@ pub struct LoadedSkillInfo {
     pub raw_content: String,
 }
 
-/// Load a skill from a URL
-pub async fn load_skill_from_url(url: &str) -> Result<LoadedSkillInfo, LoadError> {
-    // URL validation
-    let is_http = url.starts_with("http://") || url.starts_with("https://");
-    let is_file = url.starts_with("file://");
-
-    if !is_http && !is_file {
-        return Err(LoadError::InvalidUrl(url.to_string()));
-    }
-
-    // Fetch content
-    let content = fetch_url_content(url).await?;
-
+/// Load a skill from already-fetched content.
+///
+/// IMPORTANT: this loader does **not** perform HTTP fetches. Any remote content must be fetched
+/// through governed CCOS egress (e.g. `ccos.network.http-fetch`) by the caller.
+pub fn load_skill_from_content(source_url: &str, content: &str) -> Result<LoadedSkillInfo, LoadError> {
     // Detect format
-    let format = detect_format(url, &content);
+    let format = detect_format(source_url, content);
 
     // Parse based on format
     let skill = match format {
-        SkillFormat::Yaml => parse_skill_yaml(&content)?,
-        SkillFormat::Markdown => parse_skill_markdown(&content)?,
-        SkillFormat::Json => parse_skill_json(&content)?,
+        SkillFormat::Yaml => parse_skill_yaml(content)?,
+        SkillFormat::Markdown => parse_skill_markdown(content)?,
+        SkillFormat::Json => parse_skill_json(content)?,
         SkillFormat::Unknown => {
             // Try YAML first, then markdown
-            parse_skill_yaml(&content)
-                .or_else(|_| parse_skill_markdown(&content))
-                .map_err(|e| LoadError::Parse(e))?
+            parse_skill_yaml(content)
+                .or_else(|_| parse_skill_markdown(content))
+                .map_err(LoadError::Parse)?
         }
     };
 
     validate_skill(&skill)?;
-
     let requires_approval = skill.approval.required || !skill.secrets.is_empty();
 
     Ok(LoadedSkillInfo {
         capabilities_to_register: skill.capabilities.clone(),
         skill,
-        source_url: url.to_string(),
+        source_url: source_url.to_string(),
         format,
         requires_approval,
-        raw_content: content,
+        raw_content: content.to_string(),
     })
 }
 
-/// Fetch content from URL (HTTP or File)
-async fn fetch_url_content(url: &str) -> Result<String, LoadError> {
-    println!("DEBUG: [SkillLoader] Fetching content for URL: {}", url);
-    log::info!("[SkillLoader] Fetching content for URL: {}", url);
-    if url.starts_with("file://") {
-        let path = url.trim_start_matches("file://");
-        log::info!("[SkillLoader] reading file path: {}", path);
-        return std::fs::read_to_string(path)
-            .map_err(|e| LoadError::Network(format!("Failed to read file {}: {}", path, e)));
+/// Load a skill from a URL.
+///
+/// For safety, this only supports `file://` URLs. HTTP(S) fetching must be performed by the
+/// caller through governed egress. This prevents accidental direct network calls from library code.
+pub async fn load_skill_from_url(url: &str) -> Result<LoadedSkillInfo, LoadError> {
+    let is_http = url.starts_with("http://") || url.starts_with("https://");
+    let is_file = url.starts_with("file://");
+
+    if is_http {
+        return Err(LoadError::Network(
+            "HTTP(S) skill loading must be performed via governed egress (ccos.network.http-fetch)".to_string(),
+        ));
+    }
+    if !is_file {
+        return Err(LoadError::InvalidUrl(url.to_string()));
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| LoadError::Network(format!("Failed to create HTTP client: {}", e)))?;
+    let path = url.trim_start_matches("file://");
+    log::info!("[SkillLoader] reading file path: {}", path);
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::Network(format!("Failed to read file {}: {}", path, e)))?;
 
-    let response = client
-        .get(url)
-        .header("User-Agent", "CCOS-SkillLoader/1.0")
-        .send()
-        .await
-        .map_err(|e| LoadError::Network(format!("Request failed: {}", e)))?;
-
-    if !response.status().is_success() {
-        return Err(LoadError::Network(format!(
-            "HTTP {} for {}",
-            response.status(),
-            url
-        )));
-    }
-
-    response
-        .text()
-        .await
-        .map_err(|e| LoadError::Network(format!("Failed to read response: {}", e)))
+    load_skill_from_content(url, &content)
 }
 
 /// Detect skill format from URL extension and content

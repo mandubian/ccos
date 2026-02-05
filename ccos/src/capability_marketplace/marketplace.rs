@@ -2265,32 +2265,75 @@ impl CapabilityMarketplace {
             }
         };
 
+        // Governed egress boundary for ALL ProviderType::Http calls.
+        // Enforce gateway-configured host/port allowlists via CapabilityRegistry.
+        let mut headers_for_fetch = headers_owned.clone();
+        if let Some(token) = &http.auth_token {
+            // Only add Authorization if caller didn't already specify it.
+            if !headers_for_fetch
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("authorization"))
+            {
+                headers_for_fetch.insert("Authorization".to_string(), format!("Bearer {}", token));
+            }
+        }
+
+        let parsed = url::Url::parse(&url)
+            .map_err(|e| RuntimeError::NetworkError(format!("Invalid URL: {}", e)))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| RuntimeError::NetworkError("URL missing host".to_string()))?
+            .to_lowercase();
+        let port = parsed
+            .port_or_known_default()
+            .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
+
+        {
+            let reg = self.capability_registry.read().await;
+            if !reg.is_http_host_allowed(&host) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "http.capability".to_string(),
+                    capability: "http".to_string(),
+                    context: format!("Host '{}' not in HTTP allowlist", host),
+                });
+            }
+            if !reg.is_http_port_allowed(port) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "http.capability".to_string(),
+                    capability: "http".to_string(),
+                    context: format!("Port '{}' not in HTTP allowlist", port),
+                });
+            }
+        }
+
         let client = reqwest::Client::new();
         let method_enum =
             reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
         let mut req = client.request(method_enum, &url);
-        if let Some(token) = &http.auth_token {
-            req = req.bearer_auth(token);
-        }
-        for (k, v) in headers_owned.iter() {
+
+        let mut header_len: u64 = 0;
+        for (k, v) in headers_for_fetch.iter() {
+            header_len += (k.len() + v.len()) as u64;
             req = req.header(k, v);
         }
         if !body.is_empty() {
-            // Auto-detect JSON if needed
             if (body.starts_with('{') || body.starts_with('['))
-                && !headers_owned
+                && !headers_for_fetch
                     .keys()
                     .any(|k| k.eq_ignore_ascii_case("content-type"))
             {
                 req = req.header("Content-Type", "application/json");
+                header_len += ("Content-Type".len() + "application/json".len()) as u64;
             }
-            req = req.body(body);
+            req = req.body(body.clone());
         }
+
         let response = req
             .timeout(std::time::Duration::from_millis(http.timeout_ms))
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
+
         let status = response.status().as_u16() as i64;
         let response_headers = response.headers().clone();
         let resp_body = response.text().await.unwrap_or_default();
@@ -2301,9 +2344,18 @@ impl CapabilityMarketplace {
                 method, url, status, resp_body
             )));
         }
+
+        let request_url_len = url.len() as u64;
+        let request_body_len = body.len() as u64;
+        let network_egress_bytes = request_url_len + header_len + request_body_len;
+        let network_ingress_bytes = resp_body.len() as u64;
+
         let mut response_map = std::collections::HashMap::new();
         response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
-        response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
+        response_map.insert(
+            MapKey::String("body".to_string()),
+            Value::String(resp_body),
+        );
         let mut headers_map = std::collections::HashMap::new();
         for (key, value) in response_headers.iter() {
             headers_map.insert(
@@ -2315,6 +2367,17 @@ impl CapabilityMarketplace {
             MapKey::String("headers".to_string()),
             Value::Map(headers_map),
         );
+        let mut usage_map = std::collections::HashMap::new();
+        usage_map.insert(
+            MapKey::String("network_egress_bytes".to_string()),
+            Value::Integer(network_egress_bytes as i64),
+        );
+        usage_map.insert(
+            MapKey::String("network_ingress_bytes".to_string()),
+            Value::Integer(network_ingress_bytes as i64),
+        );
+        response_map.insert(MapKey::String("usage".to_string()), Value::Map(usage_map));
+
         Ok(Value::Map(response_map))
     }
 

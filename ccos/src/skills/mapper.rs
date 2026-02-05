@@ -262,10 +262,52 @@ impl SkillMapper {
         &mut self,
         url: &str,
     ) -> Result<crate::skills::LoadedSkillInfo, SkillError> {
-        // Load skill from URL
-        let mut loaded = crate::skills::load_skill_from_url(url)
-            .await
-            .map_err(|e| SkillError::Execution(format!("Failed to load skill: {}", e)))?;
+        // Load skill content through governed egress (no direct HTTP fetch in loader).
+        let mut loaded = if url.starts_with("http://") || url.starts_with("https://") {
+            let mut inputs = std::collections::HashMap::new();
+            inputs.insert(
+                rtfs::ast::MapKey::String("url".to_string()),
+                Value::String(url.to_string()),
+            );
+            inputs.insert(
+                rtfs::ast::MapKey::String("method".to_string()),
+                Value::String("GET".to_string()),
+            );
+            let fetched = self
+                .marketplace
+                .execute_capability("ccos.network.http-fetch", &Value::Map(inputs))
+                .await
+                .map_err(|e| SkillError::Execution(format!("HTTP fetch failed: {}", e)))?;
+            let Value::Map(map) = fetched else {
+                return Err(SkillError::Execution(
+                    "HTTP fetch returned non-map".to_string(),
+                ));
+            };
+            let status = map
+                .get(&rtfs::ast::MapKey::String("status".to_string()))
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some(*i),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let body = map
+                .get(&rtfs::ast::MapKey::String("body".to_string()))
+                .and_then(|v| v.as_string())
+                .unwrap_or("")
+                .to_string();
+            if status >= 400 {
+                return Err(SkillError::Execution(format!(
+                    "HTTP fetch failed with status {}",
+                    status
+                )));
+            }
+            crate::skills::loader::load_skill_from_content(url, &body)
+                .map_err(|e| SkillError::Execution(format!("Failed to parse skill: {}", e)))?
+        } else {
+            crate::skills::load_skill_from_url(url)
+                .await
+                .map_err(|e| SkillError::Execution(format!("Failed to load skill: {}", e)))?
+        };
 
         // Register the skill operations as capabilities
         let registered_cap_ids = self

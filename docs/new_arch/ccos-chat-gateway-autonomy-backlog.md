@@ -2,6 +2,39 @@
 
 **Purpose**: track remaining work to support an autonomous `ccos-agent` that can manage generic goals (including the Moltbook demo flow) while preserving the chat security contract.
 
+## P0 — Governed Instruction Resources + Egress Boundary (Must‑Have)
+
+**Why**: `skill.md` is only one example of an instruction artifact. The generic problem is: users provide goals plus *custom instructions/resources* (URLs, pasted prompts, docs), and the agent must reason freely **without ever doing direct HTTP**. All I/O must remain inside CCOS governance (proxy/allowlist, budgets, secret handling, causal chain).
+
+1. **Eliminate direct HTTP surfaces reachable by agents**
+   - Replace any “convenience fetch” paths that use direct `reqwest` (e.g. MCP `ccos_fetch_url`) with governed capability calls.
+   - Ensure `ccos.skill.load` (and any future loaders) do not fetch URLs directly; they must go through the governed network boundary.
+   - Status: ⏳ Not done (direct `reqwest` still present in multiple paths).
+   - Acceptance: there is exactly one approved egress path for agent-initiated network requests; everything else is blocked or routed through it.
+
+2. **Harden `ccos.network.http-fetch` as the single governed egress path**
+   - Route through GK-controlled proxy / allowlist enforcement (domain + port + method).
+   - Add network byte metering + budget integration (per-call + per-run counters).
+   - Record egress audit events to causal chain (request metadata + redacted headers, response status + byte counts).
+   - Status: ⏳ Not done (currently does direct `reqwest` with minimal policy).
+   - Acceptance: `http-fetch` enforces allowlists and budgets, and emits causal-chain records for every call.
+
+3. **Generic instruction resource ingestion + retrieval**
+   - Add a generic capability set (names TBD) for instruction resources:
+     - `ccos.resource.ingest` — ingest `{text | file:// | http(s)://}` into a governed store (provenance, content-type, hash, classification/quarantine label).
+     - `ccos.resource.get` — retrieve content by handle with policy-aware truncation/redaction.
+     - `ccos.resource.list` — list resources associated with a session/run.
+   - Resource ingestion from `http(s)://` must use the governed egress path (`ccos.network.http-fetch`).
+   - Persist resource events to causal chain and support rebuild on gateway startup (similar to runs).
+   - Status: ⏳ Not implemented.
+   - Acceptance: the agent can reliably “read the instructions” from a URL/file/text via CCOS, and resume runs with stable resource handles.
+
+4. **Untrusted-instructions framing + policy guardrails**
+   - Update agent prompting/contracts to treat all instruction resources as untrusted data, never as authority over CCOS policy.
+   - Ensure “instructions” can’t request direct egress, arbitrary tool installation, or secret exfiltration without approvals and policy pack checks.
+   - Status: ⏳ Planned.
+   - Acceptance: instruction injection does not bypass approvals/allowlists/secrets governance.
+
 ## P0 — Run Autonomy Core (Must‑Have)
 
 1. **Run object + lifecycle state machine**
@@ -38,7 +71,9 @@
    - Remaining: ⏳ token/cost/network metering; retries budget.
    - Acceptance: budgets never allow infinite runs.
 
-## P0 — Skill Loading & Execution Safety (Must‑Have)
+## P1 — Structured Skills (Optional) + Execution Safety
+
+**Note**: Skills remain useful as a *structured* format that can optionally register per-operation tools, but they are not the generic “instruction resource” abstraction. Keep skill parsing/registration as an optimization layer on top of generic resource ingestion.
 
 5. **Skill load contract validation (fail‑fast)**
    - Reject load results with missing `skill_id`, no operations, or no registered capabilities.

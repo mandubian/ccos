@@ -1,21 +1,36 @@
 //! CCOS Chat CLI Tool
 //!
-//! Interactive CLI to talk to CCOS Chat Gateway.
-//! It sends messages to the gateway's loopback connector and
-//! optionally polls an external status endpoint to see agent responses.
+//! Rich Interactive TUI to talk to CCOS Chat Gateway.
 
 use clap::Parser;
-use colored::*;
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
+    Frame, Terminal,
+};
 use reqwest::Client;
 use serde_json::json;
-use std::io::{self, Write};
-use tokio::time::{sleep, Duration};
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
 #[command(name = "ccos-chat")]
 struct Args {
-    #[arg(long, default_value = "http://localhost:8833")]
+    #[arg(long, default_value = "http://127.0.0.1:8833")]
     connector_url: String,
+
+    #[arg(long, default_value = "http://127.0.0.1:8822")]
+    gateway_url: String,
 
     /// Optional external status endpoint to poll for posts (e.g., http://localhost:8765)
     #[arg(long)]
@@ -27,53 +42,130 @@ struct Args {
     #[arg(long, default_value = "user1")]
     user_id: String,
 
-    #[arg(long, default_value = "chat-demo")]
+    #[arg(long, default_value = "moltbook-demo")]
     channel_id: String,
+}
+
+#[derive(Debug, Clone)]
+enum MessageSource {
+    User,
+    Agent,
+    System,
+    Direct,
+    Audit,
+}
+
+#[derive(Debug, Clone)]
+struct ChatMessage {
+    source: MessageSource,
+    sender: String,
+    content: String,
+    timestamp: chrono::DateTime<chrono::Local>,
+    metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+enum AppEvent {
+    Input(Event),
+    Message(ChatMessage),
+    Error(String),
+    Status(String),
+    Tick,
+    AuditUpdate(String, ChatMessage),
+}
+
+struct AppState {
+    messages: Vec<ChatMessage>,
+    input: String,
+    scroll: usize,
+    status: String,
+    last_tick: Instant,
+    should_quit: bool,
+    is_waiting: bool,
+    spinner_frame: usize,
+    seen_audit_events: HashSet<String>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            messages: vec![ChatMessage {
+                source: MessageSource::System,
+                sender: "System".to_string(),
+                content: "Welcome to CCOS Chat! Type your message below. @agent mention is added automatically if needed.".to_string(),
+                timestamp: chrono::Local::now(),
+                metadata: None,
+            }],
+            input: String::new(),
+            scroll: 0,
+            status: "Connecting...".to_string(),
+            last_tick: Instant::now(),
+            should_quit: false,
+            is_waiting: false,
+            spinner_frame: 0,
+            seen_audit_events: HashSet::new(),
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let client = Client::new();
 
-    println!("{}", "=========================================".blue());
-    println!(
-        "{}",
-        "       CCOS Interactive Chat Tool        ".blue().bold()
-    );
-    println!("{}", "=========================================".blue());
-    println!("Connector: {}", args.connector_url.yellow());
-    if let Some(ref status_url) = args.status_url {
-        println!("Status:    {}", status_url.yellow());
-    }
-    println!("Channel:   {}", args.channel_id.green());
-    println!("User:      {}", args.user_id.green());
-    println!(
-        "{}",
-        "Type '@agent <message>' to talk to the agent.".dimmed()
-    );
-    println!("{}", "Type 'exit' or 'quit' to stop.".dimmed());
-    println!("{}", "=========================================".blue());
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Setup app state and channels
+    let mut state = AppState::new();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    // Spawn event handlers
+    let tx_input = tx.clone();
+    tokio::spawn(async move {
+        let tick_rate = Duration::from_millis(100);
+        let mut last_tick = Instant::now();
+        loop {
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or(Duration::from_secs(0));
+            if event::poll(timeout).expect("failed to poll event") {
+                if let Ok(ev) = event::read() {
+                    let _ = tx_input.send(AppEvent::Input(ev));
+                }
+            }
+            if last_tick.elapsed() >= tick_rate {
+                if let Ok(_) = tx_input.send(AppEvent::Tick) {
+                    last_tick = Instant::now();
+                }
+            }
+        }
+    });
+
+    let client = Client::new();
 
     // Spawn external status poller (only if status_url is provided)
     if let Some(status_url) = args.status_url.clone() {
         let poller_client = client.clone();
-        let mut poller_last_post_id: Option<String> = None;
+        let tx_msg = tx.clone();
+        tokio::spawn(async move {
+            let mut poller_last_post_id: Option<String> = None;
 
-        // First, sync with existing posts
-        if let Ok(status) = fetch_status(&poller_client, &status_url).await {
-            if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
-                if let Some(last) = posts.last() {
-                    poller_last_post_id = last
-                        .get("id")
-                        .and_then(|id| id.as_str().map(|s| s.to_string()));
+            // First, sync with existing posts
+            if let Ok(status) = fetch_status(&poller_client, &status_url).await {
+                if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
+                    if let Some(last) = posts.last() {
+                        poller_last_post_id = last
+                            .get("id")
+                            .and_then(|id| id.as_str().map(|s| s.to_string()));
+                    }
                 }
             }
-        }
 
-        tokio::spawn(async move {
             loop {
-                sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
                 if let Ok(status) = fetch_status(&poller_client, &status_url).await {
                     if let Some(posts) = status.get("posts").and_then(|p| p.as_array()) {
                         let mut new_posts = Vec::new();
@@ -94,10 +186,6 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         for post in new_posts {
-                            let id = post
-                                .get("id")
-                                .and_then(|id| id.as_str())
-                                .unwrap_or_default();
                             let content = post
                                 .get("content")
                                 .and_then(|c| c.as_str())
@@ -106,15 +194,18 @@ async fn main() -> anyhow::Result<()> {
                                 .get("agent_id")
                                 .and_then(|a| a.as_str())
                                 .unwrap_or("agent");
+                            let id = post
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or_default();
 
-                            println!(
-                                "\n{} {}: {}",
-                                ">>>".green().bold(),
-                                agent_id.cyan(),
-                                content
-                            );
-                            print!("{} ", "You:".yellow().bold());
-                            io::stdout().flush().unwrap();
+                            let _ = tx_msg.send(AppEvent::Message(ChatMessage {
+                                source: MessageSource::Agent,
+                                sender: agent_id.to_string(),
+                                content: content.to_string(),
+                                timestamp: chrono::Local::now(),
+                                metadata: None,
+                            }));
 
                             poller_last_post_id = Some(id.to_string());
                         }
@@ -129,10 +220,11 @@ async fn main() -> anyhow::Result<()> {
     let direct_url = args.connector_url.clone();
     let direct_secret = args.secret.clone();
     let direct_channel = args.channel_id.clone();
+    let tx_direct = tx.clone();
 
     tokio::spawn(async move {
+        let mut first_check = true;
         loop {
-            sleep(Duration::from_secs(1)).await;
             match direct_client
                 .get(format!("{}/connector/loopback/outbound", direct_url))
                 .header("x-ccos-connector-secret", &direct_secret)
@@ -141,66 +233,392 @@ async fn main() -> anyhow::Result<()> {
                 .await
             {
                 Ok(resp) => {
+                    if first_check {
+                        let _ = tx_direct.send(AppEvent::Status("Connected".to_string()));
+                        first_check = false;
+                    }
                     if let Ok(messages) = resp.json::<Vec<OutboundRequest>>().await {
                         for msg in messages {
-                            println!(
-                                "\n{} {}: {}",
-                                ">>> [DIRECT]".magenta().bold(),
-                                "agent".cyan(),
-                                msg.content
+                            let _ = tx_direct.send(AppEvent::Message(ChatMessage {
+                                source: MessageSource::Direct,
+                                sender: "agent".to_string(),
+                                content: msg.content,
+                                timestamp: chrono::Local::now(),
+                                metadata: None,
+                            }));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx_direct.send(AppEvent::Status(format!("Offline: {}", e)));
+                    first_check = true;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    // Spawn audit log poller
+    let audit_client = client.clone();
+    let audit_url = args.gateway_url.clone();
+    let audit_session = format!("chat:{}:{}", args.channel_id, args.user_id);
+    let tx_audit = tx.clone();
+
+    tokio::spawn(async move {
+        loop {
+            match audit_client
+                .get(format!("{}/chat/audit", audit_url))
+                .query(&[("session_id", &audit_session), ("limit", &"50".to_string())])
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(audit) = resp.json::<ChatAuditResponse>().await {
+                        for event in audit.events {
+                            // Technical event to human mapping
+                            let (sender, content) = match event.event_type.as_str() {
+                                "capability.call" => (
+                                    "Action".to_string(),
+                                    format!(
+                                        "⚡ {}",
+                                        event
+                                            .function_name
+                                            .clone()
+                                            .unwrap_or("unknown".to_string())
+                                    ),
+                                ),
+                                "transform.output" => (
+                                    "Result".to_string(),
+                                    format!(
+                                        "✅ Success: {}",
+                                        event
+                                            .function_name
+                                            .clone()
+                                            .unwrap_or("unknown".to_string())
+                                    ),
+                                ),
+                                "run.transition" => (
+                                    "Status".to_string(),
+                                    format!("🔄 State: {}", event.event_type), // Simplified for now
+                                ),
+                                _ => continue,
+                            };
+
+                            // Generate a unique ID for the event to avoid duplicates
+                            // We use timestamp + event_type + function_name
+                            let event_id = format!(
+                                "{}-{}-{}",
+                                event.timestamp,
+                                event.event_type,
+                                event.function_name.as_deref().unwrap_or("none")
                             );
-                            print!("{} ", "You:".yellow().bold());
-                            io::stdout().flush().unwrap();
+
+                            let message = ChatMessage {
+                                source: MessageSource::Audit,
+                                sender,
+                                content,
+                                timestamp: chrono::Local::now(), // We could use event.timestamp but Local is easier for rendering consistency
+                                metadata: None,                  // We could pass full metadata here
+                            };
+
+                            let _ = tx_audit.send(AppEvent::AuditUpdate(event_id, message));
                         }
                     }
                 }
                 Err(_) => {}
             }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 
-    loop {
-        print!("{} ", "You:".yellow().bold());
-        io::stdout().flush()?;
+    // Main loop
+    while !state.should_quit {
+        terminal.draw(|f| render(f, &state))?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim();
+        if let Some(event) = rx.recv().await {
+            match event {
+                AppEvent::Input(ev) => {
+                    if let Event::Key(key) = ev {
+                        match key.code {
+                            KeyCode::Char(c) => {
+                                state.input.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                state.input.pop();
+                            }
+                            KeyCode::Enter => {
+                                if !state.input.trim().is_empty() {
+                                    let mut text = state.input.trim().to_string();
 
-        if input.is_empty() {
-            continue;
-        }
+                                    // Smart Mentions: Add @agent if no mention is present
+                                    if !text.starts_with('@') {
+                                        text = format!("@agent {}", text);
+                                    }
 
-        if input == "exit" || input == "quit" {
-            break;
-        }
+                                    let message = ChatMessage {
+                                        source: MessageSource::User,
+                                        sender: args.user_id.clone(),
+                                        content: text.clone(),
+                                        timestamp: chrono::Local::now(),
+                                        metadata: None,
+                                    };
+                                    state.messages.push(message);
+                                    state.is_waiting = true;
 
-        let payload = json!({
-            "channel_id": args.channel_id,
-            "sender_id": args.user_id,
-            "text": input,
-            "timestamp": chrono::Utc::now().to_rfc3339()
-        });
+                                    // Feedback to user
+                                    state.messages.push(ChatMessage {
+                                        source: MessageSource::System,
+                                        sender: "System".to_string(),
+                                        content: format!(
+                                            "Sending to gateway (Channel: {})...",
+                                            args.channel_id
+                                        ),
+                                        timestamp: chrono::Local::now(),
+                                        metadata: None,
+                                    });
 
-        match client
-            .post(format!("{}/connector/loopback/inbound", args.connector_url))
-            .header("x-ccos-connector-secret", &args.secret)
-            .json(&payload)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    println!("{} Error: {}", "!".red(), resp.status());
+                                    // Send to gateway
+                                    let payload = json!({
+                                        "channel_id": args.channel_id,
+                                        "sender_id": args.user_id,
+                                        "text": text,
+                                        "timestamp": chrono::Utc::now().to_rfc3339()
+                                    });
+
+                                    let client = client.clone();
+                                    let url = format!(
+                                        "{}/connector/loopback/inbound",
+                                        args.connector_url
+                                    );
+                                    let secret = args.secret.clone();
+                                    let tx_fb = tx.clone();
+
+                                    tokio::spawn(async move {
+                                        match client
+                                            .post(url)
+                                            .header("x-ccos-connector-secret", &secret)
+                                            .json(&payload)
+                                            .send()
+                                            .await
+                                        {
+                                            Ok(resp) => {
+                                                if resp.status().is_success() {
+                                                    if let Ok(body) =
+                                                        resp.json::<serde_json::Value>().await
+                                                    {
+                                                        if body
+                                                            .get("accepted")
+                                                            .and_then(|a| a.as_bool())
+                                                            .unwrap_or(false)
+                                                        {
+                                                            let _ = tx_fb.send(AppEvent::Status(
+                                                                "Message accepted".to_string(),
+                                                            ));
+                                                        } else {
+                                                            let err = body.get("error").and_then(|e| e.as_str()).unwrap_or("Gateway rejected message (check channel/sender allowlist or mentions)");
+                                                            let _ = tx_fb.send(AppEvent::Error(
+                                                                format!("Rejected: {}", err),
+                                                            ));
+                                                            let _ = tx_fb.send(AppEvent::Status(
+                                                                "Rejected".to_string(),
+                                                            ));
+                                                        }
+                                                    } else {
+                                                        let _ = tx_fb.send(AppEvent::Status(
+                                                            "Message sent".to_string(),
+                                                        ));
+                                                    }
+                                                } else {
+                                                    let _ = tx_fb.send(AppEvent::Error(format!(
+                                                        "Failed to send: HTTP {}",
+                                                        resp.status()
+                                                    )));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_fb.send(AppEvent::Error(format!(
+                                                    "Connection error: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
+
+                                    state.input.clear();
+                                    state.scroll = 0; // Auto-scroll to bottom
+                                }
+                            }
+                            KeyCode::Esc => {
+                                state.should_quit = true;
+                            }
+                            KeyCode::PageUp => {
+                                state.scroll += 5;
+                            }
+                            KeyCode::PageDown => {
+                                state.scroll = state.scroll.saturating_sub(5);
+                            }
+                            KeyCode::Up => {
+                                state.scroll += 1;
+                            }
+                            KeyCode::Down => {
+                                state.scroll = state.scroll.saturating_sub(1);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-            }
-            Err(e) => {
-                println!("{} Connection failed: {}", "!".red(), e);
+                AppEvent::Message(msg) => {
+                    if matches!(msg.source, MessageSource::Agent | MessageSource::Direct) {
+                        state.is_waiting = false;
+                    }
+                    state.messages.push(msg);
+                }
+                AppEvent::Error(err) => {
+                    state.is_waiting = false;
+                    state.messages.push(ChatMessage {
+                        source: MessageSource::System,
+                        sender: "Error".to_string(),
+                        content: err,
+                        timestamp: chrono::Local::now(),
+                        metadata: None,
+                    });
+                }
+                AppEvent::Status(s) => {
+                    state.status = s;
+                }
+                AppEvent::Tick => {
+                    state.last_tick = Instant::now();
+                    state.spinner_frame = state.spinner_frame.wrapping_add(1);
+                }
+                AppEvent::AuditUpdate(id, msg) => {
+                    if !state.seen_audit_events.contains(&id) {
+                        state.seen_audit_events.insert(id);
+                        state.messages.push(msg);
+                    }
+                }
             }
         }
     }
 
+    // Cleanup terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
+    terminal.show_cursor()?;
+
     Ok(())
+}
+
+fn render(f: &mut Frame, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(1),    // Messages
+            Constraint::Length(3), // Input
+        ])
+        .split(f.size());
+
+    // Header
+    let spinner = if state.is_waiting {
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        frames[state.spinner_frame % frames.len()]
+    } else {
+        ""
+    };
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " CCOS CHAT ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {} ", spinner), Style::default().fg(Color::Yellow)),
+        Span::raw("│ Status: "),
+        Span::styled(
+            &state.status,
+            Style::default().fg(if state.status == "Connected" {
+                Color::Green
+            } else {
+                Color::Yellow
+            }),
+        ),
+        Span::raw(" │ ESC: quit │ Arrows: scroll"),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(header, chunks[0]);
+
+    // Messages area
+    let message_area = chunks[1];
+    let wrap_width = message_area.width.saturating_sub(4) as usize;
+
+    // Build a Paragraph from all messages with manual wrapping for accurate height
+    let mut message_lines = Vec::new();
+    for m in &state.messages {
+        let color = match m.source {
+            MessageSource::User => Color::Yellow,
+            MessageSource::Agent => Color::Cyan,
+            MessageSource::System => Color::Red,
+            MessageSource::Direct => Color::Magenta,
+            MessageSource::Audit => Color::Blue,
+        };
+
+        let prefix = match m.source {
+            MessageSource::User => format!(" {} [{}]:", m.sender, m.timestamp.format("%H:%M:%S")),
+            MessageSource::Agent => format!(" {} [{}]:", m.sender, m.timestamp.format("%H:%M:%S")),
+            MessageSource::System => format!(" {} [SYST]:", m.sender),
+            MessageSource::Direct => format!(" {} [{}]:", m.sender, m.timestamp.format("%H:%M:%S")),
+            MessageSource::Audit => format!(" {} [AUDT]:", m.sender),
+        };
+
+        message_lines.push(Line::from(vec![Span::styled(
+            prefix,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )]));
+
+        for content_line in m.content.lines() {
+            for wrapped in textwrap::wrap(content_line, wrap_width) {
+                message_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::raw(wrapped.into_owned()),
+                ]));
+            }
+        }
+        message_lines.push(Line::from(""));
+    }
+
+    // Add one extra line of padding at the bottom to ensure the last message is fully visible
+    message_lines.push(Line::from(""));
+
+    let total_height = message_lines.len();
+    let container_height = message_area.height.saturating_sub(2) as usize;
+
+    // Auto-scroll logic: if scroll is 0, show newest at bottom.
+    // positive scroll means looking UP into history
+    let scroll_offset = total_height
+        .saturating_sub(container_height)
+        .saturating_sub(state.scroll);
+
+    let paragraph = Paragraph::new(message_lines)
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " Messages ({}/{}) ",
+            total_height, container_height
+        )))
+        .style(Style::default().fg(Color::White))
+        .scroll((scroll_offset as u16, 0));
+    f.render_widget(paragraph, message_area);
+
+    // Input
+    let input = Paragraph::new(state.input.as_str())
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Type your message "),
+        );
+    f.render_widget(input, chunks[2]);
+
+    f.set_cursor(chunks[2].x + state.input.len() as u16 + 1, chunks[2].y + 1);
 }
 
 async fn fetch_status(client: &Client, url: &str) -> anyhow::Result<serde_json::Value> {
@@ -212,4 +630,27 @@ async fn fetch_status(client: &Client, url: &str) -> anyhow::Result<serde_json::
 #[derive(Debug, serde::Deserialize)]
 struct OutboundRequest {
     content: String,
+    channel_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatAuditEntryResponse {
+    timestamp: u64,
+    event_type: String,
+    function_name: Option<String>,
+    #[allow(dead_code)]
+    session_id: Option<String>,
+    // #[allow(dead_code)]
+    // run_id: Option<String>,
+    // #[allow(dead_code)]
+    // step_id: Option<String>,
+    // #[allow(dead_code)]
+    // rule_id: Option<String>,
+    // #[allow(dead_code)]
+    // decision: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatAuditResponse {
+    events: Vec<ChatAuditEntryResponse>,
 }

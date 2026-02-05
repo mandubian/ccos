@@ -29,6 +29,7 @@ use crate::chat::{
     ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
     QuarantineStore, SessionRegistry, SpawnConfig, SpawnerFactory,
 };
+use crate::chat::{ResourceStore, SharedResourceStore};
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
@@ -46,6 +47,14 @@ pub struct ChatGatewayConfig {
     pub quarantine_key_env: String,
     pub policy_pack_version: String,
     pub connector: LoopbackConnectorConfig,
+    /// Optional outbound HTTP host allowlist for governed egress (ccos.network.http-fetch).
+    ///
+    /// If empty, the gateway defaults to allowing only localhost/127.0.0.1 for safety.
+    pub http_allow_hosts: Vec<String>,
+    /// Optional outbound HTTP port allowlist for governed egress (ccos.network.http-fetch).
+    ///
+    /// If empty, all ports are allowed (subject to host allowlist).
+    pub http_allow_ports: Vec<u16>,
 }
 
 #[derive(Clone)]
@@ -69,6 +78,8 @@ struct GatewayState {
     spawner: Arc<dyn AgentSpawner>,
     /// Run store for managing autonomous runs
     run_store: SharedRunStore,
+    /// Instruction resource store (URLs/text/docs) for restart-safe autonomy
+    resource_store: SharedResourceStore,
 }
 
 #[async_trait]
@@ -221,6 +232,17 @@ impl ChatGateway {
         )));
 
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        {
+            // Configure the governed HTTP egress boundary before any capability execution.
+            let allow_hosts = if config.http_allow_hosts.is_empty() {
+                vec!["localhost".to_string(), "127.0.0.1".to_string()]
+            } else {
+                config.http_allow_hosts.clone()
+            };
+            let mut guard = registry.write().await;
+            guard.set_http_allow_hosts(allow_hosts)?;
+            guard.set_http_allow_ports(config.http_allow_ports.clone())?;
+        }
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
         let connector = Arc::new(LoopbackWebhookConnector::new(
@@ -229,11 +251,32 @@ impl ChatGateway {
         ));
         let handle = connector.connect().await?;
 
+        // Rebuild stores from causal chain (restart-safe autonomy).
+        // These stores are also shared with chat capabilities (resource ingestion).
+        let run_store: SharedRunStore = Arc::new(Mutex::new(RunStore::new()));
+        let resource_store: SharedResourceStore = Arc::new(Mutex::new(ResourceStore::new()));
+        {
+            let guard = chain.lock().unwrap();
+            let actions = guard.get_all_actions();
+            if let Ok(mut store) = run_store.lock() {
+                *store = RunStore::rebuild_from_chain(&actions);
+            }
+            if let Ok(mut store) = resource_store.lock() {
+                *store = ResourceStore::rebuild_from_chain(&actions);
+            }
+        }
+
+        // Register minimal non-chat primitives needed by autonomy flows.
+        // We keep this intentionally small (no full marketplace bootstrap) to preserve
+        // the chat security contract while still enabling governed resource ingestion.
+        crate::capabilities::network::register_network_capabilities(&*marketplace).await?;
+
         register_chat_capabilities(
             marketplace.clone(),
             quarantine.clone(),
             chain.clone(),
             approvals.clone(),
+            resource_store.clone(),
             Some(connector.clone() as Arc<dyn ChatConnector>),
             Some(handle.clone()),
         )
@@ -242,14 +285,6 @@ impl ChatGateway {
         // Initialize session management
         let session_registry = SessionRegistry::new();
         let spawner = SpawnerFactory::create();
-
-        // Rebuild run store from causal chain
-        let run_store = {
-            let guard = chain.lock().unwrap();
-            let run_events = guard.get_all_actions();
-            Arc::new(Mutex::new(RunStore::rebuild_from_chain(&run_events)))
-        };
-        // guard is dropped here
 
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
@@ -263,6 +298,7 @@ impl ChatGateway {
             session_registry,
             spawner: spawner.into(),
             run_store,
+            resource_store,
         });
 
         // Register gateway as approval consumer
@@ -719,10 +755,12 @@ async fn audit_handler(
         .chain
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let query = CausalQuery {
-        function_prefix: Some("chat.audit.".to_string()),
-        ..Default::default()
-    };
+    let mut query = CausalQuery::default();
+    if let Some(session_id) = &params.session_id {
+        query.session_id = Some(session_id.clone());
+    } else {
+        query.function_prefix = Some("chat.audit.".to_string());
+    }
     let mut actions = guard.query_actions(&query);
     actions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
@@ -738,16 +776,7 @@ async fn audit_handler(
                 continue;
             }
         }
-        if let Some(session_id) = &params.session_id {
-            let sid = action
-                .metadata
-                .get("session_id")
-                .and_then(|v| v.as_string())
-                .unwrap_or_default();
-            if sid != session_id {
-                continue;
-            }
-        }
+        // session_id is already filtered by query_actions if present in params
         let mut meta_json = serde_json::Map::new();
         for (key, value) in &action.metadata {
             let json_val = rtfs_value_to_json(value)
@@ -759,7 +788,11 @@ async fn audit_handler(
 
         events.push(ChatAuditEntryResponse {
             timestamp: action.timestamp,
-            event_type: get_str("event_type").unwrap_or_else(|| "unknown".to_string()),
+            event_type: get_str("event_type").unwrap_or_else(|| match action.action_type {
+                crate::types::ActionType::CapabilityCall => "capability.call".to_string(),
+                crate::types::ActionType::CapabilityResult => "transform.output".to_string(),
+                _ => "unknown".to_string(),
+            }),
             function_name: action.function_name.clone(),
             session_id: get_str("session_id"),
             run_id: get_str("run_id"),
