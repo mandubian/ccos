@@ -260,8 +260,28 @@ pub struct OnboardingConfig {
     /// Whether onboarding is required for this skill
     #[serde(default = "default_true")]
     pub required: bool,
-    /// Ordered list of onboarding steps
+    /// Raw onboarding/setup section content from skill markdown.
+    /// This is the primary source for LLM reasoning - the agent reads and interprets
+    /// this prose to understand what setup steps are needed.
+    #[serde(default)]
+    pub raw_content: String,
+    /// Ordered list of onboarding steps (for structured skills only).
+    /// Only populated when skills provide explicit YAML/JSON step definitions.
+    /// For markdown skills, prefer raw_content and let the LLM reason.
+    #[serde(default)]
     pub steps: Vec<OnboardingStep>,
+}
+
+impl OnboardingConfig {
+    /// Create an OnboardingConfig from raw prose content.
+    /// The LLM will read and interpret this content to determine setup steps.
+    pub fn from_raw(content: String) -> Self {
+        Self {
+            required: true,
+            raw_content: content,
+            steps: Vec::new(),
+        }
+    }
 }
 
 /// A single step in the onboarding process
@@ -287,6 +307,9 @@ pub struct OnboardingStep {
     /// Parameters to pass to the operation
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub params: HashMap<String, String>,
+    /// Optional completion predicate to verify success (e.g. ActionSucceeded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_on_success: Option<crate::chat::Predicate>,
 }
 
 /// Types of onboarding steps

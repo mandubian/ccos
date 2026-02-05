@@ -1,9 +1,11 @@
 # Skill Onboarding System Specification
 
-**Status**: Partially Implemented (Core capabilities exist; UX + stronger governance semantics still evolving)  
-**Version**: 0.3  
-**Date**: 2026-02-04  
+**Status**: ✅ **Core Implementation Complete** (Blueprint injection, state machine, and testing complete)  
+**Version**: 0.4  
+**Date**: 2026-02-05  
 **Authors**: CCOS Team
+
+**Latest Update**: Blueprint injection system implemented in `DelegatingCognitiveEngine`. See §11 for details.
 
 ---
 
@@ -331,13 +333,13 @@ governance:
 
 **Goal**: Track onboarding progress and enable resumption.
 
-| Task | Description | Effort |
-|------|-------------|--------|
-| 3.1 | Design onboarding metadata in skill format | 2h |
-| 3.2 | Implement state machine transitions | 3h |
-| 3.3 | Auto-detect onboarding requirements from skill | 2h |
-| 3.4 | Resume onboarding after restart | 2h |
-| 3.5 | Skill status reporting via MCP | 1h |
+| Task | Description | Effort | Status |
+|------|-------------|--------|--------|
+| 3.1 | Design onboarding metadata in skill format | 2h | ✅ Done |
+| 3.2 | Implement state machine transitions | 3h | ✅ Done |
+| 3.3 | Auto-detect onboarding requirements from skill | 2h | ✅ Done |
+| 3.4 | Resume onboarding after restart | 2h | ✅ Done (WorkingMemory integration) |
+| 3.5 | Skill status reporting via MCP | 1h | ✅ Done (`ccos.skill.onboarding.mark_operational`) |
 
 **Files to modify**:
 - `ccos/src/skills/mod.rs` - Add onboarding module
@@ -348,12 +350,12 @@ governance:
 
 **Goal**: Enable the planner to reason about onboarding steps.
 
-| Task | Description | Effort |
-|------|-------------|--------|
-| 4.1 | Expose skill status to planner context | 2h |
-| 4.2 | Generate onboarding sub-goals from skill metadata | 3h |
-| 4.3 | Handle "waiting for human" in plan execution | 2h |
-| 4.4 | Onboarding completion triggers | 1h |
+| Task | Description | Effort | Status |
+|------|-------------|--------|--------|
+| 4.1 | Expose skill status to planner context | 2h | ✅ Done |
+| 4.2 | Generate onboarding sub-goals from skill metadata | 3h | ✅ Done (Blueprint injection) |
+| 4.3 | Handle "waiting for human" in plan execution | 2h | ✅ Done (Approval system integration) |
+| 4.4 | Onboarding completion triggers | 1h | ✅ Done (`mark_operational` capability) |
 
 **Files to modify**:
 - `ccos/src/ccos/planner.rs` - Skill-aware planning
@@ -553,19 +555,23 @@ Agent: "Your Moltbook agent is now set up and operational."
 
 ### 9.1 Functional Requirements
 
-- [ ] Agent can complete Moltbook onboarding end-to-end
-- [ ] Onboarding state persists across agent restarts
-- [ ] Human actions clearly communicated via approval system
-- [ ] Secrets stored securely with approval audit trail
-- [ ] Agent can resume after human action completion
+- [x] Onboarding state persists across agent restarts (WorkingMemory)
+- [x] Human actions clearly communicated via approval system
+- [x] Secrets stored securely with approval audit trail
+- [x] Agent can resume after human action completion
+- [ ] Full end-to-end Moltbook demo verified
 
 ### 9.2 Non-Functional Requirements
 
-- [ ] No hardcoded skill-specific logic in CCOS core
-- [ ] All operations governed by approval system
-- [ ] Secret values never appear in logs or responses
-- [ ] Onboarding progress visible in MCP responses
+- [x] No hardcoded skill-specific logic in CCOS core
+- [x] All operations governed by approval system
+- [x] Secret values never appear in logs or responses
+- [x] Onboarding progress visible in MCP responses
 - [ ] Timeout handling for abandoned onboarding flows
+
+---
+
+## 10. Future Considerations
 
 ---
 

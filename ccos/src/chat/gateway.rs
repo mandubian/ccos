@@ -1,7 +1,9 @@
+use log;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use axum::extract::{Json, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -14,11 +16,14 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
-use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
+use crate::approval::{
+    storage_file::FileApprovalStorage, ApprovalCategory, ApprovalConsumer, ApprovalRequest,
+    UnifiedApprovalQueue,
+};
 use crate::capabilities::registry::CapabilityRegistry;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
-use crate::chat::run::{new_shared_run_store, BudgetContext, Run, SharedRunStore};
+use crate::chat::run::{BudgetContext, Run, RunStore, SharedRunStore};
 use crate::chat::{
     attach_label, record_chat_audit_event, register_chat_capabilities, AgentSpawner, ChatDataLabel,
     ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
@@ -66,6 +71,139 @@ struct GatewayState {
     run_store: SharedRunStore,
 }
 
+#[async_trait]
+impl ApprovalConsumer for GatewayState {
+    async fn on_approval_requested(&self, request: &ApprovalRequest) {
+        log::info!("[Gateway] Approval requested: {}", request.id);
+        let session_id = request.metadata.get("session_id");
+        if let Some(session_id) = session_id {
+            self.nudge_user(session_id, &request.id, &request.category)
+                .await;
+        }
+    }
+
+    async fn on_approval_resolved(&self, request: &ApprovalRequest) {
+        log::info!(
+            "[Gateway] Approval resolved: {} (status: {:?})",
+            request.id,
+            request.status
+        );
+
+        let session_id = request.metadata.get("session_id");
+        if let Some(session_id) = session_id {
+            // Notify chat about resolution
+            let status_msg = match &request.status {
+                crate::approval::types::ApprovalStatus::Approved { .. } => {
+                    "✅ Approved.".to_string()
+                }
+                crate::approval::types::ApprovalStatus::Rejected { reason, .. } => {
+                    format!("❌ Rejected: {}", reason)
+                }
+                _ => return,
+            };
+            self.send_chat_message(
+                session_id,
+                format!("Approval `{}`: {}", request.id, status_msg),
+            )
+            .await;
+
+            if request.status.is_approved() {
+                let run_id = {
+                    let store = self.run_store.lock().unwrap();
+                    store.get_latest_paused_approval_run_id_for_session(session_id)
+                };
+
+                if let Some(run_id) = run_id {
+                    // Resume the run (we need lock again)
+                    {
+                        let mut store = self.run_store.lock().unwrap();
+                        store.update_run_state(&run_id, crate::chat::run::RunState::Active);
+                    }
+
+                    log::info!(
+                        "[Gateway] Auto-resumed run {} after approval {}",
+                        run_id,
+                        request.id
+                    );
+
+                    // Record event (no lock needed for record_run_event)
+                    let _ = record_run_event(
+                        self,
+                        session_id,
+                        &run_id,
+                        &format!("auto-resume-{}", request.id),
+                        "run.auto_resume",
+                        HashMap::new(),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+}
+
+impl GatewayState {
+    async fn send_chat_message(&self, session_id: &str, text: String) {
+        let parts: Vec<&str> = session_id.split(':').collect();
+        if parts.len() < 3 {
+            return;
+        }
+        let channel_id = parts[1];
+
+        let outbound = OutboundRequest {
+            channel_id: channel_id.to_string(),
+            content: text,
+            reply_to: None,
+            metadata: None,
+        };
+
+        if let Err(e) = self.connector.send(&self.connector_handle, outbound).await {
+            log::error!(
+                "[Gateway] Failed to send chat message to {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+    async fn nudge_user(&self, session_id: &str, approval_id: &str, category: &ApprovalCategory) {
+        let message = match category {
+            ApprovalCategory::SecretWrite {
+                key, description, ..
+            } => {
+                format!("🔓 I need your approval to store a secret for **{}** ({}) .\n\nID: `{}`\n\nPlease visit the [Approval UI](http://localhost:3000/approvals) to complete this step.", key, description, approval_id)
+            }
+            ApprovalCategory::HumanActionRequest {
+                title, skill_id, ..
+            } => {
+                format!("👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nPlease visit the [Approval UI](http://localhost:3000/approvals) to proceed.", title, skill_id, approval_id)
+            }
+            _ => return,
+        };
+
+        // Resolve channel_id from session_id: "chat:channel_id:sender_id"
+        let parts: Vec<&str> = session_id.split(':').collect();
+        if parts.len() < 3 {
+            return;
+        }
+        let channel_id = parts[1];
+
+        let outbound = OutboundRequest {
+            channel_id: channel_id.to_string(),
+            content: message,
+            reply_to: None,
+            metadata: None,
+        };
+
+        if let Err(e) = self.connector.send(&self.connector_handle, outbound).await {
+            log::error!(
+                "[Gateway] Failed to send nudge to session {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+}
+
 impl ChatGateway {
     pub async fn start(config: ChatGatewayConfig) -> RuntimeResult<()> {
         let key = QuarantineKey::from_env(&config.quarantine_key_env)?;
@@ -104,13 +242,20 @@ impl ChatGateway {
         // Initialize session management
         let session_registry = SessionRegistry::new();
         let spawner = SpawnerFactory::create();
-        let run_store = new_shared_run_store();
+
+        // Rebuild run store from causal chain
+        let run_store = {
+            let guard = chain.lock().unwrap();
+            let run_events = guard.get_all_actions();
+            Arc::new(Mutex::new(RunStore::rebuild_from_chain(&run_events)))
+        };
+        // guard is dropped here
 
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
             quarantine,
             chain,
-            _approvals: approvals,
+            _approvals: approvals.clone(),
             connector: connector.clone(),
             connector_handle: handle.clone(),
             inbox: Mutex::new(VecDeque::new()),
@@ -119,6 +264,11 @@ impl ChatGateway {
             spawner: spawner.into(),
             run_store,
         });
+
+        // Register gateway as approval consumer
+        if let Some(ref approvals_queue) = approvals {
+            approvals_queue.add_consumer(state.clone()).await;
+        }
 
         let gateway = ChatGateway {
             state: state.clone(),
@@ -148,6 +298,8 @@ impl ChatGateway {
             .route("/chat/run/:run_id/actions", get(list_run_actions_handler))
             .route("/chat/run/:run_id/cancel", post(cancel_run_handler))
             .route("/chat/run/:run_id/transition", post(transition_run_handler))
+            .route("/chat/run/:run_id/resume", post(resume_run_handler))
+            .route("/chat/run/:run_id/checkpoint", post(checkpoint_run_handler))
             .with_state(app_state);
 
         let listener = TcpListener::bind(config.bind_addr.as_str())
@@ -185,6 +337,13 @@ impl ChatGateway {
                     // Resume automatically.
                     let _ = store.update_run_state(&paused_id, crate::chat::run::RunState::Active);
                     chosen = Some(paused_id);
+                } else if let Some(checkpoint_id) =
+                    store.get_latest_checkpoint_run_id_for_session(&session_id)
+                {
+                    // Resume automatically from checkpoint.
+                    let _ =
+                        store.update_run_state(&checkpoint_id, crate::chat::run::RunState::Active);
+                    chosen = Some(checkpoint_id);
                 } else if let Some(paused_approval_id) =
                     store.get_latest_paused_approval_run_id_for_session(&session_id)
                 {
@@ -229,16 +388,15 @@ impl ChatGateway {
             );
         }
 
-        record_chat_audit_event(
-            &self.state.chain,
-            "chat",
-            "chat",
+        record_run_event(
+            &self.state,
             &session_id,
             &run_id,
             &step_id,
             "message.ingest",
             meta,
-        )?;
+        )
+        .await?;
 
         // Check if session exists, if not create one and spawn agent
         let session_exists = self
@@ -322,6 +480,46 @@ impl ChatGateway {
                 envelope.content_ref.clone()
             }
         };
+
+        // Handle Slash Commands
+        if content_to_push.starts_with('/') {
+            if content_to_push.starts_with("/approve ") {
+                let id = content_to_push["/approve ".len()..].trim();
+                let result = if let Some(ref queue) = self.state._approvals {
+                    queue
+                        .approve(
+                            id,
+                            crate::approval::queue::ApprovalAuthority::User(
+                                envelope.sender_id.clone(),
+                            ),
+                            Some("Approved via chat command".to_string()),
+                        )
+                        .await
+                } else {
+                    Err(RuntimeError::Generic(
+                        "Approval system not initialized".to_string(),
+                    ))
+                };
+
+                match result {
+                    Ok(_) => {
+                        self.state
+                            .send_chat_message(
+                                &session_id,
+                                format!("Processing approval `{}`...", id),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        self.state
+                            .send_chat_message(&session_id, format!("❌ Approval failed: {}", e))
+                            .await;
+                    }
+                }
+                return Ok(()); // Command handled, don't push to agent
+            }
+            // Add more commands here (e.g., /reject, /status)
+        }
 
         // Add message to session inbox
         if let Err(e) = self
@@ -443,6 +641,11 @@ impl ChatGateway {
             };
             if let Ok(mut chain) = self.state.chain.lock() {
                 let _ = chain.record_result(action, exec_result);
+            }
+
+            // Evaluate completion trigger
+            if let (Some(sid), Some(rid)) = (&session_id, &run_id) {
+                let _ = evaluate_run_completion(&self.state, sid, rid).await;
             }
         }
 
@@ -576,6 +779,98 @@ async fn audit_handler(
     Ok(Json(ChatAuditResponse { events }))
 }
 
+/// Helper to record an audit event and evaluate completion predicates
+async fn record_run_event(
+    state: &GatewayState,
+    session_id: &str,
+    run_id: &str,
+    step_id: &str,
+    event_type: &str,
+    metadata: HashMap<String, Value>,
+) -> RuntimeResult<()> {
+    record_chat_audit_event(
+        &state.chain,
+        "chat",
+        "chat",
+        session_id,
+        run_id,
+        step_id,
+        event_type,
+        metadata,
+    )?;
+
+    evaluate_run_completion(state, session_id, run_id).await
+}
+
+/// Evaluates if a run has satisfied its completion predicate
+async fn evaluate_run_completion(
+    state: &GatewayState,
+    session_id: &str,
+    run_id: &str,
+) -> RuntimeResult<()> {
+    // Evaluate completion if run is active
+    let (should_eval, goal) = {
+        if let Ok(store) = state.run_store.lock() {
+            if let Some(run) = store.get_run(run_id) {
+                (
+                    run.state == crate::chat::run::RunState::Active
+                        && run.completion_predicate.is_some(),
+                    run.goal.clone(),
+                )
+            } else {
+                (false, String::new())
+            }
+        } else {
+            (false, String::new())
+        }
+    };
+
+    if should_eval {
+        if let Ok(mut store) = state.run_store.lock() {
+            if let Some(run) = store.get_run_mut(run_id) {
+                if let Some(predicate) = &run.completion_predicate {
+                    let actions_satisfied = {
+                        let guard = state.chain.lock().unwrap();
+                        let query = crate::causal_chain::CausalQuery {
+                            run_id: Some(run_id.to_string()),
+                            ..Default::default()
+                        };
+                        let actions = guard.query_actions(&query);
+                        predicate.evaluate(&actions)
+                    };
+
+                    if actions_satisfied {
+                        log::info!(
+                            "[Gateway] Run {} satisfies completion predicate for goal '{}'. Transitioning to Done.",
+                            run_id, goal
+                        );
+                        run.transition(crate::chat::run::RunState::Done);
+
+                        // Audit the auto-completion
+                        let mut meta = HashMap::new();
+                        meta.insert(
+                            "reason".to_string(),
+                            Value::String("Predicate satisfied".into()),
+                        );
+                        let _ = record_chat_audit_event(
+                            &state.chain,
+                            "chat",
+                            "chat",
+                            session_id,
+                            run_id,
+                            &format!("auto-complete-{}", uuid::Uuid::new_v4()),
+                            "run.complete",
+                            meta,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn health_handler(
     State(state): State<Arc<GatewayState>>,
 ) -> Result<Json<HealthStatusResponse>, StatusCode> {
@@ -701,7 +996,7 @@ async fn execute_handler(
                     // Budget ok: increment step counter for correlated calls.
                     run.consumption.steps_taken = run.consumption.steps_taken.saturating_add(1);
                     if step_id.is_some() {
-                        run.current_step_id = step_id;
+                        run.current_step_id = step_id.clone();
                     }
                     run.updated_at = Utc::now();
                 }
@@ -725,16 +1020,15 @@ async fn execute_handler(
                 "rule_id".to_string(),
                 Value::String("chat.run.budget".to_string()),
             );
-            let _ = record_chat_audit_event(
-                &state.chain,
-                "chat",
-                "chat",
+            let _ = record_run_event(
+                &state,
                 &payload.session_id,
                 run_id,
                 step,
                 "run.transition",
                 transition_meta,
-            );
+            )
+            .await;
 
             let mut meta = HashMap::new();
             meta.insert(
@@ -742,17 +1036,19 @@ async fn execute_handler(
                 Value::String(payload.capability_id.clone()),
             );
             meta.insert("reason".to_string(), Value::String(reason.clone()));
-            meta.insert("rule_id".to_string(), Value::String("chat.run.budget".to_string()));
-            let _ = record_chat_audit_event(
-                &state.chain,
-                "chat",
-                "chat",
+            meta.insert(
+                "rule_id".to_string(),
+                Value::String("chat.run.budget".to_string()),
+            );
+            let _ = record_run_event(
+                &state,
                 &payload.session_id,
                 run_id,
                 step,
                 "run.budget_exceeded",
                 meta,
-            );
+            )
+            .await;
 
             if !allowed_while_paused(&payload.capability_id) {
                 return Ok(Json(ExecuteResponse {
@@ -1069,7 +1365,7 @@ struct CreateRunRequest {
     goal: String,
     #[serde(default)]
     budget: Option<BudgetContextRequest>,
-    completion_predicate: Option<String>,
+    completion_predicate: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1126,12 +1422,27 @@ async fn create_run_handler(
 
     // Create the run
     let mut run = Run::new(payload.session_id.clone(), payload.goal.clone(), budget);
-    if let Some(predicate) = payload.completion_predicate {
-        run.completion_predicate = Some(predicate);
+    if let Some(pred_value) = payload.completion_predicate {
+        let predicate: Option<crate::chat::Predicate> = if pred_value.is_string() {
+            // Legacy/convenience migration
+            let s = pred_value.as_str().unwrap();
+            if s.starts_with("capability_succeeded:") {
+                let id = &s["capability_succeeded:".len()..];
+                Some(crate::chat::Predicate::ActionSucceeded {
+                    function_name: id.to_string(),
+                })
+            } else {
+                None
+            }
+        } else {
+            serde_json::from_value(pred_value).ok()
+        };
+        run.completion_predicate = predicate;
     }
 
     let run_id = run.id.clone();
     let correlation_id = run.correlation_id.clone();
+    let budget_audit = run.budget.clone();
     let state_str = format!("{:?}", run.state);
 
     // Store the run (refuse if another active run exists for the session).
@@ -1140,7 +1451,10 @@ async fn create_run_handler(
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if store.get_active_run_for_session(&payload.session_id).is_some() {
+        if store
+            .get_active_run_for_session(&payload.session_id)
+            .is_some()
+        {
             return Err(StatusCode::CONFLICT);
         }
         store.create_run(run);
@@ -1158,16 +1472,24 @@ async fn create_run_handler(
             "rule_id".to_string(),
             Value::String("chat.run.create".to_string()),
         );
-        let _ = record_chat_audit_event(
-            &state.chain,
-            "chat",
-            "chat",
+        meta.insert(
+            "budget_max_steps".to_string(),
+            Value::Integer(budget_audit.max_steps as i64),
+        );
+        meta.insert(
+            "budget_max_duration_secs".to_string(),
+            Value::Integer(budget_audit.max_duration_secs as i64),
+        );
+
+        let _ = record_run_event(
+            &state,
             &payload.session_id,
             &run_id,
-            "run.create",
+            &format!("create-{}", uuid::Uuid::new_v4()),
             "run.create",
             meta,
-        );
+        )
+        .await;
     }
 
     // Spawn agent for this run with budget from SpawnConfig
@@ -1209,11 +1531,7 @@ async fn create_run_handler(
         .nth(1)
         .unwrap_or("default")
         .to_string();
-    let kickoff = format!(
-        "Run started ({}). Goal:\n{}",
-        run_id,
-        payload.goal
-    );
+    let kickoff = format!("Run started ({}). Goal:\n{}", run_id, payload.goal);
     if let Err(e) = state
         .session_registry
         .push_message_to_session(
@@ -1263,7 +1581,7 @@ struct GetRunResponse {
     created_at: String,
     updated_at: String,
     current_step_id: Option<String>,
-    completion_predicate: Option<String>,
+    completion_predicate: Option<crate::chat::Predicate>,
 }
 
 async fn get_run_handler(
@@ -1451,10 +1769,7 @@ async fn list_run_actions_handler(
 
     let mut actions = Vec::new();
     for action in guard.get_all_actions().iter().rev() {
-        let action_run_id = action
-            .metadata
-            .get("run_id")
-            .and_then(|v| v.as_string());
+        let action_run_id = action.metadata.get("run_id").and_then(|v| v.as_string());
         if action_run_id != Some(&run_id) {
             continue;
         }
@@ -1568,6 +1883,141 @@ async fn cancel_run_handler(
     }))
 }
 
+/// Resume a run
+#[derive(Debug, Serialize)]
+struct ResumeRunResponse {
+    run_id: String,
+    resumed: bool,
+    previous_state: String,
+}
+
+async fn resume_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<ResumeRunResponse>, StatusCode> {
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let (previous_state, session_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        (format!("{:?}", run.state), run.session_id.clone())
+    };
+
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let resumed = {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store.update_run_state(&run_id, crate::chat::run::RunState::Active)
+    };
+
+    if resumed {
+        let meta = HashMap::new();
+        let _ = record_run_event(
+            &state,
+            &session_id,
+            &run_id,
+            &format!("resume-{}", uuid::Uuid::new_v4()),
+            "run.resume",
+            meta,
+        )
+        .await;
+    }
+
+    Ok(Json(ResumeRunResponse {
+        run_id,
+        resumed,
+        previous_state,
+    }))
+}
+
+/// Checkpoint a run
+#[derive(Debug, Deserialize)]
+struct CheckpointRunRequest {
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CheckpointRunResponse {
+    run_id: String,
+    checkpoint_id: String,
+    previous_state: String,
+}
+
+async fn checkpoint_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+    Json(payload): Json<CheckpointRunRequest>,
+) -> Result<Json<CheckpointRunResponse>, StatusCode> {
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let (previous_state, session_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        (format!("{:?}", run.state), run.session_id.clone())
+    };
+
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let checkpoint_id = {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let run = store.get_run_mut(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        run.checkpoint(payload.reason.clone())
+    };
+
+    let mut meta = HashMap::new();
+    meta.insert("reason".to_string(), Value::String(payload.reason));
+    meta.insert(
+        "checkpoint_id".to_string(),
+        Value::String(checkpoint_id.clone()),
+    );
+
+    let _ = record_run_event(
+        &state,
+        &session_id,
+        &run_id,
+        &format!("chk-{}", uuid::Uuid::new_v4()),
+        "run.checkpoint",
+        meta,
+    )
+    .await;
+
+    Ok(Json(CheckpointRunResponse {
+        run_id,
+        checkpoint_id,
+        previous_state,
+    }))
+}
+
 /// Transition a run to a new state (generic administrative endpoint).
 #[derive(Debug, Deserialize)]
 struct TransitionRunRequest {
@@ -1656,37 +2106,23 @@ async fn transition_run_handler(
                 .and_then(|r| r.completion_predicate.clone())
         };
 
-        if let Some(pred) = predicate {
-            let pred = pred.trim().to_string();
-            if pred.eq_ignore_ascii_case("never") {
+        if let Some(predicate) = predicate {
+            let actions_satisfied = {
+                let guard = state.chain.lock().unwrap();
+                let query = crate::causal_chain::CausalQuery {
+                    run_id: Some(run_id.clone()),
+                    ..Default::default()
+                };
+                let actions = guard.query_actions(&query);
+                predicate.evaluate(&actions)
+            };
+
+            if !actions_satisfied {
+                log::warn!(
+                    "[Gateway] Manual transition to Done rejected for run {}: completion predicate not satisfied.",
+                    run_id
+                );
                 return Err(StatusCode::CONFLICT);
-            }
-
-            if let Some(cap_id) = pred
-                .strip_prefix("capability_succeeded:")
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-            {
-                let ok = state
-                    .chain
-                    .lock()
-                    .ok()
-                    .map(|chain| {
-                        chain.get_all_actions().iter().any(|a| {
-                            a.action_type == crate::types::ActionType::CapabilityResult
-                                && a.function_name.as_deref() == Some(cap_id)
-                                && a.metadata
-                                    .get("run_id")
-                                    .and_then(|v| v.as_string())
-                                    == Some(&run_id)
-                                && a.result.as_ref().map(|r| r.success).unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false);
-
-                if !ok {
-                    return Err(StatusCode::CONFLICT);
-                }
             }
         }
     }
@@ -1736,16 +2172,15 @@ async fn transition_run_handler(
             "rule_id".to_string(),
             Value::String("chat.run.transition".to_string()),
         );
-        let _ = record_chat_audit_event(
-            &state.chain,
-            "chat",
-            "chat",
+        let _ = record_run_event(
+            &state,
             &session_id,
             &run_id,
-            "run.transition",
+            &format!("transition-{}", uuid::Uuid::new_v4()),
             "run.transition",
             meta,
-        );
+        )
+        .await;
     }
 
     Ok(Json(TransitionRunResponse {

@@ -896,6 +896,7 @@ impl CapabilityMarketplace {
         let id = manifest.id.clone();
 
         // Check if already registered to avoid duplicates
+        /*
         {
             let caps = self.capabilities.read().await;
             if caps.contains_key(&id) {
@@ -907,6 +908,7 @@ impl CapabilityMarketplace {
                 return Ok(());
             }
         }
+        */
 
         let catalog_manifest = manifest.clone();
 

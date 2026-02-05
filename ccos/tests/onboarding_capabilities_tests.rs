@@ -57,9 +57,9 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Nil => serde_json::Value::Null,
         Value::Boolean(b) => serde_json::Value::Bool(*b),
         Value::Integer(i) => serde_json::Value::Number((*i).into()),
-        Value::Float(f) => serde_json::Value::Number(
-            serde_json::Number::from_f64(*f).unwrap_or(0.into()),
-        ),
+        Value::Float(f) => {
+            serde_json::Value::Number(serde_json::Number::from_f64(*f).unwrap_or(0.into()))
+        }
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Vector(v) => serde_json::Value::Array(v.iter().map(value_to_json).collect()),
         Value::Map(m) => {
@@ -117,7 +117,8 @@ async fn execute_capability(
 
 #[tokio::test]
 async fn test_secrets_set_creates_approval() {
-    let (marketplace, _secret_store, _working_memory, approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, approval_queue) =
+        create_test_components().await;
 
     // Call ccos.secrets.set
     let args = json_to_value(serde_json::json!({
@@ -136,7 +137,10 @@ async fn test_secrets_set_creates_approval() {
     let result_json = value_to_json(&result);
     assert!(result_json["success"].as_bool().unwrap());
     assert!(result_json["approval_id"].is_string());
-    assert!(result_json["message"].as_str().unwrap().contains("MOLTBOOK_SECRET"));
+    assert!(result_json["message"]
+        .as_str()
+        .unwrap()
+        .contains("MOLTBOOK_SECRET"));
 
     // Verify approval was created
     let approval_id = result_json["approval_id"].as_str().unwrap();
@@ -148,7 +152,13 @@ async fn test_secrets_set_creates_approval() {
 
     assert!(matches!(approval.status, ApprovalStatus::Pending));
     match &approval.category {
-        ApprovalCategory::SecretWrite { key, scope, skill_id, description } => {
+        ApprovalCategory::SecretWrite {
+            key,
+            scope,
+            skill_id,
+            description,
+            ..
+        } => {
             assert_eq!(key, "MOLTBOOK_SECRET");
             assert_eq!(scope, "skill");
             assert_eq!(skill_id.as_ref().unwrap(), "moltbook");
@@ -160,7 +170,8 @@ async fn test_secrets_set_creates_approval() {
 
 #[tokio::test]
 async fn test_memory_store_and_get() {
-    let (marketplace, _secret_store, _working_memory, _approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, _approval_queue) =
+        create_test_components().await;
 
     // Test 1: Store a value
     let store_args = json_to_value(serde_json::json!({
@@ -175,7 +186,10 @@ async fn test_memory_store_and_get() {
 
     let store_json = value_to_json(&store_result);
     assert!(store_json["success"].as_bool().unwrap());
-    assert_eq!(store_json["entry_id"].as_str().unwrap(), "skill:moltbook:agent_id");
+    assert_eq!(
+        store_json["entry_id"].as_str().unwrap(),
+        "skill:moltbook:agent_id"
+    );
 
     // Test 2: Retrieve the value
     let get_args = json_to_value(serde_json::json!({
@@ -195,7 +209,8 @@ async fn test_memory_store_and_get() {
 
 #[tokio::test]
 async fn test_memory_get_with_default() {
-    let (marketplace, _secret_store, _working_memory, _approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, _approval_queue) =
+        create_test_components().await;
 
     // Try to get non-existent key with default
     let get_args = json_to_value(serde_json::json!({
@@ -216,7 +231,8 @@ async fn test_memory_get_with_default() {
 
 #[tokio::test]
 async fn test_memory_ttl_expiration() {
-    let (marketplace, _secret_store, _working_memory, _approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, _approval_queue) =
+        create_test_components().await;
 
     // Store a value with very short TTL (1 second)
     let store_args = json_to_value(serde_json::json!({
@@ -251,7 +267,8 @@ async fn test_memory_ttl_expiration() {
 
 #[tokio::test]
 async fn test_request_human_action() {
-    let (marketplace, _secret_store, _working_memory, approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, approval_queue) =
+        create_test_components().await;
 
     // Request human action
     let args = json_to_value(serde_json::json!({
@@ -288,10 +305,10 @@ async fn test_request_human_action() {
         .expect("Approval not found");
 
     match &approval.category {
-        ApprovalCategory::HumanActionRequest { 
-            action_type, 
-            title, 
-            skill_id, 
+        ApprovalCategory::HumanActionRequest {
+            action_type,
+            title,
+            skill_id,
             step_id,
             timeout_hours,
             ..
@@ -308,7 +325,8 @@ async fn test_request_human_action() {
 
 #[tokio::test]
 async fn test_complete_human_action() {
-    let (marketplace, _secret_store, _working_memory, approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, approval_queue) =
+        create_test_components().await;
 
     // Step 1: Request human action
     let request_args = json_to_value(serde_json::json!({
@@ -350,9 +368,15 @@ async fn test_complete_human_action() {
         .expect("Failed to complete human action");
 
     let complete_json = value_to_json(&complete_result);
-    assert!(complete_json["success"].as_bool().unwrap_or(false), "Expected success to be true");
+    assert!(
+        complete_json["success"].as_bool().unwrap_or(false),
+        "Expected success to be true"
+    );
     // validation_errors might be null or missing when empty, so check more defensively
-    let has_no_errors = complete_json["validation_errors"].as_array().map(|arr| arr.is_empty()).unwrap_or(true);
+    let has_no_errors = complete_json["validation_errors"]
+        .as_array()
+        .map(|arr| arr.is_empty())
+        .unwrap_or(true);
     assert!(has_no_errors, "Expected no validation errors");
 
     // Step 3: Verify approval is now approved with response
@@ -373,7 +397,8 @@ async fn test_complete_human_action() {
 
 #[tokio::test]
 async fn test_complete_human_action_validation_failure() {
-    let (marketplace, _secret_store, _working_memory, _approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, _approval_queue) =
+        create_test_components().await;
 
     // Step 1: Request human action with required field
     let request_args = json_to_value(serde_json::json!({
@@ -416,12 +441,16 @@ async fn test_complete_human_action_validation_failure() {
 
     let complete_json = value_to_json(&complete_result);
     assert!(!complete_json["success"].as_bool().unwrap());
-    assert!(!complete_json["validation_errors"].as_array().unwrap().is_empty());
+    assert!(!complete_json["validation_errors"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
 async fn test_secrets_scope_global() {
-    let (marketplace, _secret_store, _working_memory, approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, approval_queue) =
+        create_test_components().await;
 
     // Store secret with global scope
     let args = json_to_value(serde_json::json!({
@@ -447,7 +476,9 @@ async fn test_secrets_scope_global() {
         .expect("Approval not found");
 
     match &approval.category {
-        ApprovalCategory::SecretWrite { scope, skill_id, .. } => {
+        ApprovalCategory::SecretWrite {
+            scope, skill_id, ..
+        } => {
             assert_eq!(scope, "global");
             assert!(skill_id.is_none()); // No skill_id for global scope
         }
@@ -457,7 +488,8 @@ async fn test_secrets_scope_global() {
 
 #[tokio::test]
 async fn test_approval_listing_by_category() {
-    let (marketplace, _secret_store, _working_memory, approval_queue) = create_test_components().await;
+    let (marketplace, _secret_store, _working_memory, approval_queue) =
+        create_test_components().await;
 
     // Create multiple types of approvals
     let secret_args = json_to_value(serde_json::json!({
@@ -477,9 +509,13 @@ async fn test_approval_listing_by_category() {
         "skill_id": "test",
         "step_id": "test"
     }));
-    execute_capability(&marketplace, "ccos.approval.request_human_action", human_action_args)
-        .await
-        .expect("Failed to create human action approval");
+    execute_capability(
+        &marketplace,
+        "ccos.approval.request_human_action",
+        human_action_args,
+    )
+    .await
+    .expect("Failed to create human action approval");
 
     // List SecretWrite approvals
     let secret_approvals = approval_queue

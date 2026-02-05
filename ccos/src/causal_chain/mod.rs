@@ -7,6 +7,8 @@ pub struct CausalQuery {
     pub time_range: Option<(u64, u64)>,
     pub parent_action_id: Option<ActionId>,
     pub function_prefix: Option<String>,
+    pub session_id: Option<String>,
+    pub run_id: Option<String>,
 }
 
 impl CausalQuery {
@@ -115,6 +117,18 @@ impl CausalChain {
             actions = actions
                 .into_iter()
                 .filter(|a| a.function_name.as_deref().unwrap_or("").starts_with(prefix))
+                .collect();
+        }
+        if let Some(ref session_id) = query.session_id {
+            actions = actions
+                .into_iter()
+                .filter(|a| a.session_id.as_ref() == Some(session_id))
+                .collect();
+        }
+        if let Some(ref run_id) = query.run_id {
+            actions = actions
+                .into_iter()
+                .filter(|a| a.metadata.get("run_id").and_then(|v| v.as_string()) == Some(run_id))
                 .collect();
         }
         actions
@@ -236,7 +250,9 @@ impl CausalChain {
             // so result records can be queried without joining to their parent call.
             for key in ["run_id", "step_id"] {
                 if let Some(value) = action.metadata.get(key) {
-                    result_action.metadata.insert(key.to_string(), value.clone());
+                    result_action
+                        .metadata
+                        .insert(key.to_string(), value.clone());
                 }
             }
 
@@ -988,9 +1004,7 @@ mod tests {
             intent_id: Some(action.intent_id.clone()),
             plan_id: Some(action.plan_id.clone()),
             action_type: Some(action.action_type.clone()),
-            time_range: None,
-            parent_action_id: None,
-            function_prefix: None,
+            ..Default::default()
         };
         let results = chain.query_actions(&query);
         assert!(results
@@ -1302,16 +1316,65 @@ mod tests {
 
         // Query for only CapabilityCall actions
         let query = CausalQuery {
-            intent_id: None,
             plan_id: Some(plan_id.clone()),
             action_type: Some(ActionType::CapabilityCall),
-            time_range: None,
-            parent_action_id: None,
-            function_prefix: None,
+            ..Default::default()
         };
 
         let exported = chain.export_actions(&query);
         assert_eq!(exported.len(), 1);
         assert_eq!(exported[0].action_type, ActionType::CapabilityCall);
+    }
+
+    #[test]
+    fn test_indexed_query() {
+        let mut chain = CausalChain::new().unwrap();
+        let session_id = "test-session".to_string();
+        let run_id = "test-run".to_string();
+
+        let mut action1 = Action::new(
+            ActionType::PlanStarted,
+            "plan1".to_string(),
+            "intent1".to_string(),
+        );
+        action1.session_id = Some(session_id.clone());
+        action1
+            .metadata
+            .insert("run_id".to_string(), Value::String(run_id.clone()));
+
+        let mut action2 = Action::new(
+            ActionType::InternalStep,
+            "plan1".to_string(),
+            "intent1".to_string(),
+        );
+        action2.session_id = Some("other-session".to_string());
+
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        // Query by session_id
+        let query_session = CausalQuery {
+            session_id: Some(session_id.clone()),
+            ..Default::default()
+        };
+        let results_session = chain.query_actions(&query_session);
+        assert_eq!(results_session.len(), 1);
+        assert_eq!(results_session[0].session_id.as_ref().unwrap(), &session_id);
+
+        // Query by run_id
+        let query_run = CausalQuery {
+            run_id: Some(run_id.clone()),
+            ..Default::default()
+        };
+        let results_run = chain.query_actions(&query_run);
+        assert_eq!(results_run.len(), 1);
+        assert_eq!(
+            results_run[0]
+                .metadata
+                .get("run_id")
+                .and_then(|v| v.as_string())
+                .unwrap(),
+            run_id
+        );
     }
 }

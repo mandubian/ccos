@@ -5,8 +5,8 @@
 
 use super::queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, RiskLevel, ServerInfo};
 use super::types::{
-    ApprovalCategory, ApprovalFilter, ApprovalRequest, ApprovalStatus, ApprovalStorage,
-    ServerHealthTracking,
+    ApprovalCategory, ApprovalConsumer, ApprovalFilter, ApprovalRequest, ApprovalStatus,
+    ApprovalStorage, ServerHealthTracking,
 };
 use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -18,12 +18,14 @@ use std::sync::Arc;
 /// All approval types (server discovery, effects, synthesis, LLM) are handled uniformly.
 pub struct UnifiedApprovalQueue<S: ApprovalStorage> {
     storage: Arc<S>,
+    consumers: Arc<tokio::sync::RwLock<Vec<Arc<dyn ApprovalConsumer>>>>,
 }
 
 impl<S: ApprovalStorage> Clone for UnifiedApprovalQueue<S> {
     fn clone(&self) -> Self {
         Self {
             storage: Arc::clone(&self.storage),
+            consumers: Arc::clone(&self.consumers),
         }
     }
 }
@@ -31,7 +33,16 @@ impl<S: ApprovalStorage> Clone for UnifiedApprovalQueue<S> {
 impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     /// Create a new unified approval queue with the given storage backend
     pub fn new(storage: Arc<S>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            consumers: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Add a consumer for approval lifecycle events
+    pub async fn add_consumer(&self, consumer: Arc<dyn ApprovalConsumer>) {
+        let mut consumers = self.consumers.write().await;
+        consumers.push(consumer);
     }
 
     // ========================================================================
@@ -41,7 +52,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     /// Add a new approval request
     pub async fn add(&self, request: ApprovalRequest) -> RuntimeResult<String> {
         let id = request.id.clone();
-        self.storage.add(request).await?;
+        self.storage.add(request.clone()).await?;
+
+        // Notify consumers
+        let consumers = self.consumers.read().await;
+        for consumer in consumers.iter() {
+            consumer.on_approval_requested(&request).await;
+        }
+
         Ok(id)
     }
 
@@ -96,7 +114,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             _ => {
                 let mut request = request;
                 request.approve(by, reason);
-                self.storage.update(&request).await
+                self.storage.update(&request).await?;
+
+                // Notify consumers
+                let consumers = self.consumers.read().await;
+                for consumer in consumers.iter() {
+                    consumer.on_approval_resolved(&request).await;
+                }
+                Ok(())
             }
         }
     }
@@ -122,7 +147,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         }
 
         request.reject(by, reason);
-        self.storage.update(&request).await
+        self.storage.update(&request).await?;
+
+        // Notify consumers
+        let consumers = self.consumers.read().await;
+        for consumer in consumers.iter() {
+            consumer.on_approval_resolved(&request).await;
+        }
+        Ok(())
     }
 
     /// Remove a request
@@ -374,7 +406,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         }
 
         request.approve(by, reason);
-        self.storage.update(&request).await
+        self.storage.update(&request).await?;
+
+        // Notify consumers
+        let consumers = self.consumers.read().await;
+        for consumer in consumers.iter() {
+            consumer.on_approval_resolved(&request).await;
+        }
+        Ok(())
     }
 
     /// Archive the current approved server directory into `archived/` with a version suffix.
@@ -771,6 +810,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             expires_at: Utc::now() + chrono::Duration::hours(168), // 1 week
             status,
             context: Some("Created by filesystem sync".to_string()),
+            metadata: std::collections::HashMap::new(),
             response: None,
         })
     }
@@ -1246,6 +1286,7 @@ impl ApprovalRequest {
             expires_at: pd.expires_at,
             status: ApprovalStatus::Pending,
             context: None,
+            metadata: std::collections::HashMap::new(),
             response: None,
         }
     }

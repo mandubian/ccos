@@ -3329,7 +3329,7 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { session_id, run_id, transform_capability_id, verifier_capability_id, constraints } => {
                             json!({ "type": "ChatPublicDeclassification", "session_id": session_id, "run_id": run_id, "transform_capability_id": transform_capability_id, "verifier_capability_id": verifier_capability_id, "constraints": constraints })
                         }
-                        ccos::approval::types::ApprovalCategory::SecretWrite { key, scope, skill_id, description } => {
+                        ccos::approval::types::ApprovalCategory::SecretWrite { key, scope, skill_id, description, .. } => {
                             json!({ "type": "SecretWrite", "key": key, "scope": scope, "skill_id": skill_id, "description": description })
                         }
                         ccos::approval::types::ApprovalCategory::HumanActionRequest { action_type, title, instructions, skill_id, step_id, .. } => {

@@ -8,9 +8,8 @@
    - Define `RunState` with: Done, Paused(Approval), Paused(ExternalEvent), Failed, Cancelled.
    - Store runs per session with immutable budget context + completion predicate.
    - Persist run status transitions to Causal Chain.
-   - Status: ✅ Implemented in-memory + causal-chain events (`run.create`, `run.transition`, `run.cancel`).
-   - Remaining: ⏳ durable storage across gateway restarts; stronger invariants for terminal transitions.
-   - Acceptance: runs survive restarts and always end in a terminal state.
+   - Status: ✅ Implemented - `RunStore::rebuild_from_chain()` replays run events on gateway startup.
+   - Acceptance: ✅ Runs survive restarts and always end in a terminal state.
 
 2. **Run orchestration endpoints**
    - Add Gateway endpoints for: create run, get run status, cancel run, transition, list runs, list run actions.
@@ -28,6 +27,7 @@
    - Implement bounded execution segments with checkpointing between segments.
    - Wire resume triggers (cron, external event, manual resume).
    - Status: ⏳ Not implemented yet (runs can pause/resume, but without durable checkpoints).
+   - **Next (P2)**: Add `RunState::PausedCheckpoint`, `CheckpointStore` for segment state, `POST /chat/run/:run_id/checkpoint` endpoint.
    - Acceptance: a long‑running goal progresses in bounded segments.
 
 4. **Budget enforcement in agent loop**
@@ -86,7 +86,7 @@
    - Status: 🔶 Partial completion predicate support:
      - Agent respects `manual|always|never` and avoids auto-done for unknown predicates.
      - Gateway enforces `never` and supports `capability_succeeded:<capability_id>` for Done transitions.
-   - Remaining: ⏳ goal/subgoal queue; broader predicate vocabulary and robust evaluation.
+   - **Next (P1)**: Generic predicate DSL (`all_of`, `any_of`, `state_exists`, `capability_succeeded`) with evaluator in `predicates.rs`.
    - Acceptance: “generic goal” can complete without manual chat prompts.
 
 12. **Governed memory for goals**

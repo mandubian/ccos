@@ -31,8 +31,8 @@ Implementing the state machine and API endpoints for managing autonomous goals (
 | **Pause Correlation** | ✅ | Inbound messages correlate to the latest paused run (PausedExternalEvent auto-resumes; PausedApproval correlates without resuming). |
 | **Run Budget Gate** | ✅ | `/chat/execute` enforces run state and budget (refuses non-chat capabilities when paused/terminal or budget exceeded; records audit events). |
 | **Budget Window Reset** | ✅ | Transitioning a run to `Active` resets the run's budget window/counters so "continue" can actually progress. |
-| **Completion Predicates** | 🔶 | `completion_predicate` is exposed via `GET /chat/run/:run_id`. Agent respects `manual/always/never` and won't auto-complete unknown predicates. Gateway enforces `never` and supports `capability_succeeded:<capability_id>` for transitions to Done. |
-| **Persistence** | 🔶 | Run lifecycle events are recorded to Causal Chain (`run.create`, `run.cancel`, `run.transition`). Agent triggers `run.transition` for budget pause/resume and for simple Done/Failed outcomes after executing a run step; still missing: robust goal completion predicates and durable storage beyond the chain. |
+| **Completion Predicates** | 🔶 | `completion_predicate` is exposed via `GET /chat/run/:run_id`. Agent respects `manual/always/never` and won't auto-complete unknown predicates. Gateway enforces `never` and supports `capability_succeeded:<capability_id>` for transitions to Done. **Next**: generic predicate DSL (`all_of`, `any_of`, `state_exists`) with evaluator. |
+| **Persistence** | ✅ | Run lifecycle events recorded to Causal Chain (`run.create`, `run.cancel`, `run.transition`). `RunStore::rebuild_from_chain()` hydrates in-memory state on startup. |
 | **Audit Correlation**| ✅ | Correlate capability-call causal-chain actions with `run_id` / `step_id` (metadata). |
 | **Audit Querying** | ✅ | `GET /chat/audit` supports filtering by `session_id` and/or `run_id` for debugging. |
 
@@ -58,15 +58,19 @@ Ensure skills are valid, inputs are verified, and secrets are managed securely.
 | **Secret Persistence**| ✅ | Opt-in: agent can persist discovered per-skill bearer tokens to `SecretStore` (`--persist-skill-secrets` / `CCOS_AGENT_PERSIST_SKILL_SECRETS`) and reuse them across restarts. |
 | **Sanitized Logging** | ✅ | Redacts secrets and execution errors in agent and gateway logs. |
 
-## Phase 5: Hardening & Future Features ⏳ PLANNED
+## Phase 5: Hardening & Future Features 🔶 IN-PROGRESS
 
-| Feature | Priority | Status |
-|---------|----------|--------|
-| **Jailed Spawner** | P1 | ⏳ Planned: Linux namespaces + seccomp restrictions for agents. |
-| **Scheduler/Cron** | P1 | ⏳ Planned: Periodic goal triggers for autonomous check-ins. |
-| **Goal Queue** | P2 | ⏳ Planned: Support for complex subgoals and completion predicates. |
-| **Checkpoint/Resume**| P2 | ⏳ Planned: Persistence for long-running execution segments. |
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| **Generic Predicate Engine** | P1 | ✅ Done | `Predicate` enum with RTFS evaluator. `Display` trait for human-readable blueprints. |
+| **Skill Onboarding Blueprint Injection** | P2 | ✅ Done | `DelegatingCognitiveEngine` injects onboarding blueprints for non-operational skills. State tracked in WorkingMemory. |
+| **Durable Runs** | P0 | ✅ Done | `RunStore::rebuild_from_chain()` implemented. Gateway replays causal-chain events on startup for restart-safe orchestration. |
+| **Secrets Governance** | P1 | 🔶 Partial | Approval flow implemented; two-phase commit (stage → approve → persist) needs hardening. |
+| **Checkpoint/Resume** | P2 | ⏳ Planned | Bounded segments with durable checkpoints + resume triggers. |
+| **Jailed Spawner** | P2 | ⏳ Planned | Linux namespaces + seccomp restrictions for agents. |
+| **Scheduler/Cron** | P2 | ⏳ Planned | Periodic goal triggers for autonomous check-ins. |
+
 
 ---
 
-*Last Updated: 2026-02-04*
+*Last Updated: 2026-02-05*

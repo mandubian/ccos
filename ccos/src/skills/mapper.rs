@@ -302,6 +302,11 @@ impl SkillMapper {
             if let Some(url) = source_url {
                 metadata.insert("skill_source_url".to_string(), url.to_string());
             }
+            if let Some(onboarding) = &skill.onboarding {
+                if let Ok(json) = serde_json::to_string(onboarding) {
+                    metadata.insert("onboarding_config".to_string(), json);
+                }
+            }
             if let Some(cmd) = &op.command {
                 metadata.insert("skill_command".to_string(), cmd.clone());
             }
@@ -469,7 +474,17 @@ impl SkillMapper {
                                     permissions: vec![],
                                     effects: vec![],
                                     metadata,
-                                    agent_metadata: None,
+                                    agent_metadata: Some(crate::capability_marketplace::types::AgentMetadata {
+                                        kind: crate::capability_marketplace::types::CapabilityKind::Agent,
+                                        planning: true,
+                                        stateful: true,
+                                        interactive: true,
+                                        autonomy_level: 1,
+                                        constraints: crate::capability_marketplace::types::AgentConstraints::new(1),
+                                        config: HashMap::new(),
+                                        cost: 0.0,
+                                        trust_score: 1.0,
+                                    }),
                                     domains: Vec::new(),
                                     categories: Vec::new(),
                                     effect_type: EffectType::Effectful,
@@ -624,7 +639,18 @@ impl SkillMapper {
                         permissions: vec![],
                         effects: vec![],
                         metadata,
-                        agent_metadata: None,
+                        agent_metadata: Some(crate::capability_marketplace::types::AgentMetadata {
+                            kind: crate::capability_marketplace::types::CapabilityKind::Agent,
+                            planning: true,
+                            stateful: true,
+                            interactive: true,
+                            autonomy_level: 1,
+                            constraints:
+                                crate::capability_marketplace::types::AgentConstraints::new(1),
+                            config: HashMap::new(),
+                            cost: 0.0,
+                            trust_score: 1.0,
+                        }),
                         domains: Vec::new(),
                         categories: Vec::new(),
                         effect_type: EffectType::Effectful,

@@ -6,6 +6,7 @@
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use uuid::Uuid;
 
@@ -107,6 +108,9 @@ pub enum ApprovalCategory {
         skill_id: Option<String>,
         /// Human-readable description of the secret's purpose
         description: String,
+        /// The value to be stored (staged until approval)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
     },
 
     /// Human action request approval - requires human intervention
@@ -183,7 +187,11 @@ impl fmt::Display for ApprovalCategory {
             ApprovalCategory::SecretWrite { key, .. } => {
                 write!(f, "SecretWrite({})", key)
             }
-            ApprovalCategory::HumanActionRequest { action_type, skill_id, .. } => {
+            ApprovalCategory::HumanActionRequest {
+                action_type,
+                skill_id,
+                ..
+            } => {
                 write!(f, "HumanActionRequest({} for {})", action_type, skill_id)
             }
         }
@@ -252,6 +260,9 @@ pub struct ApprovalRequest {
     pub status: ApprovalStatus,
     /// Optional context about why this approval was requested
     pub context: Option<String>,
+    /// System metadata for correlation (e.g., session_id, run_id)
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
     /// Human-provided response data (for HumanActionRequest completions)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<serde_json::Value>,
@@ -273,8 +284,14 @@ impl ApprovalRequest {
             expires_at: now + chrono::Duration::hours(expires_in_hours),
             status: ApprovalStatus::Pending,
             context,
+            metadata: HashMap::new(),
             response: None,
         }
+    }
+
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
     }
 
     pub fn is_expired(&self) -> bool {
