@@ -177,6 +177,7 @@ path = "src/bin/mock_moltbook.rs"
 [[bin]]
 name = "ccos-chat"
 path = "src/bin/ccos-chat.rs"
+required-features = ["tui"]
 
 [[bin]]
 name = "ccos-agent"

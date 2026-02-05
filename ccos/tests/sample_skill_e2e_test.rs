@@ -9,12 +9,11 @@ use ccos::approval::storage_memory::InMemoryApprovalStorage;
 use ccos::approval::unified_queue::UnifiedApprovalQueue;
 use ccos::capabilities::registry::CapabilityRegistry;
 use ccos::capability_marketplace::CapabilityMarketplace;
-use ccos::chat::predicate::Predicate;
 use ccos::secrets::SecretStore;
 use ccos::skills::loader::parse_skill_markdown;
 use ccos::skills::mapper::SkillMapper;
 use ccos::skills::onboarding_capabilities::register_onboarding_capabilities;
-use ccos::skills::types::{OnboardingState, OnboardingStepType};
+use ccos::skills::types::OnboardingState;
 use ccos::working_memory::{InMemoryJsonlBackend, WorkingMemory};
 use tokio::sync::RwLock;
 
@@ -46,56 +45,16 @@ async fn test_load_twitter_publisher_sample_skill() {
     let onboarding = skill.onboarding.as_ref().unwrap();
     assert!(onboarding.required, "Onboarding should be required");
 
-    // Verify all 4 onboarding steps
-    assert_eq!(onboarding.steps.len(), 4, "Should have 4 onboarding steps");
-
-    // Step 1: setup-api-key
-    let step1 = &onboarding.steps[0];
-    assert_eq!(step1.id, "setup-api-key");
-    assert_eq!(step1.step_type, OnboardingStepType::ApiCall);
-    assert_eq!(step1.operation.as_ref().unwrap(), "ccos.secrets.set");
-    assert!(step1.verify_on_success.is_some());
-    if let Some(Predicate::ActionSucceeded { function_name }) = &step1.verify_on_success {
-        assert_eq!(function_name, "ccos.secrets.set");
-    } else {
-        panic!("Expected ActionSucceeded predicate for step 1");
-    }
-
-    // Step 2: verify-credentials
-    let step2 = &onboarding.steps[1];
-    assert_eq!(step2.id, "verify-credentials");
-    assert_eq!(step2.step_type, OnboardingStepType::ApiCall);
-    assert_eq!(
-        step2.operation.as_ref().unwrap(),
-        "twitter-publisher.get-user-info"
+    // Freeform onboarding: markdown skills now capture raw prose for LLM reasoning.
+    // Structured steps remain supported for YAML/JSON skills, but are not required here.
+    assert!(
+        !onboarding.raw_content.trim().is_empty(),
+        "Onboarding raw_content should be captured for markdown skills"
     );
-    assert!(!step2.depends_on.is_empty());
-    assert_eq!(step2.depends_on[0], "setup-api-key");
-
-    // Step 3: verify-ownership
-    let step3 = &onboarding.steps[2];
-    assert_eq!(step3.id, "verify-ownership");
-    assert_eq!(step3.step_type, OnboardingStepType::HumanAction);
-    assert!(step3.action.is_some());
-    let action = step3.action.as_ref().unwrap();
-    assert_eq!(action.action_type, "tweet_verification");
-    assert!(action.title.contains("Verify"));
-    assert!(action.required_response.is_some());
-
-    // Step 4: mark-operational
-    let step4 = &onboarding.steps[3];
-    assert_eq!(step4.id, "mark-operational");
-    assert_eq!(step4.step_type, OnboardingStepType::ApiCall);
-    assert_eq!(
-        step4.operation.as_ref().unwrap(),
-        "ccos.skill.onboarding.mark_operational"
-    );
-    assert_eq!(step4.depends_on.len(), 3); // Depends on all previous steps
 
     println!("✓ Twitter Publisher skill loaded and validated successfully");
     println!("  - ID: {}", skill.id);
-    println!("  - Onboarding steps: {}", onboarding.steps.len());
-    println!("  - All verification predicates present");
+    println!("  - Onboarding raw_content len: {}", onboarding.raw_content.len());
 }
 
 #[tokio::test]

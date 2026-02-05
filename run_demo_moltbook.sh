@@ -111,6 +111,9 @@ export CCOS_AGENT_ENABLE_LLM=true
 export GEMINI_API_KEY=${GEMINI_API_KEY}
 export OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
+# Skill URL hints: let the agent resolve "moltbook" -> local mock server
+export CCOS_SKILL_URL_HINTS="moltbook=http://localhost:8765/skill.md"
+
 ./target/debug/ccos-chat-gateway serve \
     --bind-addr 127.0.0.1:8822 \
     --connector-bind-addr 127.0.0.1:8833 \

@@ -49,7 +49,7 @@ Enforce resource limits within the agent loop to prevent infinite runs and uncon
 
 ## Phase 4: Skill Safety & Validation ✅ COMPLETE
 
-Ensure skills are valid, inputs are verified, and secrets are managed securely.
+Ensure instruction sources (skills, prompts, docs) are handled safely, inputs are verified, and secrets are managed securely.
 
 | Task | Status | Description |
 |-----------|--------|-------------|
@@ -66,6 +66,10 @@ Ensure skills are valid, inputs are verified, and secrets are managed securely.
 | **Skill Onboarding Blueprint Injection** | P2 | ✅ Done | `DelegatingCognitiveEngine` injects onboarding blueprints for non-operational skills. State tracked in WorkingMemory. |
 | **Durable Runs** | P0 | ✅ Done | `RunStore::rebuild_from_chain()` implemented. Gateway replays causal-chain events on startup for restart-safe orchestration. |
 | **Secrets Governance** | P1 | 🔶 Partial | Approval flow implemented; two-phase commit (stage → approve → persist) needs hardening. |
+| **Governed Egress Boundary (No Direct HTTP)** | P0 | 🔶 In progress | Enforce that *all* outbound network fetches (including “load an instruction URL”) route through a governed capability path (proxy/allowlist/metering/audit), and remove/disable any direct-`reqwest` fetch surfaces reachable by agents. |
+| **Instruction Resource Ingestion** | P0 | ⏳ Planned | Introduce a generic “instruction resource” concept: ingest `{text | file:// | http(s)://}` into a governed store with provenance + classification/quarantine + causal-chain correlation; let the agent reason over retrieved content without requiring skill parsing. `skill.md` becomes just one resource type. |
+| **Resource Governance (Untrusted Instructions)** | P1 | ⏳ Planned | Treat all instruction resources as untrusted: prompt framing + policy gates to prevent privilege escalation (“instructions are data, not authority”), plus safe redaction and optional secret staging when responses contain credentials. |
+| **Tool Registry Delta / Unload Semantics** | P1 | ⏳ Planned | When resources/skills register tools (optional), ensure the agent sees accurate schemas and deltas; add unload/reset to prevent stale capability context across runs. |
 | **Checkpoint/Resume** | P2 | ⏳ Planned | Bounded segments with durable checkpoints + resume triggers. |
 | **Jailed Spawner** | P2 | ⏳ Planned | Linux namespaces + seccomp restrictions for agents. |
 | **Scheduler/Cron** | P2 | ⏳ Planned | Periodic goal triggers for autonomous check-ins. |

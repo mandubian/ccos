@@ -564,6 +564,7 @@ pub struct CapabilityRegistry {
     missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
     http_mocking_enabled: bool,
     http_allow_hosts: Option<HashSet<String>>,
+    http_allow_ports: Option<HashSet<u16>>,
     /// Execution policy for capabilities
     execution_policy: CapabilityExecutionPolicy,
     /// Optional marketplace reference for metadata access (generic, provider-agnostic)
@@ -583,6 +584,7 @@ impl CapabilityRegistry {
             missing_capability_resolver: None,
             http_mocking_enabled: true,
             http_allow_hosts: None,
+            http_allow_ports: None,
             execution_policy: CapabilityExecutionPolicy::default(),
             marketplace: None,
             session_pool: None,
@@ -726,6 +728,39 @@ impl CapabilityRegistry {
                 .insert("local".to_string(), Box::new(new_local));
         }
         Ok(())
+    }
+
+    /// Restrict outbound HTTP ports to the provided allowlist.
+    ///
+    /// An empty list clears the allowlist (all ports allowed, subject to host allowlist).
+    pub fn set_http_allow_ports(&mut self, ports: Vec<u16>) -> RuntimeResult<()> {
+        if ports.is_empty() {
+            self.http_allow_ports = None;
+            return Ok(());
+        }
+
+        let mut normalized = HashSet::with_capacity(ports.len());
+        for port in ports {
+            normalized.insert(port);
+        }
+        self.http_allow_ports = Some(normalized);
+        Ok(())
+    }
+
+    /// Returns true if the given host is permitted for HTTP egress.
+    pub fn is_http_host_allowed(&self, host: &str) -> bool {
+        match &self.http_allow_hosts {
+            None => true,
+            Some(allow) => allow.contains(&host.trim().to_lowercase()),
+        }
+    }
+
+    /// Returns true if the given port is permitted for HTTP egress.
+    pub fn is_http_port_allowed(&self, port: u16) -> bool {
+        match &self.http_allow_ports {
+            None => true,
+            Some(allow) => allow.contains(&port),
+        }
     }
 
     /// Get a provider by ID
@@ -1956,6 +1991,20 @@ impl CapabilityRegistry {
                     operation: "ccos.network.http-fetch".to_string(),
                     capability: "ccos.network.http-fetch".to_string(),
                     context: format!("Host '{}' not in HTTP allowlist", host),
+                });
+            }
+        }
+
+        if let Some(allow_ports) = &self.http_allow_ports {
+            let port = request
+                .url
+                .port_or_known_default()
+                .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
+            if !allow_ports.contains(&port) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "ccos.network.http-fetch".to_string(),
+                    capability: "ccos.network.http-fetch".to_string(),
+                    context: format!("Port '{}' not in HTTP allowlist", port),
                 });
             }
         }

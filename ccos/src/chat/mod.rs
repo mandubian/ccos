@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
+use sha2::Digest;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -35,6 +36,7 @@ pub mod connector;
 pub mod gateway;
 pub mod quarantine;
 pub mod predicate;
+pub mod resource;
 pub mod run;
 pub mod session;
 pub mod spawner;
@@ -42,6 +44,7 @@ pub mod spawner;
 pub use connector::{ActivationMetadata, AttachmentRef, MessageDirection, MessageEnvelope};
 pub use predicate::Predicate;
 pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
+pub use resource::{new_shared_resource_store, ResourceRecord, ResourceStore, SharedResourceStore};
 pub use run::{BudgetContext, Run, RunState, RunStore, SharedRunStore, new_shared_run_store};
 pub use session::{ChatMessage, SessionRegistry};
 pub use spawner::{AgentSpawner, SpawnConfig, SpawnerFactory};
@@ -329,6 +332,7 @@ pub async fn register_chat_capabilities(
     quarantine: Arc<dyn QuarantineStore>,
     causal_chain: Arc<Mutex<CausalChain>>,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    resource_store: SharedResourceStore,
     connector: Option<Arc<dyn ChatConnector>>,
     connector_handle: Option<ConnectionHandle>,
 ) -> RuntimeResult<()> {
@@ -952,6 +956,387 @@ pub async fn register_chat_capabilities(
     }
 
     // -----------------------------------------------------------------
+    // Governed instruction resources (URLs/text/files) for autonomy
+    // -----------------------------------------------------------------
+    {
+        let quarantine = Arc::clone(&quarantine);
+        let chain = Arc::clone(&causal_chain);
+        let store = resource_store.clone();
+        let marketplace_for_ingest = Arc::clone(&marketplace);
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.resource.ingest",
+            "Resource / Ingest",
+            "Ingest an instruction resource (text or URL) into the governed store. Content is stored in quarantine; metadata is persisted to causal chain. Inputs: {session_id,run_id,step_id, (url|text), content_type?, label?, ttl_seconds?}.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let quarantine = Arc::clone(&quarantine);
+                let chain = Arc::clone(&chain);
+                let store = store.clone();
+                let marketplace = Arc::clone(&marketplace_for_ingest);
+                Box::pin(async move {
+                    let Value::Map(ref map) = inputs else {
+                        return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                    };
+
+                    let get_str = |k: &str| {
+                        map.get(&MapKey::String(k.to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                    };
+                    let session_id = get_str("session_id")
+                        .ok_or_else(|| RuntimeError::Generic("Missing session_id".to_string()))?;
+                    let run_id =
+                        get_str("run_id").ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
+                    let step_id = get_str("step_id")
+                        .ok_or_else(|| RuntimeError::Generic("Missing step_id".to_string()))?;
+
+                    let url = get_str("url");
+                    let text = get_str("text").or_else(|| get_str("content"));
+                    if url.is_none() && text.is_none() {
+                        return Err(RuntimeError::Generic(
+                            "ccos.resource.ingest: provide either url or text".to_string(),
+                        ));
+                    }
+                    if url.is_some() && text.is_some() {
+                        return Err(RuntimeError::Generic(
+                            "ccos.resource.ingest: provide only one of url or text".to_string(),
+                        ));
+                    }
+
+                    let content_type = get_str("content_type").unwrap_or_else(|| "text/plain".to_string());
+                    let label = get_str("label");
+                    let ttl_seconds = map
+                        .get(&MapKey::String("ttl_seconds".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("ttl_seconds".to_string()))))
+                        .and_then(|v| match v {
+                            Value::Integer(i) if *i > 0 => Some(*i as i64),
+                            _ => None,
+                        })
+                        .unwrap_or(7 * 24 * 60 * 60); // 7 days default
+
+                    let (source, content) = if let Some(url) = url {
+                        if url.starts_with("file://") {
+                            let path = url.trim_start_matches("file://");
+                            let content = std::fs::read_to_string(path).map_err(|e| {
+                                RuntimeError::Generic(format!(
+                                    "ccos.resource.ingest: failed to read file {}: {}",
+                                    path, e
+                                ))
+                            })?;
+                            (url, content)
+                        } else {
+                            let mut fetch_inputs = HashMap::new();
+                            fetch_inputs.insert(
+                                MapKey::String("url".to_string()),
+                                Value::String(url.clone()),
+                            );
+                            fetch_inputs.insert(
+                                MapKey::String("method".to_string()),
+                                Value::String("GET".to_string()),
+                            );
+                            let fetched = marketplace
+                                .execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs))
+                                .await?;
+                            let Value::Map(out) = fetched else {
+                                return Err(RuntimeError::Generic(
+                                    "ccos.resource.ingest: http-fetch returned non-map".to_string(),
+                                ));
+                            };
+                            let status = out
+                                .get(&MapKey::String("status".to_string()))
+                                .and_then(|v| match v {
+                                    Value::Integer(i) => Some(*i),
+                                    _ => None,
+                                })
+                                .unwrap_or(0);
+                            let body = out
+                                .get(&MapKey::String("body".to_string()))
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("")
+                                .to_string();
+                            if status >= 400 {
+                                return Err(RuntimeError::Generic(format!(
+                                    "ccos.resource.ingest: http-fetch failed with status {}",
+                                    status
+                                )));
+                            }
+                            (url, body)
+                        }
+                    } else {
+                        ("inline:text".to_string(), text.unwrap_or_default())
+                    };
+
+                    let bytes = content.as_bytes().to_vec();
+                    let size_bytes = bytes.len() as u64;
+                    let source_for_response = source.clone();
+
+                    // Store bytes in quarantine (encrypted-at-rest in FileQuarantineStore).
+                    let pointer_id = quarantine.put_bytes(
+                        bytes.clone(),
+                        chrono::Duration::seconds(ttl_seconds),
+                    )?;
+
+                    // Compute sha256 for provenance/audit.
+                    let mut hasher = sha2::Sha256::new();
+                    sha2::Digest::update(&mut hasher, &bytes);
+                    let digest = hasher.finalize();
+                    let sha256 = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                    let resource_id = uuid::Uuid::new_v4().to_string();
+                    let created_at_ms = chrono::Utc::now().timestamp_millis() as u64;
+
+                    {
+                        let mut guard = store
+                            .lock()
+                            .map_err(|_| RuntimeError::Generic("Failed to lock ResourceStore".to_string()))?;
+                        guard.upsert(crate::chat::ResourceRecord {
+                            id: resource_id.clone(),
+                            pointer_id: pointer_id.clone(),
+                            source: source.clone(),
+                            content_type: content_type.clone(),
+                            sha256: sha256.clone(),
+                            size_bytes,
+                            created_at_ms,
+                            session_id: Some(session_id.clone()),
+                            run_id: Some(run_id.clone()),
+                            step_id: Some(step_id.clone()),
+                            label: label.clone(),
+                        });
+                    }
+
+                    // Persist minimal provenance to causal chain (no raw content).
+                    let plan_id = format!("chat-plan-{}", chrono::Utc::now().timestamp_millis());
+                    let intent_id = session_id.clone();
+                    let mut meta = HashMap::new();
+                    meta.insert("resource_id".to_string(), Value::String(resource_id.clone()));
+                    meta.insert("pointer_id".to_string(), Value::String(pointer_id.clone()));
+                    meta.insert("source".to_string(), Value::String(source_for_response.clone()));
+                    meta.insert("content_type".to_string(), Value::String(content_type.clone()));
+                    meta.insert("sha256".to_string(), Value::String(sha256.clone()));
+                    meta.insert("size_bytes".to_string(), Value::Integer(size_bytes as i64));
+                    meta.insert("created_at_ms".to_string(), Value::Integer(created_at_ms as i64));
+                    if let Some(label) = &label {
+                        meta.insert("label".to_string(), Value::String(label.clone()));
+                    }
+                    record_chat_audit_event(
+                        &chain,
+                        &plan_id,
+                        &intent_id,
+                        &session_id,
+                        &run_id,
+                        &step_id,
+                        "resource.ingest",
+                        meta,
+                    )?;
+
+                    let preview: String = content.chars().take(400).collect();
+                    let truncated = preview.len() < content.len();
+
+                    Ok(Value::Map(HashMap::from([
+                        (MapKey::String("resource_id".to_string()), Value::String(resource_id)),
+                        (MapKey::String("pointer_id".to_string()), Value::String(pointer_id)),
+                        (MapKey::String("source".to_string()), Value::String(source_for_response)),
+                        (MapKey::String("content_type".to_string()), Value::String(content_type)),
+                        (MapKey::String("sha256".to_string()), Value::String(sha256)),
+                        (MapKey::String("size_bytes".to_string()), Value::Integer(size_bytes as i64)),
+                        (MapKey::String("preview".to_string()), Value::String(preview)),
+                        (MapKey::String("preview_truncated".to_string()), Value::Boolean(truncated)),
+                    ])))
+                })
+            }),
+            "low",
+            vec!["storage".to_string(), "network".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    {
+        let quarantine = Arc::clone(&quarantine);
+        let chain = Arc::clone(&causal_chain);
+        let store = resource_store.clone();
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.resource.get",
+            "Resource / Get",
+            "Retrieve an ingested instruction resource by resource_id. Inputs: {session_id,run_id,step_id, resource_id, max_len?}. Returns content (possibly truncated) plus metadata.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let quarantine = Arc::clone(&quarantine);
+                let chain = Arc::clone(&chain);
+                let store = store.clone();
+                Box::pin(async move {
+                    let Value::Map(ref map) = inputs else {
+                        return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                    };
+                    let get_str = |k: &str| {
+                        map.get(&MapKey::String(k.to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                    };
+                    let session_id = get_str("session_id")
+                        .ok_or_else(|| RuntimeError::Generic("Missing session_id".to_string()))?;
+                    let run_id =
+                        get_str("run_id").ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
+                    let step_id = get_str("step_id")
+                        .ok_or_else(|| RuntimeError::Generic("Missing step_id".to_string()))?;
+                    let resource_id = get_str("resource_id")
+                        .ok_or_else(|| RuntimeError::Generic("Missing resource_id".to_string()))?;
+
+                    let max_len = map
+                        .get(&MapKey::String("max_len".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("max_len".to_string()))))
+                        .and_then(|v| match v {
+                            Value::Integer(i) if *i > 0 => Some(*i as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(20_000);
+
+                    let record = {
+                        let guard = store
+                            .lock()
+                            .map_err(|_| RuntimeError::Generic("Failed to lock ResourceStore".to_string()))?;
+                        guard
+                            .get(&resource_id)
+                            .cloned()
+                            .ok_or_else(|| RuntimeError::Generic("Resource not found".to_string()))?
+                    };
+
+                    let bytes = quarantine.get_bytes(&record.pointer_id)?;
+                    let content = String::from_utf8_lossy(&bytes).to_string();
+                    let truncated = content.len() > max_len;
+                    let content_out = if truncated {
+                        content.chars().take(max_len).collect::<String>()
+                    } else {
+                        content.clone()
+                    };
+
+                    // Audit access (no raw content in chain).
+                    let plan_id = format!("chat-plan-{}", chrono::Utc::now().timestamp_millis());
+                    let intent_id = session_id.clone();
+                    let mut meta = HashMap::new();
+                    meta.insert("resource_id".to_string(), Value::String(resource_id.clone()));
+                    meta.insert("pointer_id".to_string(), Value::String(record.pointer_id.clone()));
+                    meta.insert("source".to_string(), Value::String(record.source.clone()));
+                    meta.insert("content_type".to_string(), Value::String(record.content_type.clone()));
+                    meta.insert("sha256".to_string(), Value::String(record.sha256.clone()));
+                    meta.insert("size_bytes".to_string(), Value::Integer(record.size_bytes as i64));
+                    meta.insert("max_len".to_string(), Value::Integer(max_len as i64));
+                    record_chat_audit_event(
+                        &chain,
+                        &plan_id,
+                        &intent_id,
+                        &session_id,
+                        &run_id,
+                        &step_id,
+                        "resource.get",
+                        meta,
+                    )?;
+
+                    Ok(Value::Map(HashMap::from([
+                        (
+                            MapKey::String("resource_id".to_string()),
+                            Value::String(resource_id),
+                        ),
+                        (
+                            MapKey::String("content".to_string()),
+                            Value::String(content_out),
+                        ),
+                        (
+                            MapKey::String("content_truncated".to_string()),
+                            Value::Boolean(truncated),
+                        ),
+                        (
+                            MapKey::String("content_type".to_string()),
+                            Value::String(record.content_type),
+                        ),
+                        (
+                            MapKey::String("source".to_string()),
+                            Value::String(record.source),
+                        ),
+                        (
+                            MapKey::String("sha256".to_string()),
+                            Value::String(record.sha256),
+                        ),
+                        (
+                            MapKey::String("size_bytes".to_string()),
+                            Value::Integer(record.size_bytes as i64),
+                        ),
+                    ])))
+                })
+            }),
+            "low",
+            vec!["storage".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    {
+        let store = resource_store.clone();
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.resource.list",
+            "Resource / List",
+            "List ingested resources for a session or run. Inputs: {session_id? run_id?}. Returns metadata only (no content).",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let store = store.clone();
+                Box::pin(async move {
+                    let Value::Map(ref map) = inputs else {
+                        return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                    };
+                    let get_str = |k: &str| {
+                        map.get(&MapKey::String(k.to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                    };
+                    let session_id = get_str("session_id");
+                    let run_id = get_str("run_id");
+                    if session_id.is_none() && run_id.is_none() {
+                        return Err(RuntimeError::Generic(
+                            "ccos.resource.list: provide session_id or run_id".to_string(),
+                        ));
+                    }
+
+                    let records = {
+                        let guard = store
+                            .lock()
+                            .map_err(|_| RuntimeError::Generic("Failed to lock ResourceStore".to_string()))?;
+                        if let Some(rid) = run_id.as_deref() {
+                            guard.list_for_run(rid)
+                        } else {
+                            guard.list_for_session(session_id.as_deref().unwrap_or_default())
+                        }
+                    };
+
+                    let mut out = Vec::new();
+                    for r in records {
+                        out.push(Value::Map(HashMap::from([
+                            (MapKey::String("resource_id".to_string()), Value::String(r.id.clone())),
+                            (MapKey::String("pointer_id".to_string()), Value::String(r.pointer_id.clone())),
+                            (MapKey::String("source".to_string()), Value::String(r.source.clone())),
+                            (MapKey::String("content_type".to_string()), Value::String(r.content_type.clone())),
+                            (MapKey::String("sha256".to_string()), Value::String(r.sha256.clone())),
+                            (MapKey::String("size_bytes".to_string()), Value::Integer(r.size_bytes as i64)),
+                            (MapKey::String("created_at_ms".to_string()), Value::Integer(r.created_at_ms as i64)),
+                        ])));
+                    }
+                    Ok(Value::Vector(out))
+                })
+            }),
+            "low",
+            vec!["storage".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    // -----------------------------------------------------------------
     // Skill Capabilities (for agent to load and execute skills)
     // -----------------------------------------------------------------
     {
@@ -1002,17 +1387,63 @@ pub async fn register_chat_capabilities(
                         )));
                     }
                     
-                    // Fetch and parse the skill definition using the shared loader
-                    // This supports http(s):// and file:// URLs correctly using common logic.
-                    let loaded_skill = crate::skills::loader::load_skill_from_url(&url).await.map_err(|e| {
-                        RuntimeError::Generic(format!("ccos.skill.load: {}", e))
-                    })?;
+                    // Fetch the skill definition through governed egress (no direct HTTP here),
+                    // then parse it from content. This keeps library code free of network effects.
+                    let skill_content = if url.starts_with("file://") {
+                        let path = url.trim_start_matches("file://");
+                        std::fs::read_to_string(path).map_err(|e| {
+                            RuntimeError::Generic(format!(
+                                "ccos.skill.load: failed to read file {}: {}",
+                                path, e
+                            ))
+                        })?
+                    } else {
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(
+                            MapKey::String("url".to_string()),
+                            Value::String(url.clone()),
+                        );
+                        fetch_inputs.insert(
+                            MapKey::String("method".to_string()),
+                            Value::String("GET".to_string()),
+                        );
+                        let fetched = marketplace
+                            .execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs))
+                            .await?;
+                        let Value::Map(map) = fetched else {
+                            return Err(RuntimeError::Generic(
+                                "ccos.skill.load: http-fetch returned non-map".to_string(),
+                            ));
+                        };
+                        let status = map
+                            .get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v {
+                                Value::Integer(i) => Some(*i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let body = map
+                            .get(&MapKey::String("body".to_string()))
+                            .and_then(|v| v.as_string())
+                            .unwrap_or("")
+                            .to_string();
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!(
+                                "ccos.skill.load: http-fetch failed with status {}",
+                                status
+                            )));
+                        }
+                        body
+                    };
+
+                    let loaded_skill =
+                        crate::skills::loader::load_skill_from_content(&url, &skill_content)
+                            .map_err(|e| RuntimeError::Generic(format!("ccos.skill.load: {}", e)))?;
 
                     let skill = loaded_skill.skill;
-                    let skill_content = loaded_skill.raw_content;
                     let skill_id = skill.id.clone();
-                    
-                    // Extract base URL from the (possibly resolved) source URL
+
+                    // Extract base URL from the source URL
                     let base_url = extract_base_url(&loaded_skill.source_url);
                     
                     // Register a capability for each operation found

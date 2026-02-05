@@ -114,6 +114,12 @@ struct Args {
     /// Persist discovered per-skill bearer tokens to .ccos/secrets.toml (opt-in).
     #[arg(long, env = "CCOS_AGENT_PERSIST_SKILL_SECRETS", default_value = "false")]
     persist_skill_secrets: bool,
+
+    /// Known skill URL hints (repeatable). Format: "name=url".
+    /// When the user mentions a skill by name the agent will use the hinted URL
+    /// instead of asking. Example: --skill-url-hint "moltbook=http://localhost:8765/skill.md"
+    #[arg(long, env = "CCOS_SKILL_URL_HINTS", value_delimiter = ',')]
+    skill_url_hint: Option<Vec<String>>,
 }
 
 impl Args {
@@ -337,6 +343,10 @@ struct AgentRuntime {
     agent_id: Option<String>,
     agent_name: Option<String>,
     llm_context_allowlist: Vec<String>,
+    /// Parsed skill URL hints: name -> url
+    skill_url_hints: HashMap<String, String>,
+    /// Loaded skill definitions (raw content): skill_id -> definition text
+    loaded_skill_definitions: HashMap<String, String>,
     // ── Budget Tracking ─────────────────────────────────────────────────────
     /// Number of actions executed since agent start
     step_count: u32,
@@ -400,6 +410,26 @@ impl AgentRuntime {
             None
         };
 
+        // Parse --skill-url-hint entries ("name=url")
+        let skill_url_hints: HashMap<String, String> = args
+            .skill_url_hint
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|entry| {
+                let parts: Vec<&str> = entry.splitn(2, '=').collect();
+                if parts.len() == 2 {
+                    Some((parts[0].to_string(), parts[1].to_string()))
+                } else {
+                    warn!("Ignoring malformed --skill-url-hint: {}", entry);
+                    None
+                }
+            })
+            .collect();
+        if !skill_url_hints.is_empty() {
+            info!("Loaded {} skill URL hint(s)", skill_url_hints.len());
+        }
+
         Self {
             args,
             client,
@@ -415,6 +445,8 @@ impl AgentRuntime {
             agent_id,
             agent_name,
             llm_context_allowlist,
+            skill_url_hints,
+            loaded_skill_definitions: HashMap::new(),
             // Budget tracking
             step_count: 0,
             start_time: Instant::now(),
@@ -711,6 +743,18 @@ impl AgentRuntime {
         Ok(())
     }
 
+    /// Record a synthetic message in the conversation history so the LLM
+    /// sees agent responses and action results on subsequent turns.
+    fn record_in_history(&mut self, sender: &str, content: String, channel_id: &str) {
+        self.message_history.push(ChatEvent {
+            id: format!("synth-{}", uuid::Uuid::new_v4()),
+            channel_id: channel_id.to_string(),
+            content,
+            sender: sender.to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+        });
+    }
+
     async fn send_simple_echo(&self, event: &ChatEvent) -> anyhow::Result<()> {
         self.send_response(
             event,
@@ -816,6 +860,7 @@ impl AgentRuntime {
                     // Hybrid: send immediate response first (what we're about to do).
                     if !plan.response.is_empty() {
                         self.send_response(&event, &plan.response).await?;
+                        self.record_in_history("agent", plan.response.clone(), &event.channel_id);
                     }
 
                     // Collect follow-up events (e.g., continue after skill load)
@@ -824,6 +869,8 @@ impl AgentRuntime {
                     let mut completed_actions: Vec<String> = Vec::new();
                     let mut missing_inputs: Vec<(String, Vec<String>)> = Vec::new();
                     let mut skill_load_failures: Vec<String> = Vec::new();
+                    // User-facing messages extracted from action results (e.g., verification tweets, instructions).
+                    let mut user_facing_messages: Vec<String> = Vec::new();
 
                     // Execute planned actions through Gateway
                     for (idx, action) in plan.actions.iter().enumerate() {
@@ -1003,6 +1050,39 @@ impl AgentRuntime {
                             continue;
                         }
 
+                        // Guardrail: if the LLM planned an action but left required
+                        // inputs as null, it means it doesn't have the value yet (it
+                        // likely asked the user in the response). Skip the action and
+                        // treat the null fields as missing inputs that need user input.
+                        if let Some(obj) = inputs.as_object() {
+                            let skip_keys = ["session_id", "run_id", "step_id", "content_class"];
+                            let mut null_fields: Vec<String> = obj
+                                .iter()
+                                .filter(|(k, v)| v.is_null() && !skip_keys.contains(&k.as_str()))
+                                .map(|(k, _)| k.clone())
+                                .collect();
+                            // Also check inside nested "params" (used by ccos.skill.execute).
+                            if let Some(params) = obj.get("params").and_then(|v| v.as_object()) {
+                                for (k, v) in params {
+                                    if v.is_null() && !skip_keys.contains(&k.as_str()) {
+                                        null_fields.push(format!("params.{}", k));
+                                    }
+                                }
+                            }
+                            if !null_fields.is_empty() {
+                                warn!(
+                                    "Skipping {}: LLM left required inputs as null: {}",
+                                    action.capability_id,
+                                    null_fields.join(", ")
+                                );
+                                missing_inputs.push((
+                                    action.capability_id.clone(),
+                                    null_fields,
+                                ));
+                                continue;
+                            }
+                        }
+
                         // Best-effort: if a direct skill capability is being called (skill.op),
                         // inject Authorization header from cached onboarding secret.
                         Self::maybe_inject_direct_skill_auth(
@@ -1042,6 +1122,11 @@ impl AgentRuntime {
                                     warn!("Action {} failed: {}", action.capability_id, error_msg);
                                     failed_actions
                                         .push(format!("{}: {}", action.capability_id, error_msg));
+                                    self.record_in_history(
+                                        "system",
+                                        format!("[action failed] {}: {}", action.capability_id, error_msg),
+                                        &event.channel_id,
+                                    );
                                     continue;
                                 }
                                 let redacted_response = serde_json::to_value(&response)
@@ -1113,6 +1198,50 @@ impl AgentRuntime {
                                     }
                                 }
 
+                                // Extract user-facing messages from the response body.
+                                // Many skill operations return a JSON body with "message",
+                                // "verification_tweet_text", or similar fields that the user
+                                // needs to see and act on.
+                                if response.success {
+                                    if let Some(result) = &response.result {
+                                        if let Some(body_str) =
+                                            result.get("body").and_then(|v| v.as_str())
+                                        {
+                                            if let Ok(body_json) =
+                                                serde_json::from_str::<serde_json::Value>(body_str)
+                                            {
+                                                // Collect all string fields that look user-facing.
+                                                let mut parts = Vec::new();
+                                                if let Some(msg) =
+                                                    body_json.get("message").and_then(|v| v.as_str())
+                                                {
+                                                    parts.push(msg.to_string());
+                                                }
+                                                // Surface any field containing instructions/text for the user
+                                                for key in &[
+                                                    "verification_tweet_text",
+                                                    "instructions",
+                                                    "next_step",
+                                                    "action_required",
+                                                ] {
+                                                    if let Some(val) =
+                                                        body_json.get(*key).and_then(|v| v.as_str())
+                                                    {
+                                                        parts.push(format!("{}: {}", key, val));
+                                                    }
+                                                }
+                                                if !parts.is_empty() {
+                                                    user_facing_messages.push(format!(
+                                                        "[{}] {}",
+                                                        action.capability_id,
+                                                        parts.join("\n")
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // If a skill operation is executed directly and returns a secret, cache it.
                                 if response.success {
                                     self.maybe_cache_secret_from_response(
@@ -1120,8 +1249,18 @@ impl AgentRuntime {
                                         &response,
                                     );
                                 }
-                                completed_actions.push(action_summary);
+                                completed_actions.push(action_summary.clone());
                                 self.increment_step();
+
+                                // Record action result in history so LLM context carries forward.
+                                let result_summary = if let Some(result) = &response.result {
+                                    // Compact summary: capability + key fields (redacted)
+                                    let redacted = redact_json_for_logs(result);
+                                    format!("[action ok] {}: {}", action.capability_id, redacted)
+                                } else {
+                                    format!("[action ok] {}", action.capability_id)
+                                };
+                                self.record_in_history("system", result_summary, &event.channel_id);
 
                                 // Check if this was a skill load and we need to continue onboarding
                                 if action.capability_id == "ccos.skill.load" && response.success {
@@ -1176,6 +1315,18 @@ impl AgentRuntime {
                                                 .get("skill_id")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("unknown");
+
+                                            // Store the raw skill definition for future LLM context.
+                                            if let Some(def_text) = result
+                                                .get("skill_definition")
+                                                .and_then(|v| v.as_str())
+                                            {
+                                                self.loaded_skill_definitions.insert(
+                                                    skill_id.to_string(),
+                                                    def_text.to_string(),
+                                                );
+                                            }
+
                                             let cap_lines = result
                                                 .get("registered_capabilities")
                                                 .or_else(|| result.get("capabilities"))
@@ -1188,10 +1339,30 @@ impl AgentRuntime {
                                                         .join("\n")
                                                 })
                                                 .unwrap_or_else(|| "- <none>".to_string());
+
+                                            // Include skill definition in follow-up so LLM
+                                            // can reason about onboarding steps.
+                                            let def_block = result
+                                                .get("skill_definition")
+                                                .and_then(|v| v.as_str())
+                                                .map(|d| {
+                                                    // Truncate if very long to keep prompt manageable.
+                                                    let max = 3000;
+                                                    if d.len() > max {
+                                                        format!(
+                                                            "\n\nSkill definition (truncated):\n{}...",
+                                                            &d[..max]
+                                                        )
+                                                    } else {
+                                                        format!("\n\nSkill definition:\n{}", d)
+                                                    }
+                                                })
+                                                .unwrap_or_default();
+
                                             // Create a follow-up to continue onboarding
                                             let follow_up_content = format!(
-                                                "The skill has been loaded. Skill ID: {}\n\nRegistered capabilities:\n{}\n\nPlease continue with the onboarding process to make this skill operational. Use ccos.skill.execute with this skill_id and the capability names above.",
-                                                skill_id, cap_lines
+                                                "The skill has been loaded. Skill ID: {}\n\nRegistered capabilities:\n{}{}\n\nPlease continue with the onboarding process to make this skill operational. Use ccos.skill.execute with this skill_id and the capability names above. Follow the onboarding steps described in the skill definition.",
+                                                skill_id, cap_lines, def_block
                                             );
                                             let follow_up_event = ChatEvent {
                                                 id: format!("followup-{}", event.id),
@@ -1238,6 +1409,15 @@ impl AgentRuntime {
                                     Some("awaiting_user_input"),
                                 )
                                 .await;
+                        } else if !user_facing_messages.is_empty() {
+                            // Action results contain instructions for the user (e.g. "post this tweet").
+                            // The run is not done -- a human action is pending.
+                            let _ = self
+                                .transition_run_state(
+                                    "PausedExternalEvent",
+                                    Some("awaiting_human_action"),
+                                )
+                                .await;
                         } else if !plan.actions.is_empty() && !has_follow_up {
                             let predicate = self
                                 .fetch_run_completion_predicate()
@@ -1277,6 +1457,14 @@ impl AgentRuntime {
                             }
                         }
 
+                        // Include user-facing messages from action results (verification tweets, instructions, etc.)
+                        if !user_facing_messages.is_empty() {
+                            summary.push_str("\nAction results:\n");
+                            for msg in &user_facing_messages {
+                                summary.push_str(&format!("{}\n", msg));
+                            }
+                        }
+
                         summary.push_str("\nNext:\n");
                         if !skill_load_failures.is_empty() {
                             summary.push_str("- The skill failed to load. Please provide a valid skill URL (Markdown/YAML/JSON), or the correct skill id/registry entry.\n");
@@ -1289,6 +1477,10 @@ impl AgentRuntime {
                                     cap_id
                                 ));
                             }
+                        } else if !user_facing_messages.is_empty() {
+                            // The action results contain instructions for the user -- don't
+                            // say "tell me to continue" because a human action is pending.
+                            summary.push_str("- Please follow the instructions above and provide the required information so I can proceed with the next step.\n");
                         } else if skill_load_failures.is_empty() {
                             // Heuristic next-steps for multi-stage onboarding flows:
                             summary.push_str("- Tell me if you want me to continue.\n");
@@ -1322,6 +1514,9 @@ impl AgentRuntime {
                                 serde_json::Value::Object(inputs),
                             )
                             .await;
+
+                        // Record summary in history for next-turn context.
+                        self.record_in_history("agent", summary, &event.channel_id);
                     }
 
                     // Process any follow-up events (e.g., continue onboarding)
@@ -1441,6 +1636,24 @@ impl AgentRuntime {
             if let Some(val) = self.context_value(key) {
                 lines.push(format!("{}: {}", key, val));
             }
+        }
+        // Expose skill URL hints so the LLM can resolve skill names to URLs.
+        for (name, url) in &self.skill_url_hints {
+            lines.push(format!("skill_url_hint: {}={}", name, url));
+        }
+        // Include loaded skill definitions so the LLM can reason about
+        // onboarding steps, operations, and authentication flows.
+        for (skill_id, definition) in &self.loaded_skill_definitions {
+            let max = 3000;
+            let def_text = if definition.len() > max {
+                format!("{}...", &definition[..max])
+            } else {
+                definition.clone()
+            };
+            lines.push(format!(
+                "loaded_skill[{}] definition:\n{}",
+                skill_id, def_text
+            ));
         }
         lines.join("\n")
     }

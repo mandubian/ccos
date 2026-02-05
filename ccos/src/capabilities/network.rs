@@ -10,6 +10,7 @@ use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
 
 fn get_map_string(map: &HashMap<MapKey, Value>, key: &str) -> Option<String> {
     map.get(&MapKey::Keyword(Keyword(key.to_string())))
@@ -29,7 +30,7 @@ fn get_map_value<'a>(map: &'a HashMap<MapKey, Value>, key: &str) -> Option<&'a V
 pub async fn register_network_capabilities(
     marketplace: &CapabilityMarketplace,
 ) -> RuntimeResult<()> {
-    // Input schema for http-fetch: {:url String :method? String :headers? Map :body? String}
+    // Input schema for http-fetch: {:url String :method? String :headers? Map :body? String :timeout_ms? Int}
     let input_schema = TypeExpr::Map {
         entries: vec![
             MapTypeEntry {
@@ -55,11 +56,16 @@ pub async fn register_network_capabilities(
                 value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
                 optional: true,
             },
+            MapTypeEntry {
+                key: Keyword("timeout_ms".to_string()),
+                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                optional: true,
+            },
         ],
         wildcard: None,
     };
 
-    // Output schema: {:status Int :body String :headers Map}
+    // Output schema: {:status Int :body String :headers Map :usage? {:network_egress_bytes Int :network_ingress_bytes Int}}
     let output_schema = TypeExpr::Map {
         entries: vec![
             MapTypeEntry {
@@ -80,17 +86,39 @@ pub async fn register_network_capabilities(
                 }),
                 optional: false,
             },
+            MapTypeEntry {
+                key: Keyword("usage".to_string()),
+                value_type: Box::new(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("network_egress_bytes".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("network_ingress_bytes".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                optional: true,
+            },
         ],
         wildcard: None,
     };
 
+    let capability_registry = Arc::clone(&marketplace.capability_registry);
+
     // Register ccos.network.http-fetch - async HTTP capability
     let handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync> =
-        Arc::new(|input| {
+        Arc::new(move |input| {
             let input = input.clone();
+            let capability_registry = Arc::clone(&capability_registry);
             Box::pin(async move {
                 // Extract parameters from input
-                let (url, method, headers_map, body) = match &input {
+                let (url, method, headers_map, body, timeout_ms) = match &input {
                     Value::Map(map) => {
                         let url = get_map_string(map, "url").ok_or_else(|| {
                             RuntimeError::Generic("Missing required 'url' parameter".to_string())
@@ -99,7 +127,11 @@ pub async fn register_network_capabilities(
                             get_map_string(map, "method").unwrap_or_else(|| "GET".to_string());
                         let headers = get_map_value(map, "headers");
                         let body = get_map_string(map, "body");
-                        (url, method, headers.cloned(), body)
+                        let timeout_ms = get_map_value(map, "timeout_ms").and_then(|v| match v {
+                            Value::Integer(i) if *i > 0 => Some(*i as u64),
+                            _ => None,
+                        });
+                        (url, method, headers.cloned(), body, timeout_ms)
                     }
                     Value::List(args) | Value::Vector(args) => {
                         // Positional: url, method?, headers?, body?
@@ -119,7 +151,7 @@ pub async fn register_network_capabilities(
                         let body = args
                             .get(3)
                             .and_then(|v| v.as_string().map(|s| s.to_string()));
-                        (url, method, headers, body)
+                        (url, method, headers, body, None)
                     }
                     _ => {
                         return Err(RuntimeError::TypeError {
@@ -130,13 +162,41 @@ pub async fn register_network_capabilities(
                     }
                 };
 
+                // Enforce allowlists from the registry (gateway-controlled egress boundary).
+                let parsed = Url::parse(&url).map_err(|e| {
+                    RuntimeError::NetworkError(format!("Invalid URL for http-fetch: {}", e))
+                })?;
+                let host = parsed
+                    .host_str()
+                    .ok_or_else(|| RuntimeError::NetworkError("URL missing host".to_string()))?
+                    .to_lowercase();
+                let port = parsed
+                    .port_or_known_default()
+                    .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
+
+                {
+                    let reg = capability_registry.read().await;
+                    if !reg.is_http_host_allowed(&host) {
+                        return Err(RuntimeError::SecurityViolation {
+                            operation: "ccos.network.http-fetch".to_string(),
+                            capability: "ccos.network.http-fetch".to_string(),
+                            context: format!("Host '{}' not in HTTP allowlist", host),
+                        });
+                    }
+                    if !reg.is_http_port_allowed(port) {
+                        return Err(RuntimeError::SecurityViolation {
+                            operation: "ccos.network.http-fetch".to_string(),
+                            capability: "ccos.network.http-fetch".to_string(),
+                            context: format!("Port '{}' not in HTTP allowlist", port),
+                        });
+                    }
+                }
+
                 // Build reqwest client
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
-                    .map_err(|e| {
-                        RuntimeError::Generic(format!("Failed to create HTTP client: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
 
                 let method_enum =
                     reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
@@ -145,7 +205,7 @@ pub async fn register_network_capabilities(
 
                 // Add headers if provided
                 let mut has_content_type = false;
-                if let Some(Value::Map(hdrs)) = headers_map {
+                if let Some(Value::Map(hdrs)) = headers_map.as_ref() {
                     for (key, value) in hdrs.iter() {
                         let key_str = match key {
                             MapKey::String(s) => s.clone(),
@@ -162,6 +222,7 @@ pub async fn register_network_capabilities(
                 }
 
                 // Add body if provided
+                let body_len = body.as_ref().map(|b| b.len() as u64).unwrap_or(0);
                 if let Some(body_str) = body {
                     let trimmed = body_str.trim();
                     let looks_json = trimmed.starts_with('{') || trimmed.starts_with('[');
@@ -169,6 +230,10 @@ pub async fn register_network_capabilities(
                         request = request.header("Content-Type", "application/json");
                     }
                     request = request.body(body_str);
+                }
+
+                if let Some(ms) = timeout_ms {
+                    request = request.timeout(std::time::Duration::from_millis(ms));
                 }
 
                 // Execute request
@@ -181,14 +246,38 @@ pub async fn register_network_capabilities(
                 let response_headers = response.headers().clone();
                 let body_text = response.text().await.unwrap_or_default();
 
+                // Best-effort usage accounting for budgeting/telemetry
+                let request_body_len = body_len;
+                let request_header_len: u64 = match &headers_map {
+                    Some(Value::Map(hdrs)) => hdrs
+                        .iter()
+                        .map(|(k, v)| {
+                            let ks = match k {
+                                MapKey::String(s) => s.len(),
+                                MapKey::Keyword(k) => k.0.len(),
+                                MapKey::Integer(i) => i.to_string().len(),
+                            };
+                            let vs = match v {
+                                Value::String(s) => s.len(),
+                                other => other.to_string().len(),
+                            };
+                            (ks + vs) as u64
+                        })
+                        .sum(),
+                    _ => 0,
+                };
+                let request_url_len = url.len() as u64;
+                let network_egress_bytes = request_body_len + request_header_len + request_url_len;
+                let network_ingress_bytes = body_text.len() as u64;
+
                 // Build response map
                 let mut result_map: HashMap<MapKey, Value> = HashMap::new();
                 result_map.insert(
-                    MapKey::Keyword(Keyword("status".to_string())),
+                    MapKey::String("status".to_string()),
                     Value::Integer(status),
                 );
                 result_map.insert(
-                    MapKey::Keyword(Keyword("body".to_string())),
+                    MapKey::String("body".to_string()),
                     Value::String(body_text),
                 );
 
@@ -201,8 +290,22 @@ pub async fn register_network_capabilities(
                     );
                 }
                 result_map.insert(
-                    MapKey::Keyword(Keyword("headers".to_string())),
+                    MapKey::String("headers".to_string()),
                     Value::Map(headers_result),
+                );
+
+                let mut usage: HashMap<MapKey, Value> = HashMap::new();
+                usage.insert(
+                    MapKey::String("network_egress_bytes".to_string()),
+                    Value::Integer(network_egress_bytes as i64),
+                );
+                usage.insert(
+                    MapKey::String("network_ingress_bytes".to_string()),
+                    Value::Integer(network_ingress_bytes as i64),
+                );
+                result_map.insert(
+                    MapKey::String("usage".to_string()),
+                    Value::Map(usage),
                 );
 
                 Ok(Value::Map(result_map))
