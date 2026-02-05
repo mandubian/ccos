@@ -410,6 +410,7 @@ impl FileApprovalStorage {
                 reasons: vec!["Loaded from filesystem".into()],
             },
             context: None,
+            metadata: std::collections::HashMap::new(),
             response: None,
         })
     }
@@ -663,6 +664,7 @@ mod tests {
             Some("test context".to_string()),
         );
         request.id = id.to_string(); // Override auto-generated ID for testing
+        request.metadata = std::collections::HashMap::new();
         request
     }
 

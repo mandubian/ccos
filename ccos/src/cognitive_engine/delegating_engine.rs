@@ -1054,12 +1054,89 @@ The tool name MUST be one of: {}"#,
         // Generate delegation plan using the configured LLM provider.
         // Build a StorableIntent similar to the direct plan path but include
         // delegation-specific metadata so providers can tailor prompts.
+        let mut goal = intent.goal.clone();
+
+        // [Onboarding Integration] Check if the selected agent requires onboarding
+        if let Some(onboarding_json) = selected_agent.metadata.get("onboarding_config") {
+            let mut is_operational = false;
+
+            // Check current status in WorkingMemory
+            if let Some(wm) = &self.working_memory {
+                if let Ok(guard) = wm.lock() {
+                    let key = format!("skill:{}:onboarding_state", selected_agent.id);
+                    if let Ok(Some(entry)) = guard.get(&key) {
+                        if let Ok(state) = serde_json::from_str::<
+                            crate::skills::types::SkillOnboardingState,
+                        >(&entry.content)
+                        {
+                            if state.status == crate::skills::types::OnboardingState::Operational {
+                                is_operational = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !is_operational {
+                // Agent is not operational, inject raw onboarding content for LLM reasoning
+                goal.push_str("\n\n### SKILL SETUP INSTRUCTIONS\n");
+                goal.push_str("This skill requires setup before it can be used. ");
+                goal.push_str("Read the following instructions carefully and execute the necessary steps.\n\n");
+
+                if let Ok(config) =
+                    serde_json::from_str::<crate::skills::types::OnboardingConfig>(onboarding_json)
+                {
+                    // Prefer raw content - let the LLM reason about what to do
+                    if !config.raw_content.is_empty() {
+                        goal.push_str(&config.raw_content);
+                        goal.push_str("\n\n");
+                    } else if !config.steps.is_empty() {
+                        // Backwards compat: if structured steps exist, format them
+                        for (i, step) in config.steps.iter().enumerate() {
+                            goal.push_str(&format!("{}. **{}**: ", i + 1, step.id));
+                            match step.step_type {
+                                crate::skills::types::OnboardingStepType::ApiCall => {
+                                    if let Some(op) = &step.operation {
+                                        goal.push_str(&format!("Call operation `{}`", op));
+                                    }
+                                }
+                                crate::skills::types::OnboardingStepType::HumanAction => {
+                                    if let Some(action) = &step.action {
+                                        goal.push_str(&format!(
+                                            "REQUIRING HUMAN ACTION: {} - {}",
+                                            action.title, action.instructions
+                                        ));
+                                    }
+                                }
+                                crate::skills::types::OnboardingStepType::Condition => {
+                                    goal.push_str("Verify condition");
+                                }
+                            }
+                            if let Some(verify) = &step.verify_on_success {
+                                goal.push_str(&format!(" (Verify with: {})", verify));
+                            }
+                            goal.push_str("\n");
+                        }
+                    }
+
+                    // Add final step to mark operational
+                    goal.push_str(&format!(
+                        "\nOnce setup is complete, call `(call :ccos.skill.onboarding.mark_operational {{:skill_id \"{}\"}})` to mark the agent as operational.\n",
+                        selected_agent.id
+                    ));
+                } else {
+                    // Fallback if JSON parsing fails but key exists
+                    goal.push_str("Note: Onboarding configuration found but could not be parsed. Proceed with general reasoning to set up the skill.\n");
+                }
+            }
+        }
+
         let storable_intent = StorableIntent {
             intent_id: intent.intent_id.clone(),
             name: intent.name.clone(),
             original_request: intent.original_request.clone(),
             rtfs_intent_source: "".to_string(),
-            goal: intent.goal.clone(),
+            goal,
             constraints: intent
                 .constraints
                 .iter()

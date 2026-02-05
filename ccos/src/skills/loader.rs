@@ -64,13 +64,17 @@ pub struct LoadedSkillInfo {
     pub capabilities_to_register: Vec<String>,
     /// Whether approval is needed
     pub requires_approval: bool,
+    /// Raw content of the skill definition
+    pub raw_content: String,
 }
 
 /// Load a skill from a URL
 pub async fn load_skill_from_url(url: &str) -> Result<LoadedSkillInfo, LoadError> {
-    // Basic URL validation (defense-in-depth): only allow http(s) sources for now.
-    // This keeps skill loading consistent with the spec's security posture.
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    // URL validation
+    let is_http = url.starts_with("http://") || url.starts_with("https://");
+    let is_file = url.starts_with("file://");
+
+    if !is_http && !is_file {
         return Err(LoadError::InvalidUrl(url.to_string()));
     }
 
@@ -103,11 +107,21 @@ pub async fn load_skill_from_url(url: &str) -> Result<LoadedSkillInfo, LoadError
         source_url: url.to_string(),
         format,
         requires_approval,
+        raw_content: content,
     })
 }
 
-/// Fetch content from URL using reqwest
+/// Fetch content from URL (HTTP or File)
 async fn fetch_url_content(url: &str) -> Result<String, LoadError> {
+    println!("DEBUG: [SkillLoader] Fetching content for URL: {}", url);
+    log::info!("[SkillLoader] Fetching content for URL: {}", url);
+    if url.starts_with("file://") {
+        let path = url.trim_start_matches("file://");
+        log::info!("[SkillLoader] reading file path: {}", path);
+        return std::fs::read_to_string(path)
+            .map_err(|e| LoadError::Network(format!("Failed to read file {}: {}", path, e)));
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -174,18 +188,13 @@ pub fn validate_skill(skill: &Skill) -> Result<(), LoadError> {
     if skill.id.is_empty() {
         return Err(LoadError::Validation("Skill ID is empty".to_string()));
     }
-    if skill.operations.is_empty() {
+    if skill.operations.is_empty() && skill.capabilities.is_empty() {
         return Err(LoadError::Validation(format!(
-            "Skill '{}' has no operations defined",
+            "Skill '{}' has no operations AND no registered capabilities",
             skill.id
         )));
     }
-    if skill.capabilities.is_empty() {
-        return Err(LoadError::Validation(format!(
-            "Skill '{}' has no registered capabilities",
-            skill.id
-        )));
-    }
+    // We allow skills to have only operations (implicit capabilities) or only capabilities (wrapper).
     Ok(())
 }
 
@@ -219,6 +228,8 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
     let mut operations = skill.operations.clone();
     let mut instructions = skill.instructions.clone();
     let mut secrets = skill.secrets.clone();
+    let onboarding_steps = Vec::new();
+    let mut onboarding_raw_content = String::new();
 
     let mut in_code_block = false;
     let mut code_block_content = String::new();
@@ -237,6 +248,11 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
                 } else {
                     current_section.clone()
                 };
+                log::info!(
+                    "[SkillLoader] Found potential operation: '{}' content len: {}",
+                    op_name,
+                    code_block_content.len()
+                );
 
                 let input_schema = extract_input_schema_from_code(&code_block_content);
                 operations.push(SkillOperation {
@@ -292,6 +308,13 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
                 }
                 instructions.push_str(trimmed);
                 instructions.push('\n');
+            } else if current_section == "onboarding" || current_section == "setup" {
+                // Capture raw onboarding content for LLM reasoning
+                // The agent will read and interpret this prose to determine setup steps
+                onboarding_raw_content.push_str(trimmed);
+                onboarding_raw_content.push('\n');
+                instructions.push_str(trimmed);
+                instructions.push('\n');
             } else {
                 if trimmed.contains("Base URL:") || trimmed.contains("api_base:") {
                     if let Some(url) = extract_endpoint_from_curl(trimmed) {
@@ -323,6 +346,21 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
     skill.operations = operations;
     skill.secrets = secrets;
 
+    // Set onboarding config: prefer raw content for LLM reasoning,
+    // fall back to structured steps if parsed from YAML/JSON
+    if !onboarding_raw_content.is_empty() {
+        skill.onboarding = Some(crate::skills::types::OnboardingConfig::from_raw(
+            onboarding_raw_content,
+        ));
+    } else if !onboarding_steps.is_empty() {
+        // Backwards compat: if structured steps were parsed (e.g., from YAML frontmatter)
+        skill.onboarding = Some(crate::skills::types::OnboardingConfig {
+            required: true,
+            raw_content: String::new(),
+            steps: onboarding_steps,
+        });
+    }
+
     // Add capabilities from operations
     for op in &skill.operations {
         if let Some(cap) = extract_capability_from_code(op.command.as_deref().unwrap_or("")) {
@@ -338,12 +376,16 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
 fn extract_endpoint_from_curl(code: &str) -> Option<String> {
     for part in code.split_whitespace() {
         if part.starts_with("http://") || part.starts_with("https://") {
-            return Some(part.trim_matches('"').trim_matches('\'').to_string());
+            let url = part.trim_matches('"').trim_matches('\'').to_string();
+            log::info!("[SkillLoader] Found endpoint: {}", url);
+            return Some(url);
         }
         if part.starts_with('/') {
+            log::info!("[SkillLoader] Found relative endpoint: {}", part);
             return Some(part.to_string());
         }
     }
+    log::warn!("[SkillLoader] No endpoint found in code block");
     None
 }
 
@@ -508,6 +550,10 @@ fn parse_skill_json(content: &str) -> Result<Skill, ParseError> {
     serde_json::from_str(content).map_err(|e| ParseError::Validation(format!("JSON error: {}", e)))
 }
 
+// NOTE: Rigid onboarding step parsing removed in favor of freeform LLM reasoning.
+// Skills are external data - the agent reads and interprets raw prose to determine setup steps.
+// See: OnboardingConfig.raw_content and delegating_engine.rs blueprint injection.
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +636,28 @@ Body: { "human_x_username": "@human_handle" }
         assert!(skill
             .capabilities
             .contains(&"ccos.network.http-fetch".to_string()));
+    }
+
+    #[test]
+    fn test_parse_markdown_skill_with_onboarding() {
+        let markdown = r#"# Moltbook Skill
+## Onboarding
+1. **register**: Use `register-agent` to get a secret.
+2. **verify**: Check state. verify_on_success: (audit.succeeded? "verify-state")
+"#;
+        let skill = parse_skill_markdown(markdown).unwrap();
+        let onboarding = skill.onboarding.unwrap();
+        assert_eq!(onboarding.steps.len(), 2);
+        assert_eq!(onboarding.steps[0].id, "register");
+        assert_eq!(
+            onboarding.steps[0].operation,
+            Some("register-agent".to_string())
+        );
+        assert_eq!(onboarding.steps[1].id, "verify");
+        assert!(matches!(
+            onboarding.steps[1].verify_on_success,
+            Some(crate::chat::Predicate::Rtfs(_))
+        ));
     }
 
     #[test]

@@ -182,6 +182,8 @@ pub struct LedgerIndices {
     pub plan_actions: HashMap<PlanId, Vec<ActionId>>,
     pub capability_actions: HashMap<CapabilityId, Vec<ActionId>>,
     pub function_actions: HashMap<String, Vec<ActionId>>,
+    pub session_actions: HashMap<String, Vec<ActionId>>,
+    pub run_actions: HashMap<String, Vec<ActionId>>,
     pub timestamp_index: Vec<ActionId>, // Chronological order
     pub parent_to_children: HashMap<ActionId, Vec<ActionId>>, // Tree traversal
 }
@@ -199,6 +201,8 @@ impl LedgerIndices {
             plan_actions: HashMap::new(),
             capability_actions: HashMap::new(),
             function_actions: HashMap::new(),
+            session_actions: HashMap::new(),
+            run_actions: HashMap::new(),
             timestamp_index: Vec::new(),
             parent_to_children: HashMap::new(),
         }
@@ -244,6 +248,22 @@ impl LedgerIndices {
         if let Some(parent_id) = &action.parent_action_id {
             self.parent_to_children
                 .entry(parent_id.clone())
+                .or_insert_with(Vec::new)
+                .push(action.action_id.clone());
+        }
+
+        // Index by session_id
+        if let Some(session_id) = &action.session_id {
+            self.session_actions
+                .entry(session_id.clone())
+                .or_insert_with(Vec::new)
+                .push(action.action_id.clone());
+        }
+
+        // Index by run_id (optimistic indexing from metadata)
+        if let Some(run_id) = action.metadata.get("run_id").and_then(|v| v.as_string()) {
+            self.run_actions
+                .entry(run_id.to_string())
                 .or_insert_with(Vec::new)
                 .push(action.action_id.clone());
         }

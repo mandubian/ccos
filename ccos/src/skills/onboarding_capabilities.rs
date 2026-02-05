@@ -36,6 +36,8 @@ struct SecretSetInput {
     skill_id: Option<String>,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 fn default_secret_scope() -> String {
@@ -180,6 +182,21 @@ struct CheckOnboardingResumeOutput {
     next_step: Option<usize>,
 }
 
+/// Input for ccos.skill.onboarding.complete_step
+#[derive(Debug, Deserialize)]
+struct CompleteOnboardingStepInput {
+    skill_id: String,
+    step_id: String,
+    #[serde(default)]
+    data: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Input for ccos.skill.onboarding.mark_operational
+#[derive(Debug, Deserialize)]
+struct MarkOperationalInput {
+    skill_id: String,
+}
+
 // =============================================================================
 // Capability Registration
 // =============================================================================
@@ -187,21 +204,19 @@ struct CheckOnboardingResumeOutput {
 /// Register all onboarding capabilities in the marketplace
 pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
     marketplace: Arc<CapabilityMarketplace>,
-    secret_store: Arc<StdMutex<SecretStore>>,
+    _secret_store: Arc<StdMutex<SecretStore>>,
     working_memory: Arc<StdMutex<WorkingMemory>>,
     approval_queue: Arc<UnifiedApprovalQueue<S>>,
 ) -> RuntimeResult<()> {
     // ccos.secrets.set
-    let secret_store_set = secret_store.clone();
     let approval_queue_set = approval_queue.clone();
     let secrets_set_handler = Arc::new(move |input: &Value| {
         let payload: SecretSetInput = parse_payload("ccos.secrets.set", input)?;
-        let store = secret_store_set.clone();
         let queue = approval_queue_set.clone();
         let rt_handle = tokio::runtime::Handle::current();
 
         let result = std::thread::spawn(move || {
-            rt_handle.block_on(async { handle_secrets_set(payload, store, queue).await })
+            rt_handle.block_on(async { handle_secrets_set(payload, queue).await })
         })
         .join()
         .map_err(|_| RuntimeError::Generic("ccos.secrets.set: thread join error".to_string()))?;
@@ -387,6 +402,121 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         )
         .await?;
 
+    // ccos.skill.onboarding.complete_step
+    let working_memory_complete_step = working_memory.clone();
+    let complete_step_handler = Arc::new(move |input: &Value| {
+        let payload: CompleteOnboardingStepInput =
+            parse_payload("ccos.skill.onboarding.complete_step", input)?;
+        let wm = working_memory_complete_step.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                let osm = crate::skills::onboarding_state_machine::OnboardingStateMachine::new(wm);
+                let mut state = osm.get_state(&payload.skill_id).ok_or_else(|| {
+                    RuntimeError::Generic(format!("No onboarding state for {}", payload.skill_id))
+                })?;
+
+                osm.complete_step(&payload.skill_id, payload.step_id, &mut state, payload.data)
+                    .map_err(|e| RuntimeError::Generic(format!("{}", e)))?;
+
+                produce_value(
+                    "ccos.skill.onboarding.complete_step",
+                    serde_json::json!({"success": true}),
+                )
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic(
+                "ccos.skill.onboarding.complete_step: thread join error".to_string(),
+            )
+        })?;
+
+        result
+    });
+
+    marketplace
+        .register_local_capability(
+            "ccos.skill.onboarding.complete_step".to_string(),
+            "Skill / Onboarding Complete Step".to_string(),
+            "Mark an onboarding step as complete".to_string(),
+            complete_step_handler,
+        )
+        .await?;
+
+    // ccos.skill.onboarding.mark_operational
+    let working_memory_mark_op = working_memory.clone();
+    let mark_operational_handler = Arc::new(move |input: &Value| {
+        let payload: MarkOperationalInput =
+            parse_payload("ccos.skill.onboarding.mark_operational", input)?;
+        let wm = working_memory_mark_op.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                let osm = crate::skills::onboarding_state_machine::OnboardingStateMachine::new(
+                    wm.clone(),
+                );
+                let mut state = osm.get_state(&payload.skill_id).ok_or_else(|| {
+                    RuntimeError::Generic(format!("No onboarding state for {}", payload.skill_id))
+                })?;
+
+                state.status = crate::skills::types::OnboardingState::Operational;
+
+                let key = format!("skill:{}:onboarding_state", payload.skill_id);
+                let content = serde_json::to_string(&state)
+                    .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let entry = crate::working_memory::types::WorkingMemoryEntry::new_with_estimate(
+                    key.clone(),
+                    format!("Onboarding state for {}", payload.skill_id),
+                    content,
+                    vec![
+                        "onboarding".to_string(),
+                        format!("skill:{}", payload.skill_id),
+                    ],
+                    now,
+                    crate::working_memory::types::WorkingMemoryMeta::default(),
+                );
+
+                let mut wm_guard = wm
+                    .lock()
+                    .map_err(|_| RuntimeError::Generic("WM lock failed".to_string()))?;
+                wm_guard
+                    .append(entry)
+                    .map_err(|e| RuntimeError::Generic(format!("{}", e)))?;
+
+                produce_value(
+                    "ccos.skill.onboarding.mark_operational",
+                    serde_json::json!({"success": true}),
+                )
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic(
+                "ccos.skill.onboarding.mark_operational: thread join error".to_string(),
+            )
+        })?;
+
+        result
+    });
+
+    marketplace
+        .register_local_capability(
+            "ccos.skill.onboarding.mark_operational".to_string(),
+            "Skill / Onboarding Mark Operational".to_string(),
+            "Mark a skill as fully operational".to_string(),
+            mark_operational_handler,
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -394,10 +524,8 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
 // Capability Handlers
 // =============================================================================
 
-/// Handle ccos.secrets.set
 async fn handle_secrets_set<S: ApprovalStorage>(
     payload: SecretSetInput,
-    secret_store: Arc<StdMutex<SecretStore>>,
     approval_queue: Arc<UnifiedApprovalQueue<S>>,
 ) -> RuntimeResult<Value> {
     // Create SecretWrite approval
@@ -410,6 +538,7 @@ async fn handle_secrets_set<S: ApprovalStorage>(
         } else {
             payload.description.clone()
         },
+        value: Some(payload.value.clone()),
     };
 
     let risk = RiskAssessment {
@@ -417,7 +546,18 @@ async fn handle_secrets_set<S: ApprovalStorage>(
         reasons: vec!["Storing sensitive credential".to_string()],
     };
 
-    let request = ApprovalRequest::new(category, risk, 24, None);
+    let mut request = ApprovalRequest::new(category, risk, 24, None);
+
+    // Add metadata for correlation
+    if let Some(session_id) = payload.session_id {
+        request
+            .metadata
+            .insert("session_id".to_string(), session_id);
+    }
+    if let Some(skill_id) = payload.skill_id {
+        request.metadata.insert("skill_id".to_string(), skill_id);
+    }
+
     let approval_id = request.id.clone();
 
     approval_queue
@@ -425,28 +565,11 @@ async fn handle_secrets_set<S: ApprovalStorage>(
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to create approval: {}", e)))?;
 
-    // Persist the secret with skill-scoped key for session recovery
-    // Key format: <skill_id>:<original_key> for isolation
-    let scoped_key = if let Some(ref skill_id) = payload.skill_id {
-        format!("{}:{}", skill_id, payload.key)
-    } else {
-        payload.key.clone()
-    };
-
-    {
-        let mut store = secret_store
-            .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock SecretStore".to_string()))?;
-        store
-            .set_local(&scoped_key, payload.value.clone())
-            .map_err(|e| RuntimeError::Generic(format!("Failed to persist secret: {}", e)))?;
-    }
-
     let output = SecretSetOutput {
         success: true,
         approval_id: Some(approval_id),
         message: format!(
-            "Secret '{}' stored securely with scope '{}' (approval pending)",
+            "Secret '{}' staged with scope '{}'. Approval required before persistence.",
             payload.key, payload.scope
         ),
     };

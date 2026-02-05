@@ -16,7 +16,6 @@ use chrono::Utc;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
-use crate::skills::loader::parse_skill_markdown;
 
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::UnifiedApprovalQueue;
@@ -35,11 +34,13 @@ pub mod agent_llm;
 pub mod connector;
 pub mod gateway;
 pub mod quarantine;
+pub mod predicate;
 pub mod run;
 pub mod session;
 pub mod spawner;
 
 pub use connector::{ActivationMetadata, AttachmentRef, MessageDirection, MessageEnvelope};
+pub use predicate::Predicate;
 pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
 pub use run::{BudgetContext, Run, RunState, RunStore, SharedRunStore, new_shared_run_store};
 pub use session::{ChatMessage, SessionRegistry};
@@ -1001,43 +1002,18 @@ pub async fn register_chat_capabilities(
                         )));
                     }
                     
-                    // Fetch the skill definition from the URL
-                    let client = reqwest::Client::new();
-                    let skill_content = match client.get(&url).send().await {
-                        Ok(response) => {
-                            if response.status().is_success() {
-                                response.text().await.unwrap_or_default()
-                            } else {
-                                return Err(RuntimeError::Generic(format!(
-                                    "ccos.skill.load: Error fetching skill from upstream ({}): HTTP {}",
-                                    url,
-                                    response.status(),
-                                )));
-                            }
-                        }
-                        Err(e) => {
-                            return Err(RuntimeError::Generic(format!(
-                                "ccos.skill.load: Error fetching skill from upstream ({}): {}",
-                                url, e
-                            )))
-                        }
-                    };
-                    
-                    // Parse the skill definition using the real parser
-                    let skill = parse_skill_markdown(&skill_content).map_err(|e| {
-                        RuntimeError::Generic(format!("ccos.skill.load: Parse error: {}", e))
+                    // Fetch and parse the skill definition using the shared loader
+                    // This supports http(s):// and file:// URLs correctly using common logic.
+                    let loaded_skill = crate::skills::loader::load_skill_from_url(&url).await.map_err(|e| {
+                        RuntimeError::Generic(format!("ccos.skill.load: {}", e))
                     })?;
-                    let skill_id = skill.id.clone();
 
-                    if skill_id == "unnamed-skill" || skill.operations.is_empty() {
-                        return Err(RuntimeError::Generic(
-                            "ccos.skill.load: skill is missing an id or has no operations"
-                                .to_string(),
-                        ));
-                    }
+                    let skill = loaded_skill.skill;
+                    let skill_content = loaded_skill.raw_content;
+                    let skill_id = skill.id.clone();
                     
-                    // Extract base URL (scheme + host + port) from the full URL
-                    let base_url = extract_base_url(&url);
+                    // Extract base URL from the (possibly resolved) source URL
+                    let base_url = extract_base_url(&loaded_skill.source_url);
                     
                     // Register a capability for each operation found
                     let mut registered_capabilities = Vec::new();
@@ -1117,6 +1093,8 @@ pub async fn register_chat_capabilities(
                     let (skill, operation, params) = if let Value::Map(ref map) = inputs {
                         let skill = map.get(&MapKey::String("skill".to_string()))
                             .or_else(|| map.get(&MapKey::Keyword(Keyword("skill".to_string()))))
+                            .or_else(|| map.get(&MapKey::String("skill_id".to_string())))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("skill_id".to_string()))))
                             .and_then(|v| v.as_string())
                             .map(|s| s.to_string())
                             .ok_or_else(|| RuntimeError::Generic("Missing skill parameter".to_string()))?;

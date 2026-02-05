@@ -720,6 +720,7 @@ async fn handle_api_approvals_list(
                     scope,
                     skill_id,
                     description,
+                    value: _,
                 } => (
                     "SecretWrite",
                     json!({
@@ -804,20 +805,39 @@ async fn handle_api_approval_approve(
     if let Some(ref queue) = state.approval_queue {
         // Note: SecretRequired handling was removed as the feature was deprecated
 
-        // NEW: Handle secret saving
-        if let (Some(req), Some(val)) = (
-            queue.get(&id).await.ok().flatten(),
-            body.secret_value.clone(),
-        ) {
-            if let crate::approval::types::ApprovalCategory::SecretRequired {
-                secret_type, ..
-            } = req.category
-            {
+        if let Some(req) = queue.get(&id).await.ok().flatten() {
+            let secret_to_persist = match req.category {
+                crate::approval::types::ApprovalCategory::SecretRequired {
+                    ref secret_type,
+                    ..
+                } => body
+                    .secret_value
+                    .clone()
+                    .map(|val| (secret_type.clone(), val)),
+                crate::approval::types::ApprovalCategory::SecretWrite {
+                    ref key,
+                    ref skill_id,
+                    ref value,
+                    ..
+                } => {
+                    let val = body.secret_value.clone().or_else(|| value.clone());
+                    val.map(|v| {
+                        let scoped_key = if let Some(skill_id) = skill_id {
+                            format!("{}:{}", skill_id, key)
+                        } else {
+                            key.clone()
+                        };
+                        (scoped_key, v)
+                    })
+                }
+                _ => None,
+            };
+
+            if let Some((key, val)) = secret_to_persist {
                 let workspace_root = crate::utils::fs::get_workspace_root();
-                // Use SecretStore to save
                 match crate::secrets::SecretStore::new(Some(workspace_root)) {
                     Ok(mut store) => {
-                        if let Err(e) = store.set_local(&secret_type, val) {
+                        if let Err(e) = store.set_local(&key, val) {
                             log::error!("Failed to save secret: {}", e);
                             return Json(
                                 json!({ "error": format!("Failed to save secret: {}", e) }),
@@ -845,15 +865,17 @@ async fn handle_api_approval_approve(
         let approve_result = if let Some(req) = req_for_category {
             match req.category {
                 crate::approval::types::ApprovalCategory::ServerDiscovery { .. } => {
-                    queue.approve_server(
-                        &id,
-                        ApprovalAuthority::User("web".to_string()),
-                        body.reason,
-                    )
-                    .await
+                    queue
+                        .approve_server(
+                            &id,
+                            ApprovalAuthority::User("web".to_string()),
+                            body.reason,
+                        )
+                        .await
                 }
                 _ => {
-                    queue.approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
+                    queue
+                        .approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
                         .await
                 }
             }
