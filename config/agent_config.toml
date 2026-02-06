@@ -235,19 +235,19 @@ expiry_hours = 168
 risk_default = "medium"
 
 [llm_profiles]
-default = "openrouter_free:balanced_ds_32"
+default = "openrouter_free:step_35_flash"
 
 # Google Gemini profile
-[[llm_profiles.model_sets]]
-name = "google"
-provider = "google"
-api_key_env = "GEMINI_API_KEY"
-default = "gemini-1.5-pro"
+# [[llm_profiles.model_sets]]
+# name = "google"
+# provider = "google"
+# api_key_env = "GEMINI_API_KEY"
+# default = "gemini-1.5-pro"
 
-  [[llm_profiles.model_sets.models]]
-  name = "gemini-1.5-pro"
-  model = "gemini-1.5-pro"
-  quality = "balanced"
+# [[llm_profiles.model_sets.models]]
+# name = "gemini-1.5-pro"
+# model = "gemini-1.5-pro"
+# quality = "balanced"
 
 # Stub profile - ONLY for testing (not realistic)
 # To use: explicitly pass --profile stub/dev
@@ -265,7 +265,7 @@ name = "openrouter_free"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "balanced"
+default = "step_35_flash"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"
@@ -312,12 +312,12 @@ default = "balanced"
   quality = "balanced"  
 
   [[llm_profiles.model_sets.models]]
-  name = "premium"
-  model = "x-ai/grok-4-fast:free"
+  name = "step_35_flash"
+  model = "stepfun/step-3.5-flash:free"
   max_prompt_cost_per_1k = 0.0
   max_completion_cost_per_1k = 0.0
   quality = "quality"
-  notes = "Higher reasoning depth."
+  notes = "StepFun: Step 3.5 Flash (free)."
 
 # Existing explicit profiles still work
 [[llm_profiles.profiles]]

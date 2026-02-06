@@ -38,6 +38,7 @@
 | **ProcessSpawner** | Spawns actual agent processes | `spawner.rs` |
 | **PID Tracking** | Tracks spawned agent process IDs | Session registry |
 | **Auto-spawn** | Automatically spawns agents on session create | `gateway.rs` |
+| **JailedProcessSpawner**| Sandbox agent using `bubblewrap` (Linux only) | `spawner.rs` |
 
 ### HTTP API Endpoints
 
@@ -57,6 +58,8 @@
 | GET | `/chat/run/:run_id/actions` | Yes (X-Agent-Token) | List causal-chain actions for a Run (latest first) |
 | POST | `/chat/run/:run_id/transition` | Yes (X-Agent-Token) | Transition Run state (optionally update budget; budget window resets when transitioning to Active) |
 | POST | `/chat/run/:run_id/cancel` | Yes (X-Agent-Token) | Cancel a Run |
+| POST | `/chat/run/:run_id/checkpoint`| Yes (X-Agent-Token) | Create a manual checkpoint for a Run |
+| POST | `/chat/run/:run_id/resume` | Yes (X-Agent-Token) | Resume a Run from its latest checkpoint |
 
 ### Authentication & Authorization
 
@@ -79,6 +82,8 @@
 | **Inbound Correlation** | Inbound chat messages correlate to the active run; otherwise to the latest paused run (PausedExternalEvent auto-resumes to Active; PausedApproval correlates without resuming). |
 | **Run Budget Gate** | `/chat/execute` enforces run state + budget: non-chat capabilities are refused while paused/terminal; if budget exceeded, the run transitions to PausedApproval and the call is refused. Chat egress/transform capabilities remain allowed so the system can communicate pause/next-steps. |
 | **Completion Predicates** | Gateway enforces `completion_predicate=never` (Done transition rejected) and supports `capability_succeeded:<capability_id>` (Done allowed only if that capability succeeded within the run). |
+| **Checkpoint & Resume** | Runs can persist their state (Working Memory, IR position) to durable storage. Checkpoints are recorded to the causal chain and can be resumed automatically or via API. |
+| **Cron Scheduler** | Supports recurring and delayed runs using cron expressions or simple delays. Managed by `CronScheduler` in the Gateway. |
 
 ### Audit & Logging
 
@@ -290,6 +295,7 @@ X-Agent-Token: <token>
 | Secret Access | Yes (injected) | No |
 | Direct API Calls | Yes (via capabilities) | No |
 | Persistent State | Yes | Optional: per-skill bearer token persistence to `.ccos/secrets.toml` when enabled |
+| Sandboxing | No | Yes (via `bubblewrap` in `JailedProcessSpawner`) |
 
 ### Token Security
 
@@ -459,6 +465,7 @@ Environment variables:
 | `CCOS_QUARANTINE_KEY` | Required | Encryption key for quarantine |
 | `CCOS_QUARANTINE_TTL_SECONDS` | `86400` | Default quarantine TTL |
 | `CCOS_LOG_LEVEL` | `info` | Log level (trace/debug/info/warn/error) |
+| `CCOS_GATEWAY_JAIL_AGENTS` | `false` | Enable/disable agent jailing via `bubblewrap` |
 
 ### Agent CLI Arguments
 

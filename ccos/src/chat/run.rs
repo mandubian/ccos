@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// State of a run
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunState {
     /// Run is actively executing
@@ -26,6 +25,8 @@ pub enum RunState {
     },
     /// Run failed with error
     Failed { error: String },
+    /// Run is scheduled to run in the future
+    Scheduled,
     /// Run was cancelled
     Cancelled,
 }
@@ -47,10 +48,15 @@ impl RunState {
         )
     }
 
+    pub fn is_busy(&self) -> bool {
+        matches!(self, RunState::Active) || self.is_paused()
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "Active" => Some(RunState::Active),
             "Done" => Some(RunState::Done),
+            "Scheduled" => Some(RunState::Scheduled),
             "Cancelled" => Some(RunState::Cancelled),
             s if s.starts_with("PausedApproval") => {
                 // Simplified: assuming format "PausedApproval { reason: \"...\" }" or similar
@@ -85,6 +91,10 @@ pub struct BudgetContext {
     pub max_tokens: Option<u64>,
     /// Maximum retries per step
     pub max_retries_per_step: u32,
+    /// Maximum network egress bytes
+    pub max_network_egress_bytes: Option<u64>,
+    /// Maximum network ingress bytes
+    pub max_network_ingress_bytes: Option<u64>,
 }
 
 impl Default for BudgetContext {
@@ -94,6 +104,8 @@ impl Default for BudgetContext {
             max_duration_secs: 300, // 5 minutes
             max_tokens: None,
             max_retries_per_step: 3,
+            max_network_egress_bytes: None,
+            max_network_ingress_bytes: None,
         }
     }
 }
@@ -103,6 +115,8 @@ impl Default for BudgetContext {
 pub struct BudgetConsumption {
     pub steps_taken: u32,
     pub tokens_consumed: u64,
+    pub network_egress_bytes: u64,
+    pub network_ingress_bytes: u64,
     pub retries_by_step: HashMap<String, u32>,
 }
 
@@ -132,6 +146,22 @@ impl BudgetConsumption {
                 });
             }
         }
+        if let Some(max_egress) = budget.max_network_egress_bytes {
+            if self.network_egress_bytes >= max_egress {
+                return Some(BudgetExceeded::MaxNetworkEgress {
+                    limit: max_egress,
+                    current: self.network_egress_bytes,
+                });
+            }
+        }
+        if let Some(max_ingress) = budget.max_network_ingress_bytes {
+            if self.network_ingress_bytes >= max_ingress {
+                return Some(BudgetExceeded::MaxNetworkIngress {
+                    limit: max_ingress,
+                    current: self.network_ingress_bytes,
+                });
+            }
+        }
         None
     }
 }
@@ -142,6 +172,8 @@ pub enum BudgetExceeded {
     MaxSteps { limit: u32, current: u32 },
     MaxDuration { limit_secs: u64, elapsed_secs: u64 },
     MaxTokens { limit: u64, current: u64 },
+    MaxNetworkEgress { limit: u64, current: u64 },
+    MaxNetworkIngress { limit: u64, current: u64 },
 }
 
 /// A run representing an autonomous goal execution
@@ -163,6 +195,12 @@ pub struct Run {
     pub correlation_id: String,
     /// Current step ID
     pub current_step_id: Option<String>,
+    /// Cron-like schedule (if any)
+    pub schedule: Option<String>,
+    /// Next scheduled execution time
+    pub next_run_at: Option<DateTime<Utc>>,
+    /// ID of the latest checkpoint
+    pub latest_checkpoint_id: Option<String>,
     /// Metadata for extensibility
     pub metadata: HashMap<String, serde_json::Value>,
 }
@@ -184,8 +222,25 @@ impl Run {
             updated_at: now,
             correlation_id: format!("corr-{}", uuid::Uuid::new_v4()),
             current_step_id: None,
+            schedule: None,
+            next_run_at: None,
+            latest_checkpoint_id: None,
             metadata: HashMap::new(),
         }
+    }
+
+    pub fn new_scheduled(
+        session_id: String,
+        goal: String,
+        schedule: String,
+        next_run_at: DateTime<Utc>,
+        budget: Option<BudgetContext>,
+    ) -> Self {
+        let mut run = Self::new(session_id, goal, budget);
+        run.state = RunState::Scheduled;
+        run.schedule = Some(schedule);
+        run.next_run_at = Some(next_run_at);
+        run
     }
 
     pub fn transition(&mut self, new_state: RunState) {
@@ -260,8 +315,29 @@ impl Run {
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("corr-{}", uuid::Uuid::new_v4()));
 
-        // TODO: Parse budget from metadata if available
-        let budget = BudgetContext::default();
+        let budget = BudgetContext {
+            max_steps: meta
+                .get("budget_max_steps")
+                .and_then(|v| v.as_integer())
+                .unwrap_or(100) as u32,
+            max_duration_secs: meta
+                .get("budget_max_duration_secs")
+                .and_then(|v| v.as_integer())
+                .unwrap_or(3600) as u64,
+            max_tokens: meta
+                .get("budget_max_tokens")
+                .and_then(|v| v.as_integer())
+                .map(|v| v as u64),
+            max_retries_per_step: 3,
+            max_network_egress_bytes: meta
+                .get("budget_max_network_egress_bytes")
+                .and_then(|v| v.as_integer())
+                .map(|v| v as u64),
+            max_network_ingress_bytes: meta
+                .get("budget_max_network_ingress_bytes")
+                .and_then(|v| v.as_integer())
+                .map(|v| v as u64),
+        };
 
         let created_at =
             DateTime::from_timestamp(action.timestamp as i64 / 1000, 0).unwrap_or_else(Utc::now);
@@ -282,6 +358,22 @@ impl Run {
             updated_at: created_at,
             correlation_id: correlation_id.to_string(),
             current_step_id: None,
+            schedule: meta
+                .get("schedule")
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_string()),
+            next_run_at: meta
+                .get("next_run_at")
+                .and_then(|v| v.as_string())
+                .and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                }),
+            latest_checkpoint_id: meta
+                .get("latest_checkpoint_id")
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_string()),
             metadata: HashMap::new(),
         })
     }
@@ -316,6 +408,10 @@ impl RunStore {
         self.runs.get(run_id)
     }
 
+    pub fn get_all_runs(&self) -> Vec<&Run> {
+        self.runs.values().collect()
+    }
+
     pub fn get_run_mut(&mut self, run_id: &str) -> Option<&mut Run> {
         self.runs.get_mut(run_id)
     }
@@ -331,6 +427,12 @@ impl RunStore {
         self.get_runs_for_session(session_id)
             .into_iter()
             .find(|r| matches!(r.state, RunState::Active))
+    }
+
+    pub fn get_busy_run_for_session(&self, session_id: &str) -> Option<&Run> {
+        self.get_runs_for_session(session_id)
+            .into_iter()
+            .find(|r| r.state.is_busy())
     }
 
     pub fn get_latest_paused_external_run_id_for_session(
@@ -377,8 +479,12 @@ impl RunStore {
 
     pub fn update_run_state(&mut self, run_id: &str, new_state: RunState) -> bool {
         if let Some(run) = self.runs.get_mut(run_id) {
-            match new_state {
-                RunState::Active => run.resume(),
+            match (&run.state, &new_state) {
+                // Special case: resuming a paused run resets the budget window
+                (_, RunState::Active) if run.state.is_paused() => run.resume(),
+                // Scheduled -> Active: direct transition (no budget reset needed)
+                (RunState::Scheduled, RunState::Active) => run.transition(RunState::Active),
+                // All other transitions
                 _ => run.transition(new_state),
             }
             true
@@ -512,6 +618,8 @@ mod tests {
                 max_duration_secs: 60,
                 max_tokens: Some(1000),
                 max_retries_per_step: 3,
+                max_network_egress_bytes: None,
+                max_network_ingress_bytes: None,
             }),
         );
 
@@ -537,6 +645,8 @@ mod tests {
                 max_duration_secs: 60,
                 max_tokens: None,
                 max_retries_per_step: 3,
+                max_network_egress_bytes: None,
+                max_network_ingress_bytes: None,
             }),
         );
 

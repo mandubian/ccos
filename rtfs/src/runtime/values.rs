@@ -219,6 +219,13 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_integer(&self) -> Option<i64> {
+        match self {
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

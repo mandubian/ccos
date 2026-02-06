@@ -12,10 +12,10 @@ use ccos::capabilities::registry::CapabilityRegistry;
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::causal_chain::CausalChain;
 use ccos::chat::{
-    approve_request, attach_label, extract_label, filter_mcp_tool_result,
-    record_chat_audit_event, register_chat_capabilities, request_chat_policy_exception,
-    request_chat_public_declassification, strip_ccos_meta, ChatDataLabel,
-    InMemoryQuarantineStore, QuarantineStore,
+    approve_request, attach_label, extract_label, filter_mcp_tool_result, record_chat_audit_event,
+    register_chat_capabilities, request_chat_policy_exception,
+    request_chat_public_declassification, strip_ccos_meta, ChatDataLabel, InMemoryQuarantineStore,
+    QuarantineStore,
 };
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::values::Value;
@@ -23,12 +23,18 @@ use rtfs::runtime::values::Value;
 #[test]
 fn test_label_join_with_field_labels() {
     let mut data = HashMap::new();
-    data.insert(MapKey::String("a".to_string()), Value::String("ok".to_string()));
+    data.insert(
+        MapKey::String("a".to_string()),
+        Value::String("ok".to_string()),
+    );
     data.insert(
         MapKey::Keyword(Keyword("a".to_string())),
         Value::String("ok".to_string()),
     );
-    data.insert(MapKey::String("b".to_string()), Value::String("secret".to_string()));
+    data.insert(
+        MapKey::String("b".to_string()),
+        Value::String("secret".to_string()),
+    );
     data.insert(
         MapKey::Keyword(Keyword("b".to_string())),
         Value::String("secret".to_string()),
@@ -38,7 +44,11 @@ fn test_label_join_with_field_labels() {
     field_labels.insert("a".to_string(), ChatDataLabel::Public);
     field_labels.insert("b".to_string(), ChatDataLabel::PiiChatMessage);
 
-    let labeled = attach_label(Value::Map(data), ChatDataLabel::PiiRedacted, Some(field_labels));
+    let labeled = attach_label(
+        Value::Map(data),
+        ChatDataLabel::PiiRedacted,
+        Some(field_labels),
+    );
     assert_eq!(extract_label(&labeled), ChatDataLabel::PiiChatMessage);
 
     let stripped = strip_ccos_meta(&labeled);
@@ -72,7 +82,7 @@ async fn test_prepare_outbound_and_redacted_approval() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
     let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
-        let quarantine = Arc::new(InMemoryQuarantineStore::new()) as Arc<dyn QuarantineStore>;
+    let quarantine = Arc::new(InMemoryQuarantineStore::new()) as Arc<dyn QuarantineStore>;
 
     let dir = tempdir().expect("tempdir");
     let storage = FileApprovalStorage::new(dir.path().join("approvals")).expect("storage");
@@ -88,9 +98,11 @@ async fn test_prepare_outbound_and_redacted_approval() {
         resource_store,
         None,
         None,
+        None,
+        None,
     )
-        .await
-        .expect("register");
+    .await
+    .expect("register");
 
     let session_id = "s1";
     let run_id = "r1";
@@ -121,8 +133,11 @@ async fn test_prepare_outbound_and_redacted_approval() {
         .await;
     assert!(result.is_ok());
 
-    let redacted_value =
-        attach_label(Value::String("redacted".to_string()), ChatDataLabel::PiiRedacted, None);
+    let redacted_value = attach_label(
+        Value::String("redacted".to_string()),
+        ChatDataLabel::PiiRedacted,
+        None,
+    );
     let mut inputs2 = HashMap::new();
     inputs2.insert(MapKey::String("content".to_string()), redacted_value);
     inputs2.insert(
@@ -143,14 +158,22 @@ async fn test_prepare_outbound_and_redacted_approval() {
     );
 
     let denied = marketplace
-        .execute_capability("ccos.chat.egress.prepare_outbound", &Value::Map(inputs2.clone()))
+        .execute_capability(
+            "ccos.chat.egress.prepare_outbound",
+            &Value::Map(inputs2.clone()),
+        )
         .await;
     assert!(denied.is_err());
 
-    let approval_id =
-        request_chat_policy_exception(&queue, "egress.pii_redacted", session_id, run_id, "test".to_string())
-            .await
-            .expect("approval");
+    let approval_id = request_chat_policy_exception(
+        &queue,
+        "egress.pii_redacted",
+        session_id,
+        run_id,
+        "test".to_string(),
+    )
+    .await
+    .expect("approval");
     approve_request(
         &queue,
         &approval_id,
@@ -212,12 +235,17 @@ async fn test_verify_redaction_requires_approval() {
         resource_store,
         None,
         None,
+        None,
+        None,
     )
-        .await
-        .expect("register");
+    .await
+    .expect("register");
 
     let mut inputs = HashMap::new();
-    inputs.insert(MapKey::String("text".to_string()), Value::String("ok".to_string()));
+    inputs.insert(
+        MapKey::String("text".to_string()),
+        Value::String("ok".to_string()),
+    );
     inputs.insert(
         MapKey::String("session_id".to_string()),
         Value::String("s2".to_string()),
@@ -232,7 +260,10 @@ async fn test_verify_redaction_requires_approval() {
     );
 
     let denied = marketplace
-        .execute_capability("ccos.chat.transform.verify_redaction", &Value::Map(inputs.clone()))
+        .execute_capability(
+            "ccos.chat.transform.verify_redaction",
+            &Value::Map(inputs.clone()),
+        )
         .await;
     assert!(denied.is_err());
 
@@ -269,8 +300,14 @@ async fn test_verify_redaction_requires_approval() {
 fn test_record_chat_audit_event_fields() {
     let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
     let mut meta = HashMap::new();
-    meta.insert("policy_pack_version".to_string(), Value::String("chat-mode-v0".to_string()));
-    meta.insert("rule_id".to_string(), Value::String("chat.message.ingest".to_string()));
+    meta.insert(
+        "policy_pack_version".to_string(),
+        Value::String("chat-mode-v0".to_string()),
+    );
+    meta.insert(
+        "rule_id".to_string(),
+        Value::String("chat.message.ingest".to_string()),
+    );
 
     record_chat_audit_event(
         &chain,
@@ -288,10 +325,28 @@ fn test_record_chat_audit_event_fields() {
     let actions = guard.get_all_actions();
     assert!(!actions.is_empty());
     let last = actions.last().expect("last");
-    assert_eq!(last.metadata.get("event_type"), Some(&Value::String("message.ingest".to_string())));
-    assert_eq!(last.metadata.get("session_id"), Some(&Value::String("session".to_string())));
-    assert_eq!(last.metadata.get("run_id"), Some(&Value::String("run".to_string())));
-    assert_eq!(last.metadata.get("step_id"), Some(&Value::String("step".to_string())));
-    assert_eq!(last.metadata.get("policy_pack_version"), Some(&Value::String("chat-mode-v0".to_string())));
-    assert_eq!(last.metadata.get("rule_id"), Some(&Value::String("chat.message.ingest".to_string())));
+    assert_eq!(
+        last.metadata.get("event_type"),
+        Some(&Value::String("message.ingest".to_string()))
+    );
+    assert_eq!(
+        last.metadata.get("session_id"),
+        Some(&Value::String("session".to_string()))
+    );
+    assert_eq!(
+        last.metadata.get("run_id"),
+        Some(&Value::String("run".to_string()))
+    );
+    assert_eq!(
+        last.metadata.get("step_id"),
+        Some(&Value::String("step".to_string()))
+    );
+    assert_eq!(
+        last.metadata.get("policy_pack_version"),
+        Some(&Value::String("chat-mode-v0".to_string()))
+    );
+    assert_eq!(
+        last.metadata.get("rule_id"),
+        Some(&Value::String("chat.message.ingest".to_string()))
+    );
 }

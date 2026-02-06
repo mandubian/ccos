@@ -122,7 +122,7 @@ impl SessionRegistry {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.clone(), session.clone());
 
-        log::info!("Created new session: {}", session_id);
+        log::debug!("Created new session: {}", session_id);
         session
     }
 
@@ -163,7 +163,7 @@ impl SessionRegistry {
 
         if let Some(session) = sessions.get_mut(session_id) {
             session.agent_pid = Some(pid);
-            log::info!("Set agent PID {} for session {}", pid, session_id);
+            log::debug!("Set agent PID {} for session {}", pid, session_id);
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -193,7 +193,7 @@ impl SessionRegistry {
 
         if let Some(session) = sessions.get_mut(session_id) {
             session.status = SessionStatus::Terminated;
-            log::info!("Terminated session {}", session_id);
+            log::debug!("Terminated session {}", session_id);
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -237,7 +237,7 @@ impl SessionRegistry {
         let count = to_remove.len();
         for id in to_remove {
             sessions.remove(&id);
-            log::info!("Cleaned up terminated session: {}", id);
+            log::debug!("Cleaned up terminated session: {}", id);
         }
 
         count
