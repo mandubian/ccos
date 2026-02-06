@@ -112,7 +112,11 @@ struct Args {
     budget_policy: String,
 
     /// Persist discovered per-skill bearer tokens to .ccos/secrets.toml (opt-in).
-    #[arg(long, env = "CCOS_AGENT_PERSIST_SKILL_SECRETS", default_value = "false")]
+    #[arg(
+        long,
+        env = "CCOS_AGENT_PERSIST_SKILL_SECRETS",
+        default_value = "false"
+    )]
     persist_skill_secrets: bool,
 
     /// Known skill URL hints (repeatable). Format: "name=url".
@@ -507,9 +511,7 @@ impl AgentRuntime {
                     &format!("⚠️ Budget exceeded: {}. Agent is stopping.", reason),
                 )
                 .await;
-            let _ = self
-                .transition_run_state("Failed", Some(reason))
-                .await;
+            let _ = self.transition_run_state("Failed", Some(reason)).await;
             // Exit the process
             std::process::exit(0);
         } else {
@@ -684,7 +686,9 @@ impl AgentRuntime {
                 let _ = self
                     .send_response(&event, "▶️ Resuming! Budget has been reset.")
                     .await;
-                let _ = self.transition_run_state("Active", Some("resumed by user")).await;
+                let _ = self
+                    .transition_run_state("Active", Some("resumed by user"))
+                    .await;
                 return Ok(());
             } else {
                 // Agent is paused, only respond to "continue"
@@ -720,12 +724,11 @@ impl AgentRuntime {
         );
         inputs.insert(
             "run_id".to_string(),
-            serde_json::json!(
-                self.args
-                    .run_id
-                    .clone()
-                    .unwrap_or_else(|| format!("resp-{}", event.id))
-            ),
+            serde_json::json!(self
+                .args
+                .run_id
+                .clone()
+                .unwrap_or_else(|| format!("resp-{}", event.id))),
         );
         inputs.insert(
             "step_id".to_string(),
@@ -1075,10 +1078,7 @@ impl AgentRuntime {
                                     action.capability_id,
                                     null_fields.join(", ")
                                 );
-                                missing_inputs.push((
-                                    action.capability_id.clone(),
-                                    null_fields,
-                                ));
+                                missing_inputs.push((action.capability_id.clone(), null_fields));
                                 continue;
                             }
                         }
@@ -1124,7 +1124,10 @@ impl AgentRuntime {
                                         .push(format!("{}: {}", action.capability_id, error_msg));
                                     self.record_in_history(
                                         "system",
-                                        format!("[action failed] {}: {}", action.capability_id, error_msg),
+                                        format!(
+                                            "[action failed] {}: {}",
+                                            action.capability_id, error_msg
+                                        ),
                                         &event.channel_id,
                                     );
                                     continue;
@@ -1179,10 +1182,18 @@ impl AgentRuntime {
                                                         );
 
                                                         if self.args.persist_skill_secrets {
-                                                            let key = Self::secret_store_key_for_skill(skill_id);
-                                                            match SecretStore::new(Some(get_workspace_root())) {
+                                                            let key =
+                                                                Self::secret_store_key_for_skill(
+                                                                    skill_id,
+                                                                );
+                                                            match SecretStore::new(Some(
+                                                                get_workspace_root(),
+                                                            )) {
                                                                 Ok(mut store) => {
-                                                                    if let Err(e) = store.set_local(&key, secret.to_string()) {
+                                                                    if let Err(e) = store.set_local(
+                                                                        &key,
+                                                                        secret.to_string(),
+                                                                    ) {
                                                                         warn!("Failed to persist skill token to SecretStore ({}): {}", key, e);
                                                                     }
                                                                 }
@@ -1212,8 +1223,9 @@ impl AgentRuntime {
                                             {
                                                 // Collect all string fields that look user-facing.
                                                 let mut parts = Vec::new();
-                                                if let Some(msg) =
-                                                    body_json.get("message").and_then(|v| v.as_str())
+                                                if let Some(msg) = body_json
+                                                    .get("message")
+                                                    .and_then(|v| v.as_str())
                                                 {
                                                     parts.push(msg.to_string());
                                                 }
@@ -1394,8 +1406,7 @@ impl AgentRuntime {
                             // Budget pause transitions are handled where the pause is triggered.
                         } else if !failed_actions.is_empty() {
                             // Truncate to keep audit small.
-                            let reason = failed_actions
-                                .join("; ");
+                            let reason = failed_actions.join("; ");
                             let reason = if reason.len() > 500 {
                                 format!("{}...", &reason[..500])
                             } else {
@@ -1419,11 +1430,8 @@ impl AgentRuntime {
                                 )
                                 .await;
                         } else if !plan.actions.is_empty() && !has_follow_up {
-                            let predicate = self
-                                .fetch_run_completion_predicate()
-                                .await
-                                .ok()
-                                .flatten();
+                            let predicate =
+                                self.fetch_run_completion_predicate().await.ok().flatten();
                             let should_done = match predicate.as_deref() {
                                 Some("manual") | Some("never") => false,
                                 Some("always") => true,
@@ -1632,6 +1640,7 @@ impl AgentRuntime {
 
     fn build_llm_context(&self) -> String {
         let mut lines = Vec::new();
+        lines.push(format!("current_time: {}", Utc::now().to_rfc3339()));
         for key in &self.llm_context_allowlist {
             if let Some(val) = self.context_value(key) {
                 lines.push(format!("{}: {}", key, val));
@@ -1793,7 +1802,10 @@ impl AgentRuntime {
             match SecretStore::new(Some(get_workspace_root())) {
                 Ok(mut store) => {
                     if let Err(e) = store.set_local(&key, secret.to_string()) {
-                        warn!("Failed to persist skill token to SecretStore ({}): {}", key, e);
+                        warn!(
+                            "Failed to persist skill token to SecretStore ({}): {}",
+                            key, e
+                        );
                     }
                 }
                 Err(e) => {

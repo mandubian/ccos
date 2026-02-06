@@ -8,7 +8,7 @@ use axum::extract::{Json, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::Router;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -23,11 +23,12 @@ use crate::approval::{
 use crate::capabilities::registry::CapabilityRegistry;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
-use crate::chat::run::{BudgetContext, Run, RunStore, SharedRunStore};
+use crate::chat::run::{BudgetContext, Run, RunState, RunStore, SharedRunStore};
 use crate::chat::{
     attach_label, record_chat_audit_event, register_chat_capabilities, AgentSpawner, ChatDataLabel,
-    ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
-    QuarantineStore, SessionRegistry, SpawnConfig, SpawnerFactory,
+    ChatMessage, Checkpoint, CheckpointStore, FileQuarantineStore, InMemoryCheckpointStore,
+    MessageDirection, MessageEnvelope, QuarantineKey, QuarantineStore, Scheduler, SessionRegistry,
+    SpawnConfig, SpawnerFactory,
 };
 use crate::chat::{ResourceStore, SharedResourceStore};
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
@@ -63,29 +64,35 @@ pub struct ChatGateway {
 }
 
 #[allow(dead_code)]
-struct GatewayState {
-    marketplace: Arc<CapabilityMarketplace>,
-    quarantine: Arc<dyn QuarantineStore>,
-    chain: Arc<Mutex<CausalChain>>,
-    _approvals: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
-    connector: Arc<dyn ChatConnector>,
-    connector_handle: ConnectionHandle,
-    inbox: Mutex<VecDeque<MessageEnvelope>>,
-    policy_pack_version: String,
+pub(crate) struct GatewayState {
+    pub(crate) marketplace: Arc<CapabilityMarketplace>,
+    pub(crate) quarantine: Arc<dyn QuarantineStore>,
+    pub(crate) chain: Arc<Mutex<CausalChain>>,
+    pub(crate) _approvals: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    pub(crate) connector: Arc<dyn ChatConnector>,
+    pub(crate) connector_handle: ConnectionHandle,
+    pub(crate) inbox: Mutex<VecDeque<MessageEnvelope>>,
+    pub(crate) policy_pack_version: String,
     /// Session registry for managing agent sessions
-    session_registry: SessionRegistry,
+    pub(crate) session_registry: SessionRegistry,
     /// Agent spawner for launching agent runtimes
-    spawner: Arc<dyn AgentSpawner>,
+    pub(crate) spawner: Arc<dyn AgentSpawner>,
     /// Run store for managing autonomous runs
-    run_store: SharedRunStore,
+    pub(crate) run_store: SharedRunStore,
     /// Instruction resource store (URLs/text/docs) for restart-safe autonomy
-    resource_store: SharedResourceStore,
+    pub(crate) resource_store: SharedResourceStore,
+    /// Scheduler for delayed/recurring runs
+    pub(crate) scheduler: Arc<Scheduler>,
+    /// Checkpoint store for persistence
+    pub(crate) checkpoint_store: Arc<dyn CheckpointStore>,
+    /// Internal secret for native capabilities (like scheduler)
+    pub(crate) internal_api_secret: String,
 }
 
 #[async_trait]
 impl ApprovalConsumer for GatewayState {
     async fn on_approval_requested(&self, request: &ApprovalRequest) {
-        log::info!("[Gateway] Approval requested: {}", request.id);
+        log::debug!("[Gateway] Approval requested: {}", request.id);
         let session_id = request.metadata.get("session_id");
         if let Some(session_id) = session_id {
             self.nudge_user(session_id, &request.id, &request.category)
@@ -131,10 +138,11 @@ impl ApprovalConsumer for GatewayState {
                         store.update_run_state(&run_id, crate::chat::run::RunState::Active);
                     }
 
-                    log::info!(
-                        "[Gateway] Auto-resumed run {} after approval {}",
-                        run_id,
-                        request.id
+                    SheriffLogger::log_run(
+                        "AUTO-RESUME",
+                        &run_id,
+                        session_id,
+                        &format!("Resuming run after approval {}", request.id),
                     );
 
                     // Record event (no lock needed for record_run_event)
@@ -213,6 +221,174 @@ impl GatewayState {
             );
         }
     }
+
+    pub(crate) async fn spawn_agent_for_run(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        budget: Option<BudgetContext>,
+    ) -> Result<(), StatusCode> {
+        // Create SpawnConfig from budget
+        let spawn_config = if let Some(ref b) = budget {
+            SpawnConfig::new()
+                .with_max_steps(b.max_steps)
+                .with_max_duration_secs(b.max_duration_secs)
+                .with_budget_policy("pause_approval")
+        } else {
+            SpawnConfig::default()
+        };
+
+        let spawn_config = spawn_config.with_run_id(run_id);
+
+        let token = self
+            .session_registry
+            .get_token(session_id)
+            .await
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        SheriffLogger::log_agent(
+            "SPAWN",
+            session_id,
+            &format!("Triggering agent spawn for run {}", run_id),
+        );
+
+        match self
+            .spawner
+            .spawn(session_id.to_string(), token, spawn_config)
+            .await
+        {
+            Ok(spawn_result) => {
+                if let Some(pid) = spawn_result.pid {
+                    let _ = self.session_registry.set_agent_pid(session_id, pid).await;
+                }
+
+                let log_path = spawn_result
+                    .log_path
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string());
+
+                SheriffLogger::log_spawn(run_id, session_id, spawn_result.pid, &log_path);
+
+                SheriffLogger::log_agent(
+                    "INFO",
+                    session_id,
+                    &format!("Agent for run {} started. {}", run_id, spawn_result.message),
+                );
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("[Gateway] Failed to spawn agent for run {}: {}", run_id, e);
+                SheriffLogger::log_agent(
+                    "SPAWN_FAILED",
+                    session_id,
+                    &format!("Failed to spawn agent for run {}: {}", run_id, e),
+                );
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    }
+}
+
+/// Structured logger for the Gateway (Sheriff)
+pub struct SheriffLogger;
+
+impl SheriffLogger {
+    pub fn log_run(event: &str, run_id: &str, session_id: &str, details: &str) {
+        println!(
+            "{} {:<10} | {:<20} | run={:<12} session={:<32} | {}",
+            Utc::now().format("%H:%M:%S"),
+            "RUN",
+            event,
+            run_id.chars().take(8).collect::<String>(),
+            session_id,
+            details
+        );
+    }
+
+    pub fn log_action(run_id: &str, capability_id: &str, inputs: &serde_json::Value) {
+        let inputs_str = serde_json::to_string(inputs).unwrap_or_default();
+        let truncated = if inputs_str.len() > 100 {
+            format!("{}...", &inputs_str[..97])
+        } else {
+            inputs_str
+        };
+        println!(
+            "{} {:<10} | {:<20} | run={:<12} | cap={:<24} inputs={}",
+            Utc::now().format("%H:%M:%S"),
+            "ACTION",
+            "TRIGGER",
+            run_id.chars().take(8).collect::<String>(),
+            capability_id,
+            truncated
+        );
+    }
+
+    pub fn log_result(
+        run_id: &str,
+        capability_id: &str,
+        success: bool,
+        result: &serde_json::Value,
+    ) {
+        let res_str = serde_json::to_string(result).unwrap_or_default();
+        let truncated = if res_str.len() > 140 {
+            format!("{}...", &res_str[..137])
+        } else {
+            res_str
+        };
+        let status = if success {
+            "✅ SUCCESS"
+        } else {
+            "❌ FAILURE"
+        };
+        println!(
+            "{} {:<10} | {:<20} | run={:<12} | cap={:<24} status={} result={}",
+            Utc::now().format("%H:%M:%S"),
+            "RESULT",
+            "COMPLETE",
+            run_id.chars().take(8).collect::<String>(),
+            capability_id,
+            status,
+            truncated
+        );
+    }
+
+    pub fn log_budget(run_id: &str, reason: &str, details: &str) {
+        println!(
+            "{} {:<10} | {:<20} | run={:<12} | reason={:<16} | {}",
+            Utc::now().format("%H:%M:%S"),
+            "BUDGET",
+            "LIMIT",
+            run_id.chars().take(8).collect::<String>(),
+            reason,
+            details
+        );
+    }
+
+    pub fn log_agent(event: &str, session_id: &str, details: &str) {
+        println!(
+            "{} {:<10} | {:<20} | session={:<32} | {}",
+            Utc::now().format("%H:%M:%S"),
+            "AGENT",
+            event,
+            session_id,
+            details
+        );
+    }
+
+    pub fn log_spawn(run_id: &str, session_id: &str, pid: Option<u32>, log_path: &str) {
+        let pid_str = pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        println!(
+            "{} {:<10} | {:<20} | run={:<12} | pid={:<8} logs={}",
+            Utc::now().format("%H:%M:%S"),
+            "AGENT",
+            "SPAWNED",
+            run_id.chars().take(8).collect::<String>(),
+            pid_str,
+            log_path
+        );
+    }
 }
 
 impl ChatGateway {
@@ -271,6 +447,9 @@ impl ChatGateway {
         // the chat security contract while still enabling governed resource ingestion.
         crate::capabilities::network::register_network_capabilities(&*marketplace).await?;
 
+        // Generate internal secret for native capabilities
+        let internal_api_secret = uuid::Uuid::new_v4().to_string();
+
         register_chat_capabilities(
             marketplace.clone(),
             quarantine.clone(),
@@ -279,6 +458,8 @@ impl ChatGateway {
             resource_store.clone(),
             Some(connector.clone() as Arc<dyn ChatConnector>),
             Some(handle.clone()),
+            Some(format!("http://{}", config.bind_addr)),
+            Some(internal_api_secret.clone()),
         )
         .await?;
 
@@ -288,8 +469,8 @@ impl ChatGateway {
 
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
-            quarantine,
-            chain,
+            quarantine: quarantine.clone(),
+            chain: chain.clone(),
             _approvals: approvals.clone(),
             connector: connector.clone(),
             connector_handle: handle.clone(),
@@ -297,8 +478,11 @@ impl ChatGateway {
             policy_pack_version: config.policy_pack_version.clone(),
             session_registry,
             spawner: spawner.into(),
-            run_store,
+            run_store: run_store.clone(),
             resource_store,
+            scheduler: Arc::new(Scheduler::new(run_store.clone())),
+            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
+            internal_api_secret,
         });
 
         // Register gateway as approval consumer
@@ -309,6 +493,14 @@ impl ChatGateway {
         let gateway = ChatGateway {
             state: state.clone(),
         };
+
+        // Start background scheduler
+        let scheduler_state = state.clone();
+        let scheduler = state.scheduler.clone();
+        tokio::spawn(async move {
+            scheduler.start(scheduler_state).await;
+        });
+
         connector
             .subscribe(
                 &handle,
@@ -349,13 +541,12 @@ impl ChatGateway {
     }
 
     async fn handle_inbound(&self, mut envelope: MessageEnvelope) -> RuntimeResult<()> {
-        log::info!(
-            "[Gateway] Received inbound message {} from {} in channel {}",
-            envelope.id,
-            envelope.sender_id,
-            envelope.channel_id
-        );
         let session_id = format!("chat:{}:{}", envelope.channel_id, envelope.sender_id);
+        SheriffLogger::log_agent(
+            "INBOUND",
+            &session_id,
+            &format!("Message {} from {}", envelope.id, envelope.sender_id),
+        );
         // If there's an active run for this session, correlate inbound messages to it.
         // If a run is paused waiting for an external event, auto-resume it on inbound message.
         // Otherwise fall back to an ephemeral run id for audit correlation.
@@ -451,16 +642,19 @@ impl ChatGateway {
                 .await;
             let token = session.auth_token.clone();
 
-            log::info!(
+            log::debug!(
                 "[Gateway] Created new session {} for channel {} sender {}",
                 session.session_id,
                 envelope.channel_id,
                 envelope.sender_id
             );
 
-            // Legacy spawn: agent spawned per-session with default budget
-            // For budget-controlled runs, use POST /chat/run which spawns with Run's budget
-            // This fallback allows existing integrations to work without Run creation
+            SheriffLogger::log_agent(
+                "SPAWN",
+                &session_id,
+                "Triggering legacy agent spawn (default budget)",
+            );
+
             match self
                 .state
                 .spawner
@@ -479,17 +673,30 @@ impl ChatGateway {
                             .set_agent_pid(&session.session_id, pid)
                             .await;
                     }
-                    log::info!(
-                        "[Gateway] Spawned agent for session {} (legacy/default budget): {}",
-                        session.session_id,
-                        spawn_result.message
+
+                    let log_path = spawn_result
+                        .log_path
+                        .clone()
+                        .unwrap_or_else(|| "none".to_string());
+
+                    SheriffLogger::log_spawn(
+                        &run_id,
+                        &session.session_id,
+                        spawn_result.pid,
+                        &log_path,
+                    );
+
+                    SheriffLogger::log_agent(
+                        "INFO",
+                        &session.session_id,
+                        &format!("Legacy agent started. {}", spawn_result.message),
                     );
                 }
                 Err(e) => {
-                    log::error!(
-                        "[Gateway] Failed to spawn agent for session {}: {}",
-                        session.session_id,
-                        e
+                    SheriffLogger::log_agent(
+                        "SPAWN_FAILED",
+                        &session_id,
+                        &format!("Failed to spawn legacy agent: {}", e),
                     );
                 }
             }
@@ -576,7 +783,7 @@ impl ChatGateway {
             );
             return Err(RuntimeError::Generic(e));
         } else {
-            log::info!(
+            log::debug!(
                 "[Gateway] Pushed message {} to session inbox {}",
                 envelope.id,
                 session_id
@@ -975,18 +1182,14 @@ async fn execute_handler(
             || capability_id.starts_with("ccos.chat.transform.")
     }
 
-    let redacted_inputs = redact_json_for_logs(&payload.inputs);
-    log::info!(
-        "[Gateway] Executing capability {} for session {} (agent PID: {:?}) with inputs: {}",
-        payload.capability_id,
-        session.session_id,
-        session.agent_pid,
-        redacted_inputs
-    );
+    let _redacted_inputs = redact_json_for_logs(&payload.inputs);
 
     // Best-effort: if this execute is correlated to a known Run, enforce run state/budget and update its step counters.
     // (Runs are created via POST /chat/run and correlated via the run_id input.)
-    if let Some(run_id) = payload.inputs.get("run_id").and_then(|v| v.as_str()) {
+    let correlated_run_id = payload.inputs.get("run_id").and_then(|v| v.as_str());
+    let run_id_for_log = correlated_run_id.unwrap_or("ephemeral");
+
+    if let Some(run_id) = correlated_run_id {
         let step_id = payload
             .inputs
             .get("step_id")
@@ -1084,6 +1287,11 @@ async fn execute_handler(
             .await;
 
             if !allowed_while_paused(&payload.capability_id) {
+                SheriffLogger::log_budget(
+                    run_id,
+                    "PAUSED",
+                    &format!("Refusing capability {}", payload.capability_id),
+                );
                 return Ok(Json(ExecuteResponse {
                     success: false,
                     result: None,
@@ -1096,13 +1304,37 @@ async fn execute_handler(
         }
     }
 
+    SheriffLogger::log_action(run_id_for_log, &payload.capability_id, &payload.inputs);
+
     // Forward to capability marketplace (which enforces its own policy/approvals)
-    let gateway = ChatGateway { state };
+    let gateway = ChatGateway {
+        state: state.clone(),
+    };
     match gateway
-        .execute_capability(&payload.capability_id, payload.inputs)
+        .execute_capability(&payload.capability_id, payload.inputs.clone())
         .await
     {
         Ok((result, success)) => {
+            SheriffLogger::log_result(run_id_for_log, &payload.capability_id, success, &result);
+            if let Some(run_id) = payload.inputs.get("run_id").and_then(|v| v.as_str()) {
+                if let Ok(mut store) = state.run_store.lock() {
+                    if let Some(run) = store.get_run_mut(run_id) {
+                        if let Some(usage) = result.get("usage").and_then(|v| v.as_object()) {
+                            if let Some(egress) =
+                                usage.get("network_egress_bytes").and_then(|v| v.as_u64())
+                            {
+                                run.consumption.network_egress_bytes += egress;
+                            }
+                            if let Some(ingress) =
+                                usage.get("network_ingress_bytes").and_then(|v| v.as_u64())
+                            {
+                                run.consumption.network_ingress_bytes += ingress;
+                            }
+                        }
+                    }
+                }
+            }
+
             if payload.capability_id == "ccos.skill.load" && success {
                 let skill_id = result
                     .get("skill_id")
@@ -1393,12 +1625,14 @@ async fn list_capabilities_handler(
 
 /// Create a new run
 #[derive(Debug, Deserialize)]
-struct CreateRunRequest {
-    session_id: String,
-    goal: String,
+pub struct CreateRunRequest {
+    pub session_id: String,
+    pub goal: String,
     #[serde(default)]
-    budget: Option<BudgetContextRequest>,
-    completion_predicate: Option<serde_json::Value>,
+    pub budget: Option<BudgetContextRequest>,
+    pub completion_predicate: Option<serde_json::Value>,
+    pub schedule: Option<String>,
+    pub next_run_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1406,6 +1640,8 @@ struct BudgetContextRequest {
     max_steps: Option<u32>,
     max_duration_secs: Option<u64>,
     max_tokens: Option<u64>,
+    max_network_egress_bytes: Option<u64>,
+    max_network_ingress_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1415,6 +1651,7 @@ struct CreateRunResponse {
     goal: String,
     state: String,
     correlation_id: String,
+    next_run_at: Option<DateTime<Utc>>,
 }
 
 async fn create_run_handler(
@@ -1422,18 +1659,29 @@ async fn create_run_handler(
     headers: axum::http::HeaderMap,
     Json(payload): Json<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, StatusCode> {
-    // Require X-Agent-Token header
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
 
-    // Validate token against session
-    let session = state
-        .session_registry
-        .validate_token(&payload.session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Validate agent token against session
+            let _session = state
+                .session_registry
+                .validate_token(&payload.session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     // Create budget from request
     let budget = payload.budget.as_ref().map(|b| BudgetContext {
@@ -1441,20 +1689,37 @@ async fn create_run_handler(
         max_duration_secs: b.max_duration_secs.unwrap_or(300),
         max_tokens: b.max_tokens,
         max_retries_per_step: 3,
+        max_network_egress_bytes: b.max_network_egress_bytes,
+        max_network_ingress_bytes: b.max_network_ingress_bytes,
     });
 
-    // Create SpawnConfig from budget
-    let spawn_config = if let Some(ref b) = payload.budget {
-        SpawnConfig::new()
-            .with_max_steps(b.max_steps.unwrap_or(50))
-            .with_max_duration_secs(b.max_duration_secs.unwrap_or(300))
-            .with_budget_policy("pause_approval")
+    // Create the run
+    // Create the run
+    let mut run = if payload.schedule.is_some() || payload.next_run_at.is_some() {
+        let schedule = payload
+            .schedule
+            .clone()
+            .unwrap_or_else(|| "one-off".to_string());
+        let next_run = payload.next_run_at.unwrap_or_else(|| {
+            // Simple delay-based schedule if next_run_at not specified
+            // In future, parse cron expression here
+            Utc::now() + chrono::Duration::seconds(5)
+        });
+        Run::new_scheduled(
+            payload.session_id.clone(),
+            payload.goal.clone(),
+            schedule,
+            next_run,
+            budget.clone(),
+        )
     } else {
-        SpawnConfig::default()
+        Run::new(
+            payload.session_id.clone(),
+            payload.goal.clone(),
+            budget.clone(),
+        )
     };
 
-    // Create the run
-    let mut run = Run::new(payload.session_id.clone(), payload.goal.clone(), budget);
     if let Some(pred_value) = payload.completion_predicate {
         let predicate: Option<crate::chat::Predicate> = if pred_value.is_string() {
             // Legacy/convenience migration
@@ -1477,6 +1742,8 @@ async fn create_run_handler(
     let correlation_id = run.correlation_id.clone();
     let budget_audit = run.budget.clone();
     let state_str = format!("{:?}", run.state);
+    let next_run_at = run.next_run_at;
+    let is_scheduled = matches!(run.state, RunState::Scheduled);
 
     // Store the run (refuse if another active run exists for the session).
     {
@@ -1484,14 +1751,22 @@ async fn create_run_handler(
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if store
-            .get_active_run_for_session(&payload.session_id)
-            .is_some()
+        if !is_scheduled
+            && store
+                .get_active_run_for_session(&payload.session_id)
+                .is_some()
         {
             return Err(StatusCode::CONFLICT);
         }
         store.create_run(run);
     }
+
+    SheriffLogger::log_run(
+        if is_scheduled { "SCHEDULED" } else { "CREATED" },
+        &run_id,
+        &payload.session_id,
+        &payload.goal,
+    );
 
     // Persist run creation to the causal chain (minimal audit trail).
     {
@@ -1513,6 +1788,12 @@ async fn create_run_handler(
             "budget_max_duration_secs".to_string(),
             Value::Integer(budget_audit.max_duration_secs as i64),
         );
+        if let Some(sched) = &payload.schedule {
+            meta.insert("schedule".to_string(), Value::String(sched.clone()));
+        }
+        if let Some(next) = next_run_at {
+            meta.insert("next_run_at".to_string(), Value::String(next.to_rfc3339()));
+        }
 
         let _ = record_run_event(
             &state,
@@ -1525,65 +1806,44 @@ async fn create_run_handler(
         .await;
     }
 
-    // Spawn agent for this run with budget from SpawnConfig
-    let spawn_config = spawn_config.with_run_id(&run_id);
-    match state
-        .spawner
-        .spawn(
-            session.session_id.clone(),
-            session.auth_token.clone(),
-            spawn_config,
-        )
-        .await
-    {
-        Ok(spawn_result) => {
-            if let Some(pid) = spawn_result.pid {
-                let _ = state
-                    .session_registry
-                    .set_agent_pid(&session.session_id, pid)
-                    .await;
-            }
-            log::info!(
-                "[Gateway] Spawned agent for run {} (session {}): {}",
-                run_id,
+    if !is_scheduled {
+        // Spawn agent for this run
+        if let Err(e) = state
+            .spawn_agent_for_run(&payload.session_id, &run_id, budget)
+            .await
+        {
+            log::error!("[Gateway] Failed to spawn agent for run {}: {}", run_id, e);
+        }
+
+        // Kick off the run by enqueueing a synthetic system message with the goal.
+        let channel_id = payload
+            .session_id
+            .split(':')
+            .nth(1)
+            .unwrap_or("default")
+            .to_string();
+        let kickoff = format!("Run started ({}). Goal:\n{}", run_id, payload.goal);
+        if let Err(e) = state
+            .session_registry
+            .push_message_to_session(
+                &payload.session_id,
+                channel_id,
+                kickoff,
+                "system".to_string(),
+            )
+            .await
+        {
+            log::warn!(
+                "[Gateway] Failed to enqueue run kickoff message for {}: {}",
                 payload.session_id,
-                spawn_result.message
+                e
             );
         }
-        Err(e) => {
-            log::error!("[Gateway] Failed to spawn agent for run {}: {}", run_id, e);
-            // Don't fail the run creation - the run exists but agent spawn failed
-        }
     }
 
-    // Kick off the run by enqueueing a synthetic system message with the goal.
-    // This keeps the Gateway/Agent generic: a Run is simply a goal message delivered to the agent.
-    let channel_id = payload
-        .session_id
-        .split(':')
-        .nth(1)
-        .unwrap_or("default")
-        .to_string();
-    let kickoff = format!("Run started ({}). Goal:\n{}", run_id, payload.goal);
-    if let Err(e) = state
-        .session_registry
-        .push_message_to_session(
-            &payload.session_id,
-            channel_id,
-            kickoff,
-            "system".to_string(),
-        )
-        .await
-    {
-        log::warn!(
-            "[Gateway] Failed to enqueue run kickoff message for {}: {}",
-            payload.session_id,
-            e
-        );
-    }
-
-    log::info!(
-        "[Gateway] Created run {} for session {} with goal: {}",
+    log::debug!(
+        "[Gateway] Created {}run {} for session {} with goal: {}",
+        if is_scheduled { "scheduled " } else { "" },
         run_id,
         payload.session_id,
         payload.goal
@@ -1595,7 +1855,166 @@ async fn create_run_handler(
         goal: payload.goal,
         state: state_str,
         correlation_id,
+        next_run_at,
     }))
+}
+
+/// Resume a paused run from checkpoint
+async fn resume_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    // 1. Auth check
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let (session_id, budget, checkpoint_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+
+        if !matches!(run.state, RunState::PausedCheckpoint { .. }) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+
+        (
+            run.session_id.clone(),
+            run.budget.clone(),
+            run.latest_checkpoint_id.clone(),
+        )
+    };
+
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    SheriffLogger::log_run(
+        "RESUME",
+        &run_id,
+        &session_id,
+        &format!("Resuming from checkpoint {:?}", checkpoint_id),
+    );
+
+    // 2. Load checkpoint
+    let ckpt_id = checkpoint_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let ckpt = state
+        .checkpoint_store
+        .get_checkpoint(&ckpt_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // 3. Update state to Active
+    {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store.update_run_state(&run_id, RunState::Active);
+    }
+
+    // 4. Trigger resume in agent
+    if let Err(e) = state
+        .spawn_agent_for_run(&session_id, &run_id, Some(budget))
+        .await
+    {
+        log::error!(
+            "[Gateway] Failed to spawn agent for resume {}: {}",
+            run_id,
+            e
+        );
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // Push resume message
+    let channel_id = session_id
+        .split(':')
+        .nth(1)
+        .unwrap_or("default")
+        .to_string();
+    let resume_msg = format!("Resuming run {}. Checkpoint: {}", run_id, ckpt.id);
+    let _ = state
+        .session_registry
+        .push_message_to_session(&session_id, channel_id, resume_msg, "system".to_string())
+        .await;
+
+    Ok(StatusCode::OK)
+}
+
+/// Create a checkpoint for an active run
+#[derive(Debug, Deserialize)]
+struct CheckpointRunRequest {
+    env: serde_json::Value,
+    ir_pos: usize,
+    reason: String,
+}
+
+async fn checkpoint_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+    Json(payload): Json<CheckpointRunRequest>,
+) -> Result<Json<String>, StatusCode> {
+    // 1. Auth check
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let session_id = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store
+            .get_run(&run_id)
+            .map(|r| r.session_id.clone())
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    let _session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // 2. Create checkpoint
+    let ckpt = Checkpoint::new(run_id.clone(), payload.env, payload.ir_pos);
+    let ckpt_id = ckpt.id.clone();
+
+    SheriffLogger::log_run(
+        "CHECKPOINT",
+        &run_id,
+        &session_id,
+        &format!("Saving state (IR pos: {})", payload.ir_pos),
+    );
+
+    state
+        .checkpoint_store
+        .store_checkpoint(ckpt)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 3. Update run state
+    {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let run = store.get_run_mut(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        run.state = RunState::PausedCheckpoint {
+            reason: payload.reason,
+            checkpoint_id: ckpt_id.clone(),
+        };
+        run.latest_checkpoint_id = Some(ckpt_id.clone());
+    }
+
+    Ok(Json(ckpt_id))
 }
 
 /// Get run status
@@ -1615,6 +2034,7 @@ struct GetRunResponse {
     updated_at: String,
     current_step_id: Option<String>,
     completion_predicate: Option<crate::chat::Predicate>,
+    next_run_at: Option<String>,
 }
 
 async fn get_run_handler(
@@ -1668,6 +2088,7 @@ async fn get_run_handler(
         updated_at: run.updated_at.to_rfc3339(),
         current_step_id: run.current_step_id.clone(),
         completion_predicate: run.completion_predicate.clone(),
+        next_run_at: run.next_run_at.map(|dt| dt.to_rfc3339()),
     }))
 }
 
@@ -1686,6 +2107,7 @@ struct RunSummaryResponse {
     created_at: String,
     updated_at: String,
     current_step_id: Option<String>,
+    next_run_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1733,6 +2155,7 @@ async fn list_runs_handler(
             created_at: run.created_at.to_rfc3339(),
             updated_at: run.updated_at.to_rfc3339(),
             current_step_id: run.current_step_id.clone(),
+            next_run_at: run.next_run_at.map(|dt| dt.to_rfc3339()),
         })
         .collect();
 
@@ -1916,141 +2339,6 @@ async fn cancel_run_handler(
     }))
 }
 
-/// Resume a run
-#[derive(Debug, Serialize)]
-struct ResumeRunResponse {
-    run_id: String,
-    resumed: bool,
-    previous_state: String,
-}
-
-async fn resume_run_handler(
-    State(state): State<Arc<GatewayState>>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(run_id): axum::extract::Path<String>,
-) -> Result<Json<ResumeRunResponse>, StatusCode> {
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let (previous_state, session_id) = {
-        let store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
-        (format!("{:?}", run.state), run.session_id.clone())
-    };
-
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let resumed = {
-        let mut store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store.update_run_state(&run_id, crate::chat::run::RunState::Active)
-    };
-
-    if resumed {
-        let meta = HashMap::new();
-        let _ = record_run_event(
-            &state,
-            &session_id,
-            &run_id,
-            &format!("resume-{}", uuid::Uuid::new_v4()),
-            "run.resume",
-            meta,
-        )
-        .await;
-    }
-
-    Ok(Json(ResumeRunResponse {
-        run_id,
-        resumed,
-        previous_state,
-    }))
-}
-
-/// Checkpoint a run
-#[derive(Debug, Deserialize)]
-struct CheckpointRunRequest {
-    reason: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CheckpointRunResponse {
-    run_id: String,
-    checkpoint_id: String,
-    previous_state: String,
-}
-
-async fn checkpoint_run_handler(
-    State(state): State<Arc<GatewayState>>,
-    headers: axum::http::HeaderMap,
-    axum::extract::Path(run_id): axum::extract::Path<String>,
-    Json(payload): Json<CheckpointRunRequest>,
-) -> Result<Json<CheckpointRunResponse>, StatusCode> {
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let (previous_state, session_id) = {
-        let store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
-        (format!("{:?}", run.state), run.session_id.clone())
-    };
-
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let checkpoint_id = {
-        let mut store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let run = store.get_run_mut(&run_id).ok_or(StatusCode::NOT_FOUND)?;
-        run.checkpoint(payload.reason.clone())
-    };
-
-    let mut meta = HashMap::new();
-    meta.insert("reason".to_string(), Value::String(payload.reason));
-    meta.insert(
-        "checkpoint_id".to_string(),
-        Value::String(checkpoint_id.clone()),
-    );
-
-    let _ = record_run_event(
-        &state,
-        &session_id,
-        &run_id,
-        &format!("chk-{}", uuid::Uuid::new_v4()),
-        "run.checkpoint",
-        meta,
-    )
-    .await;
-
-    Ok(Json(CheckpointRunResponse {
-        run_id,
-        checkpoint_id,
-        previous_state,
-    }))
-}
-
 /// Transition a run to a new state (generic administrative endpoint).
 #[derive(Debug, Deserialize)]
 struct TransitionRunRequest {
@@ -2162,6 +2450,12 @@ async fn transition_run_handler(
 
     // Re-acquire lock and transition (and optionally reset/update budget).
     let transitioned = {
+        SheriffLogger::log_run(
+            "TRANSITION",
+            &run_id,
+            &session_id,
+            &format!("{} -> {}", previous_state, payload.new_state),
+        );
         let mut store = state
             .run_store
             .lock()

@@ -113,6 +113,7 @@ export OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
 # Skill URL hints: let the agent resolve "moltbook" -> local mock server
 export CCOS_SKILL_URL_HINTS="moltbook=http://localhost:8765/skill.md"
+unset CCOS_SKILL_URL_HINTS
 
 ./target/debug/ccos-chat-gateway serve \
     --bind-addr 127.0.0.1:8822 \
