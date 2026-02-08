@@ -5,7 +5,9 @@
 use ccos::capability_marketplace::executors::{
     CapabilityExecutor, ExecutionContext, SandboxedExecutor,
 };
-use ccos::capability_marketplace::types::{EffectType, ProviderType, SandboxedCapability};
+use ccos::capability_marketplace::types::{
+    ApprovalStatus, EffectType, ProviderType, SandboxedCapability,
+};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -290,6 +292,7 @@ print(json.dumps({"result": "sandbox works!"}))
         domains: vec!["test".to_string()],
         categories: vec!["sandbox".to_string()],
         effect_type: EffectType::Effectful,
+        approval_status: ApprovalStatus::Approved,
     };
 
     // Register the capability
@@ -354,7 +357,10 @@ print(json.dumps({"ok": true}))
 "#;
 
     let mut input_map = std::collections::HashMap::new();
-    input_map.insert(MapKey::String("code".to_string()), Value::String(code.to_string()));
+    input_map.insert(
+        MapKey::String("code".to_string()),
+        Value::String(code.to_string()),
+    );
     input_map.insert(
         MapKey::String("provider".to_string()),
         Value::String("process".to_string()),

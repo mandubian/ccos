@@ -5,6 +5,7 @@
 //! capability synthesis, and LLM prompts.
 
 pub mod queue;
+pub mod runtime_state;
 pub mod storage_causal;
 pub mod storage_file;
 pub mod storage_memory;
