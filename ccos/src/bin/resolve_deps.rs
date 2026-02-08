@@ -9,7 +9,7 @@ use ccos::arbiter::config::{
 };
 use ccos::arbiter::delegating_engine::DelegatingCognitiveEngine;
 use ccos::capability_marketplace::types::{
-    CapabilityManifest, EffectType, LocalCapability, ProviderType,
+    ApprovalStatus, CapabilityManifest, EffectType, LocalCapability, ProviderType,
 };
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::checkpoint_archive::CheckpointArchive;
@@ -1064,7 +1064,8 @@ async fn bootstrap_test_capabilities(
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
+            approval_status: ApprovalStatus::Pending,
         };
 
         marketplace.register_capability_manifest(manifest).await?;

@@ -17,6 +17,7 @@ use sha2::Digest;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
+use base64::Engine as _;
 
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::UnifiedApprovalQueue;
@@ -32,11 +33,13 @@ use crate::capability_marketplace::types::{
 };
 
 pub mod agent_llm;
+pub mod agent_monitor;
 pub mod checkpoint;
 pub mod connector;
 pub mod gateway;
 pub mod quarantine;
 pub mod predicate;
+pub mod realtime_sink;
 pub mod resource;
 pub mod run;
 pub mod scheduler;
@@ -50,10 +53,12 @@ pub use predicate::Predicate;
 pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
 pub use resource::{new_shared_resource_store, ResourceRecord, ResourceStore, SharedResourceStore};
 pub use checkpoint::{Checkpoint, CheckpointStore, InMemoryCheckpointStore};
+pub use realtime_sink::{RealTimeTrackingSink, SessionEvent, SessionStateSnapshot, ActionView};
 pub use run::{BudgetContext, Run, RunState, RunStore, SharedRunStore, new_shared_run_store};
 pub use scheduler::Scheduler;
 pub use session::{ChatMessage, SessionRegistry};
 pub use spawner::{AgentSpawner, SpawnConfig, SpawnerFactory};
+pub use agent_monitor::{AgentMonitor, AgentHealth};
 
 /// Reserved key for CCOS-internal chat metadata inside RTFS values.
 ///
@@ -343,6 +348,8 @@ pub async fn register_chat_capabilities(
     connector_handle: Option<ConnectionHandle>,
     gateway_url: Option<String>,
     internal_secret: Option<String>,
+    sandbox_config: crate::config::types::SandboxConfig,
+    coding_agents_config: crate::config::types::CodingAgentsConfig,
 ) -> RuntimeResult<()> {
     async fn register_native_chat_capability(
         marketplace: &crate::capability_marketplace::CapabilityMarketplace,
@@ -384,6 +391,7 @@ pub async fn register_chat_capabilities(
             domains: vec!["chat".to_string()],
             categories: vec!["transform".to_string()],
             effect_type,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
 
         marketplace.register_capability_manifest(manifest).await
@@ -1722,6 +1730,806 @@ pub async fn register_chat_capabilities(
         .await?;
     }
 
+    // -----------------------------------------------------------------
+    // Python Code Execution Capability
+    // -----------------------------------------------------------------
+    {
+        use crate::sandbox::bubblewrap::{BubblewrapSandbox, InputFile};
+        use crate::sandbox::config::{SandboxConfig, SandboxRuntimeType};
+        use crate::sandbox::resources::ResourceLimits;
+        use crate::sandbox::DependencyManager;
+
+        // Clone config for capture in closure
+        let sandbox_cfg = sandbox_config.clone();
+
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.execute.python",
+            "Execute Python Code",
+            "Execute Python code in a secure sandboxed environment with file mounting support. Input files are mounted read-only at /workspace/input/. Output files should be written to /workspace/output/. Supports: pandas, numpy, matplotlib, requests. Optional dependencies can be specified for auto-installation (if in allowlist).",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let sandbox_cfg = sandbox_cfg.clone();
+                Box::pin(async move {
+                    // Check if bubblewrap is available
+                    let bwrap_available = std::process::Command::new("which")
+                        .arg("bwrap")
+                        .output()
+                        .map(|output| output.status.success())
+                        .unwrap_or(false);
+                    
+                    if !bwrap_available {
+                        return Err(RuntimeError::Generic(
+                            "Python execution not available (bubblewrap not installed)".to_string()
+                        ));
+                    }
+
+                    let sandbox = BubblewrapSandbox::new()
+                        .map_err(|e| RuntimeError::Generic(format!("Failed to create sandbox: {}", e)))?;
+
+                    // Parse inputs
+                    let map = match &inputs {
+                        Value::Map(m) => m,
+                        _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
+                    };
+
+                    // Get code
+                    let code = map
+                        .get(&MapKey::Keyword(Keyword("code".to_string())))
+                        .or_else(|| map.get(&MapKey::String("code".to_string())))
+                        .and_then(|v| v.as_string())
+                        .ok_or_else(|| RuntimeError::Generic("Missing 'code' parameter".to_string()))?
+                        .to_string();
+
+                    // Get input files
+                    let mut input_files = Vec::new();
+                    if let Some(files_value) = map
+                        .get(&MapKey::Keyword(Keyword("input_files".to_string())))
+                        .or_else(|| map.get(&MapKey::String("input_files".to_string())))
+                    {
+                        if let Value::Map(files_map) = files_value {
+                            for (key, value) in files_map {
+                                let name = match key {
+                                    MapKey::String(s) | MapKey::Keyword(Keyword(s)) => s.clone(),
+                                    MapKey::Integer(i) => i.to_string(),
+                                };
+                                let path = value.as_string()
+                                    .ok_or_else(|| RuntimeError::Generic(
+                                        format!("Invalid path for file '{}'", name)
+                                    ))?;
+                                input_files.push(InputFile {
+                                    name,
+                                    host_path: std::path::PathBuf::from(path),
+                                });
+                            }
+                        }
+                    }
+
+                    // Validate input files exist
+                    for file in &input_files {
+                        if !file.host_path.exists() {
+                            return Err(RuntimeError::Generic(format!(
+                                "Input file '{}' does not exist at path '{}'",
+                                file.name,
+                                file.host_path.display()
+                            )));
+                        }
+                    }
+
+                    // Get timeout and memory limits
+                    let timeout_ms = map
+                        .get(&MapKey::Keyword(Keyword("timeout_ms".to_string())))
+                        .or_else(|| map.get(&MapKey::String("timeout_ms".to_string())))
+                        .and_then(|v| match v {
+                            Value::Float(f) => Some(*f as u32),
+                            _ => None,
+                        })
+                        .unwrap_or(30000);
+
+                    let max_memory_mb = map
+                        .get(&MapKey::Keyword(Keyword("max_memory_mb".to_string())))
+                        .or_else(|| map.get(&MapKey::String("max_memory_mb".to_string())))
+                        .and_then(|v| match v {
+                            Value::Float(f) => Some(*f as u32),
+                            _ => None,
+                        })
+                        .unwrap_or(512);
+
+                    // Parse dependencies (optional, Phase 2)
+                    let mut dependencies = Vec::new();
+                    if let Some(deps_value) = map
+                        .get(&MapKey::Keyword(Keyword("dependencies".to_string())))
+                        .or_else(|| map.get(&MapKey::String("dependencies".to_string())))
+                    {
+                        if let Value::Vector(deps_vec) = deps_value {
+                            for dep in deps_vec {
+                                if let Some(dep_str) = dep.as_string() {
+                                    dependencies.push(dep_str.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // Build sandbox execution config (different from config::types::SandboxConfig)
+                    let exec_sandbox_config = SandboxConfig {
+                        runtime_type: SandboxRuntimeType::Process,
+                        capability_id: Some("ccos.execute.python".to_string()),
+                        resources: Some(ResourceLimits {
+                            memory_mb: max_memory_mb as u64,
+                            timeout_ms: timeout_ms as u64,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    };
+
+                    // Create dependency manager using captured config
+                    let dep_manager = DependencyManager::new(sandbox_cfg.clone());
+
+                    // Execute with optional dependencies
+                    let result = sandbox.execute_python(
+                        &code, 
+                        &input_files, 
+                        &exec_sandbox_config,
+                        if dependencies.is_empty() { None } else { Some(&dependencies) },
+                        Some(&dep_manager)
+                    ).await
+                        .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
+
+                    // Build output
+                    let mut output_map = HashMap::new();
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("success".to_string())),
+                        Value::Boolean(result.success),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("stdout".to_string())),
+                        Value::String(result.stdout),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("stderr".to_string())),
+                        Value::String(result.stderr),
+                    );
+                    
+                    if let Some(exit_code) = result.exit_code {
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("exit_code".to_string())),
+                            Value::Float(exit_code as f64),
+                        );
+                    } else {
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("exit_code".to_string())),
+                            Value::Nil,
+                        );
+                    }
+
+                    // Encode output files
+                    if !result.output_files.is_empty() {
+                        let mut files_map = HashMap::new();
+                        for (name, content) in result.output_files {
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
+                            files_map.insert(
+                                MapKey::String(name),
+                                Value::String(encoded),
+                            );
+                        }
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("files".to_string())),
+                            Value::Map(files_map),
+                        );
+                    }
+
+                    Ok(Value::Map(output_map))
+                })
+            }),
+            "high",
+            vec!["compute".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    // -----------------------------------------------------------------
+    // JavaScript Code Execution Capability (Phase 6)
+    // -----------------------------------------------------------------
+    {
+        use crate::sandbox::{BubblewrapSandbox, InputFile, SandboxConfig, SandboxRuntimeType};
+        use crate::sandbox::resources::ResourceLimits;
+        use crate::sandbox::dependency_manager::DependencyManager;
+
+        let sandbox = Arc::new(BubblewrapSandbox::new()?);
+        let marketplace = Arc::clone(&marketplace);
+        // Clone config for capture in closure
+        let sandbox_cfg = sandbox_config.clone();
+
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.execute.javascript",
+            "Execute JavaScript Code",
+            "Execute Node.js snippets in a secure sandbox. Input should include 'code'. Optional: 'input_files' (map of name to host_path), 'dependencies' (list), 'timeout_ms', 'max_memory_mb'.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let sandbox = Arc::clone(&sandbox);
+                let sandbox_cfg = sandbox_cfg.clone();
+                Box::pin(async move {
+                    let map = match &inputs {
+                        Value::Map(m) => m,
+                        _ => return Err(RuntimeError::Generic("Input must be a map".to_string())),
+                    };
+
+                    let code = map
+                        .get(&MapKey::Keyword(Keyword("code".to_string())))
+                        .or_else(|| map.get(&MapKey::String("code".to_string())))
+                        .and_then(|v| v.as_string())
+                        .ok_or_else(|| RuntimeError::Generic("Missing 'code' parameter".to_string()))?
+                        .to_string();
+
+                    // Parse input files (Phase 1)
+                    let mut input_files = Vec::new();
+                    if let Some(files_value) = map
+                        .get(&MapKey::Keyword(Keyword("input_files".to_string())))
+                        .or_else(|| map.get(&MapKey::String("input_files".to_string())))
+                    {
+                        if let Value::Map(files_map) = files_value {
+                            for (key, value) in files_map {
+                                let name = match key {
+                                    MapKey::String(s) | MapKey::Keyword(Keyword(s)) => s.clone(),
+                                    MapKey::Integer(i) => i.to_string(),
+                                };
+                                let path = value.as_string()
+                                    .ok_or_else(|| RuntimeError::Generic(
+                                        format!("Invalid path for file '{}'", name)
+                                    ))?;
+                                input_files.push(InputFile {
+                                    name,
+                                    host_path: std::path::PathBuf::from(path),
+                                });
+                            }
+                        }
+                    }
+
+                    // Validate input files exist
+                    for file in &input_files {
+                        if !file.host_path.exists() {
+                            return Err(RuntimeError::Generic(format!(
+                                "Input file '{}' does not exist at path '{}'",
+                                file.name,
+                                file.host_path.display()
+                            )));
+                        }
+                    }
+
+                    // Get timeout and memory limits
+                    let timeout_ms = map
+                        .get(&MapKey::Keyword(Keyword("timeout_ms".to_string())))
+                        .or_else(|| map.get(&MapKey::String("timeout_ms".to_string())))
+                        .and_then(|v| match v {
+                            Value::Float(f) => Some(f.clone() as u32),
+                            Value::Integer(i) => Some(i.clone() as u32),
+                            _ => None,
+                        })
+                        .unwrap_or(30000);
+
+                    let max_memory_mb = map
+                        .get(&MapKey::Keyword(Keyword("max_memory_mb".to_string())))
+                        .or_else(|| map.get(&MapKey::String("max_memory_mb".to_string())))
+                        .and_then(|v| match v {
+                            Value::Float(f) => Some(f.clone() as u32),
+                            Value::Integer(i) => Some(i.clone() as u32),
+                            _ => None,
+                        })
+                        .unwrap_or(512);
+
+                    // Parse dependencies (optional, Phase 6)
+                    let mut dependencies = Vec::new();
+                    if let Some(deps_value) = map
+                        .get(&MapKey::Keyword(Keyword("dependencies".to_string())))
+                        .or_else(|| map.get(&MapKey::String("dependencies".to_string())))
+                    {
+                        if let Value::Vector(deps_vec) = deps_value {
+                            for dep in deps_vec {
+                                if let Some(dep_str) = dep.as_string() {
+                                    dependencies.push(dep_str.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // Build sandbox execution config
+                    let exec_sandbox_config = SandboxConfig {
+                        runtime_type: SandboxRuntimeType::Process,
+                        capability_id: Some("ccos.execute.javascript".to_string()),
+                        resources: Some(ResourceLimits {
+                            memory_mb: max_memory_mb as u64,
+                            timeout_ms: timeout_ms as u64,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    };
+
+                    // Create dependency manager
+                    let dep_manager = DependencyManager::new(sandbox_cfg.clone());
+
+                    // Execute with optional dependencies
+                    let result = sandbox.execute_javascript(
+                        &code, 
+                        &input_files, 
+                        &exec_sandbox_config,
+                        if dependencies.is_empty() { None } else { Some(&dependencies) },
+                        Some(&dep_manager)
+                    ).await
+                        .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
+
+                    // Build output
+                    let mut output_map = HashMap::new();
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("success".to_string())),
+                        Value::Boolean(result.success),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("stdout".to_string())),
+                        Value::String(result.stdout),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("stderr".to_string())),
+                        Value::String(result.stderr),
+                    );
+                    
+                    if let Some(exit_code) = result.exit_code {
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("exit_code".to_string())),
+                            Value::Float(exit_code as f64),
+                        );
+                    } else {
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("exit_code".to_string())),
+                            Value::Nil,
+                        );
+                    }
+
+                    // Encode output files
+                    if !result.output_files.is_empty() {
+                        let mut files_map = HashMap::new();
+                        for (name, content) in result.output_files {
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
+                            files_map.insert(
+                                MapKey::String(name),
+                                Value::String(encoded),
+                            );
+                        }
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("files".to_string())),
+                            Value::Map(files_map),
+                        );
+                    }
+
+                    Ok(Value::Map(output_map))
+                })
+            }),
+            "high",
+            vec!["compute".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+
+    // -----------------------------------------------------------------
+    // Specialized Coding Agent Capability (Phase 3)
+    // -----------------------------------------------------------------
+    {
+        use crate::sandbox::coding_agent::{CodingAgent, CodingRequest, CodingConstraints};
+        #[allow(unused_imports)]
+        use crate::config::types::CodingAgentsConfig;
+
+        // Clone config for capture in closure
+        let coding_cfg = coding_agents_config.clone();
+
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.delegate.coding_agent",
+            "Delegate Code Generation",
+            "Delegate code generation to a specialized coding LLM. Returns structured output with code, dependencies, and explanation. Best for complex coding tasks requiring high-quality output.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let coding_cfg = coding_cfg.clone();
+                Box::pin(async move {
+                    // Parse inputs
+                    let map = match &inputs {
+                        Value::Map(m) => m,
+                        _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
+                    };
+
+                    // Get task (required)
+                    let task = map
+                        .get(&MapKey::Keyword(Keyword("task".to_string())))
+                        .or_else(|| map.get(&MapKey::String("task".to_string())))
+                        .and_then(|v| v.as_string())
+                        .ok_or_else(|| RuntimeError::Generic("Missing 'task' parameter".to_string()))?
+                        .to_string();
+
+                    // Get language (optional)
+                    let language = map
+                        .get(&MapKey::Keyword(Keyword("language".to_string())))
+                        .or_else(|| map.get(&MapKey::String("language".to_string())))
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string());
+
+                    // Get inputs (optional)
+                    let mut input_files = Vec::new();
+                    if let Some(inputs_value) = map
+                        .get(&MapKey::Keyword(Keyword("inputs".to_string())))
+                        .or_else(|| map.get(&MapKey::String("inputs".to_string())))
+                    {
+                        if let Value::Vector(vec) = inputs_value {
+                            for item in vec {
+                                if let Some(s) = item.as_string() {
+                                    input_files.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // Get outputs (optional)
+                    let mut output_files = Vec::new();
+                    if let Some(outputs_value) = map
+                        .get(&MapKey::Keyword(Keyword("outputs".to_string())))
+                        .or_else(|| map.get(&MapKey::String("outputs".to_string())))
+                    {
+                        if let Value::Vector(vec) = outputs_value {
+                            for item in vec {
+                                if let Some(s) = item.as_string() {
+                                    output_files.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // Get profile (optional)
+                    let profile = map
+                        .get(&MapKey::Keyword(Keyword("profile".to_string())))
+                        .or_else(|| map.get(&MapKey::String("profile".to_string())))
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string());
+
+                    // Get constraints (optional)
+                    let constraints = map
+                        .get(&MapKey::Keyword(Keyword("constraints".to_string())))
+                        .or_else(|| map.get(&MapKey::String("constraints".to_string())))
+                        .and_then(|v| {
+                            if let Value::Map(c) = v {
+                                let max_lines = c
+                                    .get(&MapKey::Keyword(Keyword("max_lines".to_string())))
+                                    .or_else(|| c.get(&MapKey::String("max_lines".to_string())))
+                                    .and_then(|v| match v {
+                                        Value::Integer(i) => Some(*i as u32),
+                                        Value::Float(f) => Some(*f as u32),
+                                        _ => None,
+                                    });
+                                let deps_allowed = c
+                                    .get(&MapKey::Keyword(Keyword("dependencies_allowed".to_string())))
+                                    .or_else(|| c.get(&MapKey::String("dependencies_allowed".to_string())))
+                                    .and_then(|v| match v {
+                                        Value::Boolean(b) => Some(*b),
+                                        _ => None,
+                                    })
+                                    .unwrap_or(true);
+                                Some(CodingConstraints {
+                                    max_lines,
+                                    dependencies_allowed: deps_allowed,
+                                    timeout_ms: None,
+                                })
+                            } else {
+                                None
+                            }
+                        });
+
+
+                    // Build request
+                    let request = CodingRequest {
+                        task,
+                        language,
+                        inputs: input_files,
+                        outputs: output_files,
+                        constraints,
+                        profile,
+                        prior_attempts: vec![],
+                    };
+
+                    // Create coding agent using captured config
+                    let agent = CodingAgent::new(coding_cfg.clone());
+
+                    // Generate code
+                    let response = agent.generate(&request).await?;
+
+                    // Build output map
+                    let mut output_map = HashMap::new();
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("code".to_string())),
+                        Value::String(response.code),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("language".to_string())),
+                        Value::String(response.language),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("dependencies".to_string())),
+                        Value::Vector(
+                            response.dependencies.into_iter().map(Value::String).collect()
+                        ),
+                    );
+                    output_map.insert(
+                        MapKey::Keyword(Keyword("explanation".to_string())),
+                        Value::String(response.explanation),
+                    );
+                    if let Some(tests) = response.tests {
+                        output_map.insert(
+                            MapKey::Keyword(Keyword("tests".to_string())),
+                            Value::String(tests),
+                        );
+                    }
+
+                    Ok(Value::Map(output_map))
+                })
+            }),
+            "medium",
+            vec!["llm".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    // -----------------------------------------------------------------
+    // Refined Code Execution (Phase 4)
+    // -----------------------------------------------------------------
+    {
+        use crate::sandbox::coding_agent::{CodingAgent, CodingRequest, AttemptContext};
+        use crate::sandbox::refiner::{ErrorRefiner, ErrorClass};
+
+        let coding_cfg = coding_agents_config.clone();
+        let sandbox_cfg = sandbox_config.clone();
+        let marketplace_for_loop = Arc::clone(&marketplace);
+
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.code.refined_execute",
+            "Refined Code Execution",
+            "Generate and execute code with automatic self-correction. If execution fails, the agent will attempt to fix the code based on the error. Supports iterative refinement up to a maximum number of turns.",
+            Arc::new(move |inputs: &Value| {
+                let coding_cfg = coding_cfg.clone();
+                let _sandbox_cfg = sandbox_cfg.clone();
+                let marketplace = Arc::clone(&marketplace_for_loop);
+                let inputs = inputs.clone();
+
+                Box::pin(async move {
+                    // 1. Parse inputs
+                    let map = match &inputs {
+                        Value::Map(m) => m,
+                        _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
+                    };
+
+                    let task = map
+                        .get(&MapKey::Keyword(Keyword("task".to_string())))
+                        .or_else(|| map.get(&MapKey::String("task".to_string())))
+                        .and_then(|v| v.as_string())
+                        .ok_or_else(|| RuntimeError::Generic("Missing 'task' parameter".to_string()))?
+                        .to_string();
+
+                    let language = map
+                        .get(&MapKey::Keyword(Keyword("language".to_string())))
+                        .or_else(|| map.get(&MapKey::String("language".to_string())))
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string());
+
+                    let mut output_files = Vec::new();
+                    if let Some(outputs_value) = map
+                        .get(&MapKey::Keyword(Keyword("outputs".to_string())))
+                        .or_else(|| map.get(&MapKey::String("outputs".to_string())))
+                    {
+                        if let Value::Vector(vec) = outputs_value {
+                            for item in vec {
+                                if let Some(s) = item.as_string() {
+                                    output_files.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    let mut input_files = Vec::new();
+                    if let Some(inputs_value) = map
+                        .get(&MapKey::Keyword(Keyword("inputs".to_string())))
+                        .or_else(|| map.get(&MapKey::String("inputs".to_string())))
+                    {
+                        if let Value::Vector(vec) = inputs_value {
+                            for item in vec {
+                                if let Some(s) = item.as_string() {
+                                    input_files.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+                    
+                    let mut max_turns = coding_cfg.max_coding_turns;
+                    if let Some(turns) = map
+                        .get(&MapKey::Keyword(Keyword("max_turns".to_string())))
+                        .or_else(|| map.get(&MapKey::String("max_turns".to_string())))
+                        .and_then(|v| match v {
+                            Value::Integer(i) => Some(*i as u32),
+                            Value::Float(f) => Some(*f as u32),
+                            _ => None,
+                        }) {
+                        max_turns = turns;
+                    }
+
+                    let mut current_attempt = 1;
+                    let mut prior_attempts: Vec<AttemptContext> = Vec::new();
+                    let mut refinement_history = Vec::new();
+
+                    let coding_agent = CodingAgent::new(coding_cfg.clone());
+                    let refiner = ErrorRefiner::new();
+                    
+                    // We'll track dependencies we discover we need
+                    let mut auto_dependencies = Vec::new();
+
+                    while current_attempt <= max_turns {
+                        // A. Build prompt adjustments based on last error
+                        let mut task_suffix = String::new();
+                        if let Some(last) = prior_attempts.last() {
+                            // Smart feedback based on error type
+                            let classified = refiner.classify_python_error(&last.error);
+                            match &classified.class {
+                                ErrorClass::MissingDependency(dep) => {
+                                    task_suffix = format!("\n\nNote: The previous attempt failed because of a missing module: '{}'. Please ensure it's listed in the dependencies or handled in the code.", dep);
+                                    if !auto_dependencies.contains(dep) {
+                                        auto_dependencies.push(dep.clone());
+                                    }
+                                }
+                                ErrorClass::Syntax => {
+                                    task_suffix = "\n\nNote: The previous attempt had a syntax error. Please double-check indentation and syntax carefully.".to_string();
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // A. Generate/Refine Code
+                        let coding_request = CodingRequest {
+                            task: format!("{}{}", task, task_suffix),
+                            language: language.clone(),
+                            inputs: input_files.clone(),
+                            outputs: output_files.clone(),
+                            constraints: None,
+                            profile: None,
+                            prior_attempts: prior_attempts.clone(),
+                        };
+
+                        let response = coding_agent.generate(&coding_request).await?;
+
+                        // B. Execute Code via ccos.execute.python
+                        let mut exec_inputs = HashMap::new();
+                        exec_inputs.insert(MapKey::String("code".to_string()), Value::String(response.code.clone()));
+                        
+                        // Pass auto-discovered dependencies
+                        if !auto_dependencies.is_empty() {
+                            let mut combined_deps = response.dependencies.clone();
+                            for d in &auto_dependencies {
+                                if !combined_deps.contains(d) {
+                                    combined_deps.push(d.clone());
+                                }
+                            }
+                            let dep_vals = combined_deps.into_iter().map(Value::String).collect();
+                            exec_inputs.insert(MapKey::String("dependencies".to_string()), Value::Vector(dep_vals));
+                        } else if !response.dependencies.is_empty() {
+                            let dep_vals = response.dependencies.iter().map(|d| Value::String(d.clone())).collect();
+                            exec_inputs.insert(MapKey::String("dependencies".to_string()), Value::Vector(dep_vals));
+                        }
+
+                        let exec_result_val = marketplace.execute_capability("ccos.execute.python", &Value::Map(exec_inputs)).await?;
+                        
+                        let Value::Map(exec_map) = &exec_result_val else {
+                            return Err(RuntimeError::Generic("ccos.execute.python returned non-map".to_string()));
+                        };
+
+                        let success = exec_map.get(&MapKey::Keyword(Keyword("success".to_string())))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        // Capture history for this turn
+                        let stderr = exec_map.get(&MapKey::Keyword(Keyword("stderr".to_string())))
+                            .and_then(|v| v.as_string())
+                            .unwrap_or("");
+                        
+                        let mut history_entry = HashMap::new();
+                        history_entry.insert(MapKey::String("attempt".to_string()), Value::Integer(current_attempt as i64));
+                        history_entry.insert(MapKey::String("success".to_string()), Value::Boolean(success));
+                        history_entry.insert(MapKey::String("code".to_string()), Value::String(response.code.clone()));
+                        if !success {
+                            history_entry.insert(MapKey::String("error".to_string()), Value::String(stderr.to_string()));
+                        }
+                        refinement_history.push(Value::Map(history_entry));
+
+                        if success {
+                            // Success! Return the response + execution details + history
+                            let mut final_map = exec_map.clone();
+                            final_map.insert(MapKey::Keyword(Keyword("refinement_cycles".to_string())), Value::Integer(current_attempt as i64));
+                            final_map.insert(MapKey::Keyword(Keyword("refinement_history".to_string())), Value::Vector(refinement_history));
+                            final_map.insert(MapKey::Keyword(Keyword("final_code".to_string())), Value::String(response.code));
+                            final_map.insert(MapKey::Keyword(Keyword("explanation".to_string())), Value::String(response.explanation));
+                            return Ok(Value::Map(final_map));
+                        }
+
+                        // C. Handle Failure
+                        let classified = refiner.classify_python_error(stderr);
+                        
+                        if current_attempt >= max_turns {
+                            // Max turns reached, return the last failure + history
+                            let mut final_map = exec_map.clone();
+                            final_map.insert(MapKey::Keyword(Keyword("refinement_cycles".to_string())), Value::Integer(current_attempt as i64));
+                            final_map.insert(MapKey::Keyword(Keyword("refinement_history".to_string())), Value::Vector(refinement_history));
+                            final_map.insert(MapKey::Keyword(Keyword("error_class".to_string())), Value::String(format!("{:?}", classified.class)));
+                            return Ok(Value::Map(final_map));
+                        }
+
+                        // Update prior attempts for next turn
+                        prior_attempts.push(AttemptContext {
+                            code: response.code,
+                            error: stderr.to_string(), // Keep raw error for summary
+                            attempt: current_attempt,
+                        });
+                        current_attempt += 1;
+
+                        log::info!("Code execution failed ({:?}), starting refinement turn {}/{}", classified.class, current_attempt, max_turns);
+                    }
+
+                    Err(RuntimeError::Generic("Max refinement turns exceeded".to_string()))
+                })
+            }),
+            "high",
+            vec!["compute".to_string(), "llm".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    // -----------------------------------------------------------------
+    // RTFS Code Execution Capability (Phase 5)
+    // -----------------------------------------------------------------
+    {
+        use rtfs::runtime::Runtime;
+
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.execute.rtfs",
+            "Execute RTFS Code",
+            "Execute RTFS snippets with access to standard library. Input should be a valid RTFS expression string.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                Box::pin(async move {
+                    let map = match &inputs {
+                        Value::Map(m) => m,
+                        _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
+                    };
+
+                    let code = map
+                        .get(&MapKey::Keyword(Keyword("code".to_string())))
+                        .or_else(|| map.get(&MapKey::String("code".to_string())))
+                        .and_then(|v| v.as_string())
+                        .ok_or_else(|| RuntimeError::Generic("Missing 'code' parameter".to_string()))?
+                        .to_string();
+
+                    // Create a runtime and execute (note: Runtime handles registry internally for evaluate_with_stdlib)
+                    // We use an empty registry here as evaluate_with_stdlib creates its own loadable stdlib registry.
+                    let runtime = Runtime::new_with_tree_walking_strategy(Arc::new(rtfs::runtime::ModuleRegistry::new()));
+                    let result = runtime.evaluate_with_stdlib(&code)?;
+
+                    Ok(result)
+                })
+            }),
+            "low",
+            vec!["transform".to_string()],
+            EffectType::Pure,
+        )
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -1817,6 +2625,7 @@ fn create_http_capability_manifest(
         domains: vec!["skill".to_string()],
         categories: vec!["http".to_string()],
         effect_type: EffectType::Effectful,
+        approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
     })
 }
 
@@ -2153,7 +2962,6 @@ mod tests {
     use crate::capabilities::registry::CapabilityRegistry;
     use crate::capability_marketplace::CapabilityMarketplace;
     use crate::chat::quarantine::InMemoryQuarantineStore;
-    use crate::utils::value_conversion::json_to_rtfs_value;
     use tokio::sync::RwLock;
 
     #[tokio::test]
@@ -2203,6 +3011,9 @@ mod tests {
                 }),
                 "1.0.0".to_string(),
             );
+            // This is an internal mock used by the test; bypass governance gating.
+            manifest.approval_status =
+                crate::capability_marketplace::types::ApprovalStatus::AutoApproved;
             marketplace_clone.register_capability_manifest(manifest).await.unwrap();
         }
 
@@ -2215,7 +3026,9 @@ mod tests {
             None,
             None,
             Some("http://localhost:9999".to_string()),
-            Some("mock-secret".to_string())
+            Some("mock-secret".to_string()),
+            crate::config::types::SandboxConfig::default(),
+            crate::config::types::CodingAgentsConfig::default(),
         ).await.unwrap();
 
         let inputs = Value::Map(HashMap::from([

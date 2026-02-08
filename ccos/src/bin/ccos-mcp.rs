@@ -439,6 +439,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                                                       // So I should use:
     let causal_chain = ccos.causal_chain.clone();
 
+    // Configure runtime approval store (this file stores per-capability approval status)
+    let approvals_dir = agent_config
+        .as_ref()
+        .map(|cfg| ccos::utils::fs::resolve_workspace_path(&cfg.storage.approvals_dir))
+        .unwrap_or_else(|| ccos::utils::fs::get_workspace_root().join(".ccos/approvals"));
+
+    let approval_store_path = approvals_dir.join("capability_approvals.json");
+
+    if let Err(e) = marketplace.configure_approval_store(&approval_store_path).await {
+        return Err(format!(
+            "[ccos-mcp] Failed to configure capability approval store: {}",
+            e
+        )
+        .into());
+    }
+
     // Initialize Skill Mapper
     let skill_mapper = Arc::new(tokio::sync::Mutex::new(ccos::skills::SkillMapper::new(marketplace.clone())));
 

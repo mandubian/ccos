@@ -29,6 +29,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::approval::runtime_state::RuntimeApprovalStore;
+
 /// Result of updating a capability
 #[derive(Debug, Clone)]
 pub struct UpdateResult {
@@ -253,6 +255,8 @@ struct SerializableManifest {
     effects: Vec<String>,
     #[serde(default)]
     metadata: HashMap<String, String>,
+    #[serde(default)]
+    approval_status: ApprovalStatus,
 }
 
 impl From<&CapabilityManifest> for Option<SerializableManifest> {
@@ -269,6 +273,7 @@ impl From<&CapabilityManifest> for Option<SerializableManifest> {
             permissions: c.permissions.clone(),
             effects: c.effects.clone(),
             metadata: c.metadata.clone(),
+            approval_status: c.approval_status.clone(),
         })
     }
 }
@@ -292,6 +297,7 @@ impl From<SerializableManifest> for CapabilityManifest {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: s.approval_status,
         }
     }
 }
@@ -329,6 +335,7 @@ impl CapabilityMarketplace {
             session_pool: Arc::new(RwLock::new(None)),
             catalog: Arc::new(RwLock::new(None)),
             rtfs_host_factory: Arc::new(std::sync::RwLock::new(None)),
+            approval_store: Arc::new(RwLock::new(RuntimeApprovalStore::new())),
         };
         marketplace.executor_registry.insert(
             TypeId::of::<MCPCapability>(),
@@ -365,6 +372,39 @@ impl CapabilityMarketplace {
             ExecutorVariant::Native(NativeCapabilityProvider::new()),
         );
         marketplace
+    }
+
+    /// Configure the runtime approval store path and load existing approvals
+    pub async fn configure_approval_store(&self, path: &Path) -> RuntimeResult<()> {
+        let store = RuntimeApprovalStore::load(path).await?;
+        *self.approval_store.write().await = store;
+        Ok(())
+    }
+
+    /// Update the approval status of a capability and persist the change
+    pub async fn update_approval_status(
+        &self,
+        id: String,
+        status: ApprovalStatus,
+    ) -> RuntimeResult<()> {
+        let mut store = self.approval_store.write().await;
+        store.set_status(id, status);
+        store.save().await
+    }
+
+    /// Get the effective approval status of a capability
+    pub async fn get_effective_approval_status(&self, id: &str) -> Option<ApprovalStatus> {
+        // Check override first
+        if let Some(status) = self.approval_store.read().await.get_status(id) {
+            return Some(status);
+        }
+
+        // Fallback to manifest
+        self.capabilities
+            .read()
+            .await
+            .get(id)
+            .map(|m| m.approval_status.clone())
     }
 
     /// Attach a catalog service for capability indexing
@@ -600,6 +640,7 @@ impl CapabilityMarketplace {
                 domains: Vec::new(),
                 categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
             };
 
             let mut caps = self.capabilities.write().await;
@@ -817,6 +858,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -869,6 +911,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
 
         let catalog_manifest = manifest.clone();
@@ -1181,6 +1224,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1226,6 +1270,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1269,6 +1314,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1314,6 +1360,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1385,6 +1432,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
 
         let mut caps = self.capabilities.write().await;
@@ -1433,6 +1481,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1482,6 +1531,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1530,6 +1580,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1580,6 +1631,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1624,6 +1676,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1670,6 +1723,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1716,6 +1770,7 @@ impl CapabilityMarketplace {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1893,6 +1948,35 @@ impl CapabilityMarketplace {
         self.validate_capability_access(id)?;
 
         // Check resource constraints before execution
+        // Governance Check: Ensure Effectful capabilities are approved
+        // Check override from approval store first
+        let approval_status = {
+            let store = self.approval_store.read().await;
+            store.get_status(id)
+        };
+
+        if let Some(manifest) = self.capabilities.read().await.get(id) {
+            let effective_status = approval_status.unwrap_or(manifest.approval_status.clone());
+
+            if manifest.effect_type == EffectType::Effectful {
+                match effective_status {
+                    crate::capability_marketplace::types::ApprovalStatus::Pending => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Capability '{}' is pending administrator approval",
+                            id
+                        )));
+                    }
+                    crate::capability_marketplace::types::ApprovalStatus::Revoked => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Capability '{}' has been revoked by administrator",
+                            id
+                        )));
+                    }
+                    _ => {} // Approved or AutoApproved, proceed
+                }
+            }
+        }
+
         if let Some(resource_monitor) = &self.resource_monitor {
             if let Some(constraints) = &self.isolation_policy.resource_constraints {
                 let violations = resource_monitor.check_violations(id, constraints).await?;
@@ -2352,10 +2436,7 @@ impl CapabilityMarketplace {
 
         let mut response_map = std::collections::HashMap::new();
         response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
-        response_map.insert(
-            MapKey::String("body".to_string()),
-            Value::String(resp_body),
-        );
+        response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
         let mut headers_map = std::collections::HashMap::new();
         for (key, value) in response_headers.iter() {
             headers_map.insert(

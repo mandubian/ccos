@@ -4,7 +4,7 @@ use crate::streaming::{
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use futures::future::BoxFuture;
-use rtfs::ast::TypeExpr;
+pub use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::security::RuntimeContext;
@@ -96,6 +96,20 @@ pub enum EffectType {
     PureProvisional,
 }
 
+/// Approval status for governance - determines if capability is executable
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum ApprovalStatus {
+    /// Waiting for administrator approval
+    #[default]
+    Pending,
+    /// Manually approved by administrator
+    Approved,
+    /// Automatically approved (e.g. system capabilities)
+    AutoApproved,
+    /// Explicitly revoked/rejected
+    Revoked,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityManifest {
     pub id: String,
@@ -123,6 +137,9 @@ pub struct CapabilityManifest {
     /// Effect classification for governance - determines if capability can be used in adapters
     /// Pure capabilities have no side effects and are safe for use in adapters
     pub effect_type: EffectType,
+    /// Approval status for governance
+    #[serde(default)]
+    pub approval_status: ApprovalStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +254,7 @@ impl CapabilityManifest {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: ApprovalStatus::Pending,
         }
     }
 
@@ -278,6 +296,7 @@ impl CapabilityManifest {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: ApprovalStatus::Pending,
         }
     }
 
@@ -1418,6 +1437,7 @@ pub struct CapabilityMarketplace {
     #[allow(dead_code)]
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
+    pub(crate) approval_store: Arc<RwLock<crate::approval::runtime_state::RuntimeApprovalStore>>,
     pub(crate) executor_registry:
         std::collections::HashMap<std::any::TypeId, super::executors::ExecutorVariant>,
     pub(crate) isolation_policy: CapabilityIsolationPolicy,

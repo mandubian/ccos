@@ -81,6 +81,24 @@ max_runtime_repair_attempts = 5
 # Uses a lower quality/faster model for validation tasks
 validation_profile = "openrouter_free:balanced_gfl"
 
+# Real-time tracking and observability configuration
+# Controls WebSocket streaming, heartbeat intervals, and event replay
+[realtime_tracking]
+# WebSocket ping interval in seconds (keepalive for connection)
+ws_ping_interval_secs = 10
+
+# Agent heartbeat timeout for "unhealthy" status (seconds)
+heartbeat_timeout_secs = 3
+
+# Agent heartbeat send interval (seconds) - how often agent reports status
+heartbeat_send_interval_secs = 1
+
+# Gateway health check interval (seconds) - how often gateway verifies agents
+health_check_interval_secs = 5
+
+# Number of historical events to replay on WebSocket connect
+event_replay_limit = 100
+
 # AI Self-Programming Configuration
 # Controls autonomous capability creation and modification
 [self_programming]
@@ -325,3 +343,177 @@ name = "fast"
 provider = "openrouter"
 model = "meta-llama/llama-3-8b-instruct"
 api_key_env = "OPENROUTER_API_KEY"
+
+# =============================================================================
+# SANDBOX CONFIGURATION (Phase 2)
+# =============================================================================
+# Controls code execution sandbox behavior, package management, and caching
+
+[sandbox]
+# Enable sandbox execution
+enabled = true
+# Runtime type: "bubblewrap" (Linux only), "docker", or "microvm"
+runtime = "bubblewrap"
+# Package cache directory
+package_cache_dir = "/tmp/ccos-sandbox-cache"
+# Enable package caching for faster subsequent installs
+enable_package_cache = true
+
+# Package Allowlist Configuration
+[sandbox.package_allowlist]
+# Auto-approved packages (no approval required)
+auto_approved = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "seaborn",
+    "scipy",
+    "scikit-learn",
+    "requests",
+    "beautifulsoup4",
+    "pillow",
+    "openpyxl",
+    "xlrd",
+    "pyyaml",
+    "jinja2",
+    "lxml",
+    "httpx",
+    "aiohttp",
+]
+# Packages requiring explicit approval
+requires_approval = [
+    "torch",
+    "tensorflow",
+    "jax",
+    "langchain",
+    "openai",
+    "transformers",
+    "datasets",
+]
+# Blocked packages (security risk)
+blocked = [
+    "subprocess32",
+    "pyautogui",
+    "keyboard",
+    "mouse",
+    "pynput",
+]
+
+# Pre-baked Sandbox Images
+[[sandbox.images]]
+name = "python-data-science"
+base = "python:3.12-slim"
+packages = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "requests>=2.31",
+]
+warm_pool_size = 0  # Disabled for now (cold start)
+
+[[sandbox.images]]
+name = "python-web"
+base = "python:3.12-slim"
+packages = [
+    "requests>=2.31",
+    "httpx>=0.25",
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
+    "aiohttp>=3.9",
+]
+warm_pool_size = 0
+
+# =============================================================================
+# CODING AGENTS CONFIGURATION (Phase 3)
+# =============================================================================
+# Controls specialized code generation with dedicated LLM profiles
+# Supports multi-turn conversations and automated test generation
+
+[coding_agents]
+# Default coding agent profile to use
+default = "deepseek-coder"
+
+# Enable automatic test generation
+# When true, coding agents will generate unit tests alongside code
+generate_tests = true
+
+# Maximum conversation turns for multi-turn coding
+# Allows iterative refinement: "refactor this", "add error handling", etc.
+max_conversation_turns = 5
+
+# Coding Agent Profiles
+# Define specialized LLM configurations for code generation
+
+[[coding_agents.profiles]]
+name = "deepseek-coder"
+provider = "openrouter"
+model = "deepseek/deepseek-coder-v2-instruct"
+api_key_env = "OPENROUTER_API_KEY"
+system_prompt = """
+You are an expert code generation assistant. Generate clean, well-documented code.
+
+Always provide:
+1. Import statements
+2. Type hints (Python) or TypeScript types (JS)
+3. Error handling
+4. Brief comments explaining logic
+5. Unit tests with good coverage
+
+Response format (JSON):
+{
+  "code": "actual code here",
+  "language": "python",
+  "dependencies": ["pandas", "numpy"],
+  "explanation": "what this code does",
+  "tests": "unit test code"
+}
+"""
+max_tokens = 4096
+temperature = 0.2
+
+[[coding_agents.profiles]]
+name = "claude-sonnet"
+provider = "anthropic"
+model = "claude-3-sonnet-20240229"
+api_key_env = "ANTHROPIC_API_KEY"
+system_prompt = """
+You are an expert programmer. Write production-quality code.
+Focus on correctness, efficiency, and maintainability.
+Always validate inputs and handle edge cases.
+Include comprehensive unit tests.
+
+Response format (JSON):
+{
+  "code": "actual code here",
+  "language": "python",
+  "dependencies": ["pandas", "numpy"],
+  "explanation": "what this code does",
+  "tests": "unit test code"
+}
+"""
+max_tokens = 8192
+temperature = 0.3
+
+[[coding_agents.profiles]]
+name = "gpt-4"
+provider = "openai"
+model = "gpt-4-turbo-preview"
+api_key_env = "OPENAI_API_KEY"
+system_prompt = """
+You are a senior software engineer. Generate high-quality, maintainable code
+with excellent documentation and comprehensive test coverage.
+
+Response format (JSON):
+{
+  "code": "actual code here",
+  "language": "python",
+  "dependencies": ["pandas", "numpy"],
+  "explanation": "what this code does",
+  "tests": "unit test code"
+}
+"""
+max_tokens = 4096
+temperature = 0.2
