@@ -128,6 +128,7 @@ pub async fn register_mcp_capabilities(marketplace: &CapabilityMarketplace) -> R
             domains: vec!["mcp".to_string()],
             categories: vec!["bridge".to_string()],
             effect_type: EffectType::Effectful,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
 
         marketplace.register_capability_manifest(manifest).await?;

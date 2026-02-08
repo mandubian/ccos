@@ -3,6 +3,7 @@ pub mod arg_normalization;
 pub mod capability;
 pub mod data_processing;
 pub mod defaults;
+pub mod execute_python;
 pub mod mcp_session_handler;
 pub mod native_provider;
 pub mod network;
