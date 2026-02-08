@@ -545,6 +545,9 @@ impl AgentRuntime {
         // Fetch available capabilities
         self.fetch_capabilities().await?;
 
+        // Start heartbeat task
+        let _heartbeat_handle = self.spawn_heartbeat_task();
+
         // Main event loop
         loop {
             match self.poll_events().await {
@@ -1884,6 +1887,68 @@ impl AgentRuntime {
                 response.status()
             ))
         }
+    }
+
+    /// Spawn a background task to send heartbeats to the Gateway
+    fn spawn_heartbeat_task(&self) -> tokio::task::JoinHandle<()> {
+        let client = self.client.clone();
+        let gateway_url = self.args.gateway_url.clone();
+        let token = self.args.token.clone();
+        let session_id = self.args.session_id.clone();
+        let config_path = self.args.config_path.clone();
+
+        // Load interval from config or env var, default to 1 second
+        let interval_secs = config_path
+            .as_ref()
+            .and_then(|path| load_agent_config(path).ok())
+            .map(|config| config.realtime_tracking.heartbeat_send_interval_secs)
+            .or_else(|| {
+                std::env::var("CCOS_HEARTBEAT_INTERVAL_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+            })
+            .unwrap_or(1u64);
+
+        let _pid = std::process::id();
+
+        tokio::spawn(async move {
+            let url = format!("{}/chat/heartbeat/{}", gateway_url, session_id);
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            let mut current_step: u32 = 0;
+
+            loop {
+                interval.tick().await;
+
+                // For now, we use a static step count. In a real implementation,
+                // we'd share the step_count from AgentRuntime via Arc<AtomicU32>
+                // Build heartbeat payload
+                let payload = serde_json::json!({
+                    "current_step": current_step,
+                    "memory_mb": None::<u64>, // Skip memory for now
+                });
+
+                // Send heartbeat
+                match client
+                    .post(&url)
+                    .header("X-Agent-Token", &token)
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            warn!("Heartbeat failed with status: {}", response.status());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to send heartbeat: {}", e);
+                    }
+                }
+
+                // Increment step counter (placeholder - should be actual step count)
+                current_step = current_step.wrapping_add(1);
+            }
+        })
     }
 }
 

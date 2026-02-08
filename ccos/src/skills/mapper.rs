@@ -530,6 +530,7 @@ impl SkillMapper {
                                     domains: Vec::new(),
                                     categories: Vec::new(),
                                     effect_type: EffectType::Effectful,
+                                    approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
                                 };
 
                                 self.marketplace
@@ -696,6 +697,8 @@ impl SkillMapper {
                         domains: Vec::new(),
                         categories: Vec::new(),
                         effect_type: EffectType::Effectful,
+                        approval_status:
+                            crate::capability_marketplace::types::ApprovalStatus::Pending,
                     };
 
                     self.marketplace
@@ -750,6 +753,7 @@ impl SkillMapper {
                     domains: Vec::new(),
                     categories: Vec::new(),
                     effect_type: EffectType::Effectful,
+                    approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
                 };
 
                 self.marketplace

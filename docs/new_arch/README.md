@@ -48,19 +48,22 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 │   │  • Session Management        │                          │
 │   │  • Token-based Auth          │                          │
 │   │  • Capability Marketplace    │                          │
-│   │  • Causal Chain (Audit)     │                          │
+│   │  • Causal Chain (Audit)      │                          │
 │   │  • Approval Queue            │                          │
-│   └──────────┬───────────────────┘                          │
-│              │ X-Agent-Token                                 │
-│              │ (Authenticated)                               │
-│              ▼                                                │
-│   ┌──────────────────────────────┐                          │
-│   │       Agent (Deputy)         │                          │
-│   │  • Event Polling             │                          │
-│   │  • LLM Integration           │                          │
-│   │  • Skill Loading             │                          │
-│   │  • NO direct access          │                          │
-│   └──────────────────────────────┘                          │
+│   │  • Real-Time Event Stream    │                          │
+│   └──────┬───────────┬───────────┘                          │
+│          │           │                                       │
+│          │ X-Agent-Token                                    │
+│          │ (Authenticated)                                  │
+│          ▼           │                                       │
+│   ┌──────────────────┐│                                      │
+│   │    Agent         ││                                      │
+│   │   (Deputy)       ││     ┌──────────────────────┐         │
+│   │  • Event Polling │└────►│  Gateway Monitor     │         │
+│   │  • LLM Integ.    │ WebSocket                  │         │
+│   │  • Skill Loading │      │  • Live Dashboard    │         │
+│   │  • NO direct     │      │  • Health Tracking   │         │
+│   └──────────────────┘      └──────────────────────┘         │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -79,6 +82,8 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 |--------|---------|---------|
 | `ccos-chat-gateway` | Gateway server | `cargo run --bin ccos-chat-gateway` |
 | `ccos-agent` | Agent runtime | `cargo run --bin ccos-agent -- --token X --session-id Y [--config-path config/agent_config.toml]` |
+| `ccos-chat` | Interactive chat TUI | `cargo run --bin ccos-chat` |
+| `ccos-gateway-monitor` | Real-time monitoring dashboard | `cargo run --bin ccos-gateway-monitor` |
 | `mock-moltbook` | Test API server | `cargo run --bin mock-moltbook` |
 
 ## Key Features
@@ -89,6 +94,11 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 - **Capability Gatekeeping**: All capability execution through Gateway APIs
 - **Audit Trail**: Complete Causal Chain integration
 - **HTTP API**: RESTful endpoints for agent communication
+- **Real-Time Tracking**: WebSocket streaming of agent events and health status
+- **Persistent Sessions**: Reconnect to existing sessions with auto-respawn
+- **Agent Health Monitoring**: Heartbeat-based health checks with crash detection
+- **Sandboxed Code Execution**: Python code execution in bubblewrap sandbox (Phase 1-2)
+- **Dependency Management**: Package allowlist and dynamic pip install (Phase 2)
 
 ### Agent Features
 - **Event Polling**: Continuous polling for new messages
@@ -141,6 +151,24 @@ This script demonstrates:
 - Gateway session management
 - Agent spawning and connection
 - Message flow from webhook to LLM processing
+
+### Real-Time Monitoring Demo
+
+To see the new real-time tracking features:
+
+```bash
+# Terminal 1: Start Gateway + Monitor
+./run_demo.sh
+
+# Terminal 2: Start Chat Client
+cargo run --bin ccos-chat
+```
+
+This demonstrates:
+- WebSocket event streaming
+- Agent health monitoring
+- Session persistence across reconnections
+- Real-time dashboard in the monitor TUI
 
 ### Manual Testing
 

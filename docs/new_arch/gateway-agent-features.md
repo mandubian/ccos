@@ -1,7 +1,7 @@
 # CCOS Gateway-Agent Feature Reference
 
-**Version**: 1.0  
-**Last Updated**: 2026-02-04
+**Version**: 1.1  
+**Last Updated**: 2026-02-08
 
 ---
 
@@ -9,11 +9,12 @@
 
 1. [Gateway Features](#gateway-features)
 2. [Agent Features](#agent-features)
-3. [Communication Protocols](#communication-protocols)
-4. [Security Features](#security-features)
-5. [Skill System](#skill-system)
-6. [Capability Registry](#capability-registry)
-7. [Configuration Options](#configuration-options)
+3. [Real-Time Tracking & Monitoring](#real-time-tracking--monitoring)
+4. [Communication Protocols](#communication-protocols)
+5. [Security Features](#security-features)
+6. [Skill System](#skill-system)
+7. [Capability Registry](#capability-registry)
+8. [Configuration Options](#configuration-options)
 
 ---
 
@@ -554,6 +555,147 @@ All CLI arguments can also be set via environment:
 | `capabilities_executed_total` | Counter | Total capability executions |
 | `capability_execution_errors_total` | Counter | Failed capability executions |
 
+---
+
+## Real-Time Tracking & Monitoring
+
+### Overview
+
+CCOS Gateway provides real-time tracking and monitoring capabilities through WebSocket streaming, enabling live visibility into agent sessions, health status, and system events.
+
+### WebSocket Event Streaming
+
+**Endpoint**: `WS /chat/stream/:session_id`
+
+Provides real-time events for a specific session:
+
+| Event Type | Description | Payload |
+|------------|-------------|---------|
+| `historical` | Past events (sent on connect) | `action: ActionView` |
+| `action` | Live action from Causal Chain | `action: ActionView` |
+| `state_update` | Session state update (heartbeat) | `agent_pid, current_step, memory_mb, is_healthy` |
+| `agent_crashed` | Agent crash notification | `pid, exit_code, timestamp` |
+| `ping` | Keepalive ping (every 10s) | `timestamp` |
+
+**Example Connection**:
+```javascript
+const ws = new WebSocket('ws://localhost:8822/chat/stream/chat:general:user1');
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log(data.event_type, data);
+};
+```
+
+### Session State Management
+
+Sessions now support persistent matching and intelligent agent lifecycle management:
+
+| Session State | Description | Icon | Behavior |
+|--------------|-------------|------|----------|
+| **Active** | Agent running and healthy | 🟢 | Full functionality |
+| **AgentNotRunning** | Session exists but agent dead/crashed | 🔴 | Auto-respawn on reconnect |
+| **Idle** | No recent activity | 🟡 | Available but inactive |
+| **Terminated** | Session ended | ⚫ | Cannot reconnect |
+
+**Session ID Format**: `chat:{channel_id}:{user_id}`
+
+Enables persistent sessions - reconnecting with same channel_id + user_id returns to existing session.
+
+### Agent Health Monitoring
+
+**Heartbeat Protocol**:
+- Agent sends heartbeat every 1 second (configurable)
+- Gateway monitors with 3-second timeout (configurable)
+- Dual crash detection:
+  1. Missing heartbeat (>3s)
+  2. PID process verification
+
+**Heartbeat Payload**:
+```json
+{
+  "current_step": 15,
+  "memory_mb": 128
+}
+```
+
+### Configuration
+
+**In `agent_config.toml`**:
+```toml
+[realtime_tracking]
+ws_ping_interval_secs = 10           # WebSocket keepalive
+heartbeat_timeout_secs = 3           # Agent unhealthy threshold
+heartbeat_send_interval_secs = 1     # Agent heartbeat frequency
+health_check_interval_secs = 5       # Gateway check frequency
+event_replay_limit = 100             # Historical events on connect
+```
+
+**Environment Variables** (override config):
+- `CCOS_HEARTBEAT_INTERVAL_SECS` - Agent heartbeat interval
+
+### Gateway Monitor TUI
+
+A standalone monitoring tool (`ccos-gateway-monitor`) provides real-time dashboard:
+
+**Features**:
+- Live session list with health indicators
+- Agent monitoring (PID, step, memory, health)
+- Real-time event stream
+- Three tab views: Sessions, Agents, Events
+- Automatic reconnection
+
+**Usage**:
+```bash
+cargo run --bin ccos-gateway-monitor -- --gateway-url http://localhost:8822
+```
+
+### Client Reconnection Behavior
+
+When `ccos-chat` reconnects to an existing session:
+
+1. **Checks session status** via `GET /chat/session/:id`
+2. **Shows appropriate message**:
+   - 🆕 New session: "New session created. Agent will spawn on first message."
+   - 🔄 Reconnected (agent running): "Reconnected to existing session. Agent is running."
+   - 🔄 Reconnected (agent dead): "Reconnected to existing session. Starting agent..."
+3. **Auto-respawns agent** if session exists but agent not running
+
+This enables the "hybrid" approach:
+- Sessions persist across reconnections
+- Agents auto-respawn when needed
+- Visual feedback on session state
+
+### HTTP API Extensions
+
+**GET /chat/session/:session_id**:
+```json
+{
+  "session_id": "chat:general:user1",
+  "status": "Active",
+  "agent_pid": 12345,
+  "current_step": 15,
+  "memory_mb": 128,
+  "agent_running": true,
+  "created_at": "2026-02-08T14:00:00Z",
+  "last_activity": "2026-02-08T14:32:00Z"
+}
+```
+
+**New endpoint**: `POST /chat/heartbeat/:session_id`
+- Receives agent heartbeats
+- Updates session state
+- Broadcasts to WebSocket clients
+
+### Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `agent_heartbeats_total` | Counter | Total heartbeats received |
+| `agent_crashes_total` | Counter | Total agent crash events |
+| `session_reconnections_total` | Counter | Total session reconnections |
+| `agent_respawns_total` | Counter | Total agent auto-respawns |
+
 ### Logging
 
 Structured logging with `tracing`:
@@ -668,7 +810,10 @@ curl -H "X-Agent-Token: <token>" http://localhost:8080/chat/capabilities
   "created_at": "string",
   "last_activity": "string",
   "inbox_size": "number",
-  "agent_pid": "number|null"
+  "agent_pid": "number|null",
+  "current_step": "number|null",
+  "memory_mb": "number|null",
+  "agent_running": "boolean"
 }
 ```
 
