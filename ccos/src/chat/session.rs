@@ -17,8 +17,10 @@ type SecretString = String;
 /// Current state of a session
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionStatus {
-    /// Session is active and processing messages
+    /// Session is active with agent running
     Active,
+    /// Session exists but agent is not running (crashed or never spawned)
+    AgentNotRunning,
     /// Session is idle (no recent activity)
     Idle,
     /// Session has been terminated
@@ -36,9 +38,13 @@ pub struct SessionState {
     pub status: SessionStatus,
     /// Process ID of the agent runtime (if local)
     pub agent_pid: Option<u32>,
+    /// Current step the agent is executing (if any)
+    pub current_step: Option<u32>,
+    /// Memory usage in MB (last reported by agent)
+    pub memory_mb: Option<u64>,
     /// When the session was created
     pub created_at: DateTime<Utc>,
-    /// Last activity timestamp
+    /// Last activity timestamp (updated on heartbeat)
     pub last_activity: DateTime<Utc>,
     /// Inbox for messages to be processed by agent
     pub inbox: Vec<ChatMessage>,
@@ -65,6 +71,8 @@ impl SessionState {
             auth_token: token,
             status: SessionStatus::Active,
             agent_pid: None,
+            current_step: None,
+            memory_mb: None,
             created_at: now,
             last_activity: now,
             inbox: Vec::new(),
@@ -96,6 +104,21 @@ impl SessionState {
     pub fn drain_inbox(&mut self) -> Vec<ChatMessage> {
         self.touch();
         std::mem::take(&mut self.inbox)
+    }
+
+    /// Check if session has an agent running (based on status and heartbeat)
+    pub fn is_agent_running(&self) -> bool {
+        matches!(self.status, SessionStatus::Active) && self.agent_pid.is_some()
+    }
+
+    /// Get a human-readable status description with icon
+    pub fn status_with_icon(&self) -> &'static str {
+        match self.status {
+            SessionStatus::Active => "🟢 Active",
+            SessionStatus::AgentNotRunning => "🔴 Agent Not Running",
+            SessionStatus::Idle => "🟡 Idle",
+            SessionStatus::Terminated => "⚫ Terminated",
+        }
     }
 }
 
@@ -149,6 +172,32 @@ impl SessionRegistry {
     pub async fn get_token(&self, session_id: &str) -> Option<SecretString> {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).map(|s| s.auth_token.clone())
+    }
+
+    /// Get or create a session with the given ID
+    /// Returns the session and a flag indicating if it's a new session
+    /// This enables the "hybrid" approach for persistent sessions
+    pub async fn get_or_create_session(&self, session_id: &str) -> (SessionState, bool) {
+        // Try to get existing session
+        if let Some(session) = self.get_session(session_id).await {
+            log::debug!("Reconnected to existing session: {}", session_id);
+            return (session, false);
+        }
+
+        // Create new session
+        let session = self.create_session(Some(session_id.to_string())).await;
+        log::info!("Created new session: {}", session_id);
+        (session, true)
+    }
+
+    /// Update session status (e.g., when agent crashes)
+    pub async fn update_session_status(&self, session_id: &str, status: SessionStatus) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            let status_str = format!("{:?}", status);
+            session.status = status;
+            log::debug!("Updated session {} status to {}", session_id, status_str);
+        }
     }
 
     /// Update session state

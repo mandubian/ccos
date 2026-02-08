@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use axum::extract::{Json, Query, State};
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::{Json, Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -15,6 +17,7 @@ use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tokio::time::{interval, Duration};
 
 use crate::approval::{
     storage_file::FileApprovalStorage, ApprovalCategory, ApprovalConsumer, ApprovalRequest,
@@ -25,10 +28,10 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
 use crate::chat::run::{BudgetContext, Run, RunState, RunStore, SharedRunStore};
 use crate::chat::{
-    attach_label, record_chat_audit_event, register_chat_capabilities, AgentSpawner, ChatDataLabel,
-    ChatMessage, Checkpoint, CheckpointStore, FileQuarantineStore, InMemoryCheckpointStore,
-    MessageDirection, MessageEnvelope, QuarantineKey, QuarantineStore, Scheduler, SessionRegistry,
-    SpawnConfig, SpawnerFactory,
+    attach_label, record_chat_audit_event, register_chat_capabilities, AgentMonitor, AgentSpawner,
+    ChatDataLabel, ChatMessage, Checkpoint, CheckpointStore, FileQuarantineStore,
+    InMemoryCheckpointStore, MessageDirection, MessageEnvelope, QuarantineKey, QuarantineStore,
+    RealTimeTrackingSink, Scheduler, SessionRegistry, SpawnConfig, SpawnerFactory,
 };
 use crate::chat::{ResourceStore, SharedResourceStore};
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
@@ -87,6 +90,8 @@ pub(crate) struct GatewayState {
     pub(crate) checkpoint_store: Arc<dyn CheckpointStore>,
     /// Internal secret for native capabilities (like scheduler)
     pub(crate) internal_api_secret: String,
+    /// Real-time event tracking sink for WebSocket streaming
+    pub(crate) realtime_sink: Arc<RealTimeTrackingSink>,
 }
 
 #[async_trait]
@@ -375,7 +380,7 @@ impl SheriffLogger {
         );
     }
 
-    pub fn log_spawn(run_id: &str, session_id: &str, pid: Option<u32>, log_path: &str) {
+    pub fn log_spawn(run_id: &str, _session_id: &str, pid: Option<u32>, log_path: &str) {
         let pid_str = pid
             .map(|p| p.to_string())
             .unwrap_or_else(|| "none".to_string());
@@ -460,12 +465,23 @@ impl ChatGateway {
             Some(handle.clone()),
             Some(format!("http://{}", config.bind_addr)),
             Some(internal_api_secret.clone()),
+            crate::config::types::SandboxConfig::default(),
+            crate::config::types::CodingAgentsConfig::default(),
         )
         .await?;
 
         // Initialize session management
         let session_registry = SessionRegistry::new();
         let spawner = SpawnerFactory::create();
+
+        // Initialize real-time tracking sink
+        let realtime_sink = Arc::new(RealTimeTrackingSink::new(100));
+
+        // Register realtime sink with Causal Chain
+        {
+            let mut chain_guard = chain.lock().unwrap();
+            chain_guard.register_event_sink(realtime_sink.clone());
+        }
 
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
@@ -483,6 +499,7 @@ impl ChatGateway {
             scheduler: Arc::new(Scheduler::new(run_store.clone())),
             checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             internal_api_secret,
+            realtime_sink,
         });
 
         // Register gateway as approval consumer
@@ -499,6 +516,24 @@ impl ChatGateway {
         let scheduler = state.scheduler.clone();
         tokio::spawn(async move {
             scheduler.start(scheduler_state).await;
+        });
+
+        // Start agent health monitor
+        let monitor_chain = state.chain.clone();
+        let monitor_registry = state.session_registry.clone();
+        let monitor_sink = state.realtime_sink.clone();
+        // Use default config values (could be loaded from config file)
+        let health_check_interval = 5u64;
+        let heartbeat_timeout = 3u64;
+        tokio::spawn(async move {
+            let monitor = AgentMonitor::new(
+                health_check_interval,
+                heartbeat_timeout,
+                monitor_chain,
+                monitor_registry,
+                monitor_sink,
+            );
+            monitor.run().await;
         });
 
         connector
@@ -520,7 +555,10 @@ impl ChatGateway {
             .route("/chat/capabilities", get(list_capabilities_handler))
             .route("/chat/audit", get(audit_handler))
             .route("/chat/events/:session_id", get(events_handler))
+            .route("/chat/stream/:session_id", get(event_stream_handler))
+            .route("/chat/heartbeat/:session_id", post(heartbeat_handler))
             .route("/chat/session/:session_id", get(get_session_handler))
+            .route("/chat/sessions", get(list_sessions_handler))
             .route("/chat/run", post(create_run_handler).get(list_runs_handler))
             .route("/chat/run/:run_id", get(get_run_handler))
             .route("/chat/run/:run_id/actions", get(list_run_actions_handler))
@@ -625,34 +663,59 @@ impl ChatGateway {
         )
         .await?;
 
-        // Check if session exists, if not create one and spawn agent
-        let session_exists = self
+        // Hybrid session handling: Get or create session with smart agent management
+        let (session, is_new_session) = self
             .state
             .session_registry
-            .get_session(&session_id)
-            .await
-            .is_some();
+            .get_or_create_session(&session_id)
+            .await;
+        let token = session.auth_token.clone();
 
-        if !session_exists {
-            // Create new session
-            let session = self
-                .state
-                .session_registry
-                .create_session(Some(session_id.clone()))
-                .await;
-            let token = session.auth_token.clone();
-
+        // Determine if we need to spawn an agent
+        let needs_agent_spawn = if is_new_session {
             log::debug!(
                 "[Gateway] Created new session {} for channel {} sender {}",
                 session.session_id,
                 envelope.channel_id,
                 envelope.sender_id
             );
+            true
+        } else {
+            // Existing session - check if agent is running
+            let agent_running = session.is_agent_running();
+            if !agent_running {
+                log::info!(
+                    "[Gateway] Reconnecting to session {} but agent not running - will respawn",
+                    session_id
+                );
+                // Update status to indicate agent is not running
+                self.state
+                    .session_registry
+                    .update_session_status(
+                        &session_id,
+                        crate::chat::session::SessionStatus::AgentNotRunning,
+                    )
+                    .await;
+                true
+            } else {
+                log::debug!(
+                    "[Gateway] Reconnected to session {} with agent running (PID {:?})",
+                    session_id,
+                    session.agent_pid
+                );
+                false
+            }
+        };
 
+        if needs_agent_spawn {
             SheriffLogger::log_agent(
-                "SPAWN",
+                if is_new_session { "SPAWN" } else { "RESPAWN" },
                 &session_id,
-                "Triggering legacy agent spawn (default budget)",
+                if is_new_session {
+                    "Triggering agent spawn for new session"
+                } else {
+                    "Triggering agent respawn for existing session"
+                },
             );
 
             match self
@@ -674,6 +737,15 @@ impl ChatGateway {
                             .await;
                     }
 
+                    // Update status to Active since agent is now running
+                    self.state
+                        .session_registry
+                        .update_session_status(
+                            &session_id,
+                            crate::chat::session::SessionStatus::Active,
+                        )
+                        .await;
+
                     let log_path = spawn_result
                         .log_path
                         .clone()
@@ -689,7 +761,11 @@ impl ChatGateway {
                     SheriffLogger::log_agent(
                         "INFO",
                         &session.session_id,
-                        &format!("Legacy agent started. {}", spawn_result.message),
+                        &format!(
+                            "{} agent started. {}",
+                            if is_new_session { "New" } else { "Respawned" },
+                            spawn_result.message
+                        ),
                     );
                 }
                 Err(e) => {
@@ -1536,6 +1612,9 @@ struct SessionInfoResponse {
     last_activity: String,
     inbox_size: usize,
     agent_pid: Option<u32>,
+    current_step: Option<u32>,
+    memory_mb: Option<u64>,
+    agent_running: bool,
 }
 
 async fn get_session_handler(
@@ -1562,6 +1641,7 @@ async fn get_session_handler(
             .ok_or(StatusCode::NOT_FOUND)?
     };
 
+    let agent_running = session.is_agent_running();
     Ok(Json(SessionInfoResponse {
         session_id: session.session_id,
         status: format!("{:?}", session.status),
@@ -1569,7 +1649,47 @@ async fn get_session_handler(
         last_activity: session.last_activity.to_string(),
         inbox_size: session.inbox.len(),
         agent_pid: session.agent_pid,
+        current_step: session.current_step,
+        memory_mb: session.memory_mb,
+        agent_running,
     }))
+}
+
+async fn list_sessions_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<SessionInfoResponse>>, StatusCode> {
+    let provided_token = headers
+        .get("X-Admin-Token")
+        .or_else(|| headers.get("X-Agent-Token"))
+        .and_then(|v| v.to_str().ok());
+
+    let is_admin = provided_token == Some("admin-token") || provided_token == Some("demo-secret");
+
+    if !is_admin {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let sessions = state.session_registry.list_active_sessions().await;
+    let response = sessions
+        .into_iter()
+        .map(|s| {
+            let agent_running = s.is_agent_running();
+            SessionInfoResponse {
+                session_id: s.session_id,
+                status: format!("{:?}", s.status),
+                created_at: s.created_at.to_string(),
+                last_activity: s.last_activity.to_string(),
+                inbox_size: s.inbox.len(),
+                agent_pid: s.agent_pid,
+                current_step: s.current_step,
+                memory_mb: s.memory_mb,
+                agent_running,
+            }
+        })
+        .collect();
+
+    Ok(Json(response))
 }
 
 /// Capabilities list response
@@ -2516,4 +2636,176 @@ async fn transition_run_handler(
         new_state: payload.new_state,
         transitioned,
     }))
+}
+
+/// WebSocket handler for real-time event streaming
+async fn event_stream_handler(
+    ws: WebSocketUpgrade,
+    Path(session_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<GatewayState>>,
+) -> impl IntoResponse {
+    let token = params.get("token").cloned().unwrap_or_default();
+
+    // Validate session and token before upgrading
+    // Master token bypass for system/demo clients
+    let is_master_token = token == "admin-token" || token == "demo-secret";
+
+    if !is_master_token
+        && state
+            .session_registry
+            .validate_token(&session_id, &token)
+            .await
+            .is_none()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    ws.on_upgrade(move |socket| handle_websocket(socket, session_id, state))
+}
+
+/// Handle WebSocket connection for real-time event streaming
+async fn handle_websocket(socket: WebSocket, session_id: String, state: Arc<GatewayState>) {
+    use futures::{SinkExt, StreamExt};
+
+    // Validate session exists
+    if state
+        .session_registry
+        .get_session(&session_id)
+        .await
+        .is_none()
+    {
+        let _ = socket.close().await;
+        return;
+    }
+
+    // Split socket into sender and receiver
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Subscribe to real-time events
+    let mut rx = state.realtime_sink.subscribe(&session_id).await;
+
+    // Replay recent history from Causal Chain
+    let history = {
+        match state.chain.lock() {
+            Ok(chain_guard) => state
+                .realtime_sink
+                .get_session_history(&chain_guard, &session_id),
+            Err(_) => {
+                log::error!("Causal Chain lock poisoned in WebSocket handler");
+                Vec::new()
+            }
+        }
+    };
+
+    // Send historical events
+    for event in history {
+        let msg = Message::Text(serde_json::to_string(&event).unwrap_or_default());
+        if ws_sink.send(msg).await.is_err() {
+            return; // Client disconnected
+        }
+    }
+
+    // Start ping interval (10 seconds)
+    let mut ping_interval = interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            // Forward events to client
+            Ok(event) = rx.recv() => {
+                let msg = Message::Text(serde_json::to_string(&event).unwrap_or_default());
+                if ws_sink.send(msg).await.is_err() {
+                    break; // Client disconnected
+                }
+            }
+
+            // Send ping every 10 seconds
+            _ = ping_interval.tick() => {
+                let ping_event = crate::chat::realtime_sink::SessionEvent::Ping {
+                    timestamp: Utc::now().timestamp() as u64,
+                };
+                let msg = Message::Text(serde_json::to_string(&ping_event).unwrap_or_default());
+                if ws_sink.send(msg).await.is_err() {
+                    break; // Client disconnected
+                }
+            }
+
+            // Handle client messages (pong, close, etc.)
+            Some(msg) = ws_stream.next() => {
+                match msg {
+                    Ok(Message::Close(_)) => break,
+                    Ok(Message::Pong(_)) => {}, // Keepalive response
+                    Err(_) => break,
+                    _ => {},
+                }
+            }
+        }
+    }
+
+    // Cleanup
+    state.realtime_sink.cleanup_session(&session_id).await;
+}
+
+/// Heartbeat request payload
+#[derive(Deserialize)]
+struct HeartbeatRequest {
+    current_step: u32,
+    memory_mb: Option<u64>,
+}
+
+/// Heartbeat handler - receives agent status updates
+async fn heartbeat_handler(
+    Path(session_id): Path<String>,
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<HeartbeatRequest>,
+) -> impl IntoResponse {
+    // Validate token
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+
+    // Validate session and token
+    let session = match state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await
+    {
+        Some(s) => s,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    // Update session state (NOT Causal Chain - this is ephemeral state)
+    let updated_session = crate::chat::session::SessionState {
+        session_id: session.session_id,
+        auth_token: session.auth_token,
+        status: session.status,
+        agent_pid: session.agent_pid,
+        current_step: Some(payload.current_step),
+        memory_mb: payload.memory_mb,
+        created_at: session.created_at,
+        last_activity: Utc::now(),
+        inbox: session.inbox,
+    };
+
+    state
+        .session_registry
+        .update_session(updated_session.clone())
+        .await;
+
+    // Broadcast state update to WebSocket clients
+    let state_snapshot = crate::chat::realtime_sink::SessionStateSnapshot {
+        agent_pid: updated_session.agent_pid,
+        current_step: updated_session.current_step,
+        memory_mb: updated_session.memory_mb,
+        is_healthy: true,
+    };
+
+    state
+        .realtime_sink
+        .broadcast_state_update(&session_id, &state_snapshot)
+        .await;
+
+    StatusCode::OK.into_response()
 }

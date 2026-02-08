@@ -58,6 +58,7 @@ impl StaticDiscoveryProvider {
                     domains: Vec::new(),
                     categories: Vec::new(),
                     effect_type: EffectType::default(),
+                    approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
                 },
             ],
         }
@@ -265,6 +266,7 @@ impl NetworkDiscoveryAgent {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         })
     }
 }
@@ -470,6 +472,7 @@ async fn parse_capability_manifest_from_json(
         domains: Vec::new(),
         categories: Vec::new(),
         effect_type: EffectType::default(),
+        approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
     })
 }
 

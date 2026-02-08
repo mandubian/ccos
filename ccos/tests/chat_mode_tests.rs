@@ -100,6 +100,8 @@ async fn test_prepare_outbound_and_redacted_approval() {
         None,
         None,
         None,
+        ccos::config::types::SandboxConfig::default(),
+        ccos::config::types::CodingAgentsConfig::default(),
     )
     .await
     .expect("register");
@@ -237,6 +239,8 @@ async fn test_verify_redaction_requires_approval() {
         None,
         None,
         None,
+        ccos::config::types::SandboxConfig::default(),
+        ccos::config::types::CodingAgentsConfig::default(),
     )
     .await
     .expect("register");

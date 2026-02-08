@@ -79,6 +79,15 @@ pub struct AgentConfig {
     /// LLM Validation configuration (schema, plan validation, auto-repair)
     #[serde(default)]
     pub validation: ValidationConfig,
+    /// Real-time tracking and observability configuration for gateway/agent monitoring
+    #[serde(default)]
+    pub realtime_tracking: RealtimeTrackingConfig,
+    /// Sandbox configuration for code execution
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+    /// Coding agents configuration for specialized code generation
+    #[serde(default)]
+    pub coding_agents: CodingAgentsConfig,
 }
 
 impl Default for AgentConfig {
@@ -106,8 +115,251 @@ impl Default for AgentConfig {
             storage: StoragePathsConfig::default(),
             self_programming: SelfProgrammingConfig::default(),
             validation: ValidationConfig::default(),
+            realtime_tracking: RealtimeTrackingConfig::default(),
+            sandbox: SandboxConfig::default(),
+            coding_agents: CodingAgentsConfig::default(),
         }
     }
+}
+
+/// Sandbox configuration for code execution
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SandboxConfig {
+    /// Whether sandbox execution is enabled
+    #[serde(default = "default_sandbox_enabled")]
+    pub enabled: bool,
+    /// Runtime type for sandbox (bubblewrap, docker, etc.)
+    #[serde(default = "default_sandbox_runtime")]
+    pub runtime: String,
+    /// Package allowlist configuration
+    #[serde(default)]
+    pub package_allowlist: PackageAllowlistConfig,
+    /// Pre-baked image configurations
+    #[serde(default)]
+    pub images: Vec<SandboxImageConfig>,
+    /// Package cache directory
+    #[serde(default = "default_package_cache_dir")]
+    pub package_cache_dir: String,
+    /// Enable package caching
+    #[serde(default = "default_true")]
+    pub enable_package_cache: bool,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_sandbox_enabled(),
+            runtime: default_sandbox_runtime(),
+            package_allowlist: PackageAllowlistConfig::default(),
+            images: vec![SandboxImageConfig::default()],
+            package_cache_dir: default_package_cache_dir(),
+            enable_package_cache: default_true(),
+        }
+    }
+}
+
+fn default_sandbox_enabled() -> bool {
+    true
+}
+
+fn default_sandbox_runtime() -> String {
+    "bubblewrap".to_string()
+}
+
+fn default_package_cache_dir() -> String {
+    "/tmp/ccos-sandbox-cache".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Package allowlist configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PackageAllowlistConfig {
+    /// Auto-approved packages (no approval needed)
+    #[serde(default = "default_auto_approved_packages")]
+    pub auto_approved: Vec<String>,
+    /// Packages requiring approval
+    #[serde(default)]
+    pub requires_approval: Vec<String>,
+    /// Blocked packages (cannot be installed)
+    #[serde(default = "default_blocked_packages")]
+    pub blocked: Vec<String>,
+}
+
+impl Default for PackageAllowlistConfig {
+    fn default() -> Self {
+        Self {
+            auto_approved: default_auto_approved_packages(),
+            requires_approval: vec![],
+            blocked: default_blocked_packages(),
+        }
+    }
+}
+
+fn default_auto_approved_packages() -> Vec<String> {
+    vec![
+        "pandas".to_string(),
+        "numpy".to_string(),
+        "matplotlib".to_string(),
+        "requests".to_string(),
+        "beautifulsoup4".to_string(),
+        "pillow".to_string(),
+        "openpyxl".to_string(),
+        "xlrd".to_string(),
+        "pyyaml".to_string(),
+        "jinja2".to_string(),
+        "seaborn".to_string(),
+        "scipy".to_string(),
+        "scikit-learn".to_string(),
+        // JavaScript packages
+        "lodash".to_string(),
+        "axios".to_string(),
+        "moment".to_string(),
+        "async".to_string(),
+        "chalk".to_string(),
+    ]
+}
+
+fn default_blocked_packages() -> Vec<String> {
+    vec![
+        "subprocess32".to_string(),
+        "pyautogui".to_string(),
+        "keyboard".to_string(),
+        "mouse".to_string(),
+    ]
+}
+
+/// Pre-baked sandbox image configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SandboxImageConfig {
+    /// Image name
+    pub name: String,
+    /// Base image (e.g., python:3.12-slim)
+    pub base: String,
+    /// Pre-installed packages
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// Warm pool size (number of pre-warmed instances)
+    #[serde(default)]
+    pub warm_pool_size: u32,
+}
+
+impl Default for SandboxImageConfig {
+    fn default() -> Self {
+        Self {
+            name: "python-data-science".to_string(),
+            base: "python:3.12-slim".to_string(),
+            packages: vec![
+                "pandas>=2.0".to_string(),
+                "numpy>=1.24".to_string(),
+                "matplotlib>=3.7".to_string(),
+                "seaborn>=0.12".to_string(),
+                "scipy>=1.10".to_string(),
+                "scikit-learn>=1.3".to_string(),
+                "requests>=2.28".to_string(),
+            ],
+            warm_pool_size: 0,
+        }
+    }
+}
+
+/// Coding agents configuration for specialized code generation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodingAgentsConfig {
+    /// Default coding agent profile to use
+    #[serde(default = "default_coding_agent")]
+    pub default: String,
+    /// Available coding agent profiles
+    #[serde(default = "default_coding_profiles")]
+    pub profiles: Vec<CodingAgentProfile>,
+    /// Enable test generation
+    #[serde(default = "default_true")]
+    pub generate_tests: bool,
+    /// Maximum turns for iterative code refinement
+    #[serde(default = "default_max_coding_turns")]
+    pub max_coding_turns: u32,
+}
+
+impl Default for CodingAgentsConfig {
+    fn default() -> Self {
+        Self {
+            default: default_coding_agent(),
+            profiles: default_coding_profiles(),
+            generate_tests: true,
+            max_coding_turns: 5,
+        }
+    }
+}
+
+fn default_coding_agent() -> String {
+    "deepseek-coder".to_string()
+}
+
+fn default_max_coding_turns() -> u32 {
+    5
+}
+
+fn default_coding_profiles() -> Vec<CodingAgentProfile> {
+    vec![
+        CodingAgentProfile {
+            name: "deepseek-coder".to_string(),
+            provider: "openrouter".to_string(),
+            model: "deepseek/deepseek-coder-v2-instruct".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            system_prompt: "You are an expert code generation assistant. Generate clean, well-documented code. Always include: 1. Import statements, 2. Type hints (Python) or TypeScript types (JS), 3. Error handling, 4. Brief comments explaining logic, 5. Unit tests.".to_string(),
+            max_tokens: 4096,
+            temperature: 0.2,
+        },
+        CodingAgentProfile {
+            name: "claude-sonnet".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-3-sonnet-20240229".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            system_prompt: "You are an expert programmer. Write production-quality code. Focus on correctness, efficiency, and maintainability. Always validate inputs and handle edge cases. Include comprehensive unit tests.".to_string(),
+            max_tokens: 8192,
+            temperature: 0.3,
+        },
+        CodingAgentProfile {
+            name: "gpt-4".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4-turbo-preview".to_string(),
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            system_prompt: "You are a senior software engineer. Generate high-quality, maintainable code with excellent documentation and comprehensive test coverage.".to_string(),
+            max_tokens: 4096,
+            temperature: 0.2,
+        },
+    ]
+}
+
+/// Individual coding agent profile configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodingAgentProfile {
+    /// Profile name (used for selection)
+    pub name: String,
+    /// LLM provider (openrouter, anthropic, openai)
+    pub provider: String,
+    /// Model identifier
+    pub model: String,
+    /// Environment variable for API key
+    pub api_key_env: String,
+    /// System prompt for code generation
+    pub system_prompt: String,
+    /// Maximum tokens for response
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+    /// Temperature for generation (0.0-1.0)
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+}
+
+fn default_max_tokens() -> u32 {
+    4096
+}
+
+fn default_temperature() -> f32 {
+    0.2
 }
 
 impl AgentConfig {
@@ -220,10 +472,6 @@ pub struct SelfProgrammingConfig {
     /// Auto-rollback on execution failure
     #[serde(default = "default_true")]
     pub auto_rollback_on_failure: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_max_synthesis() -> u32 {
@@ -1593,6 +1841,64 @@ mod tests {
         assert!(!config.is_auto_approved(SelfProgrammingAction::Register)); // require_approval_for_registration=true
         assert!(!config.is_auto_approved(SelfProgrammingAction::Execute));
     }
+}
+
+/// Real-time tracking and observability configuration for gateway/agent monitoring
+/// Controls WebSocket streaming, heartbeat intervals, and event replay
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RealtimeTrackingConfig {
+    /// WebSocket ping interval in seconds (keepalive)
+    #[serde(default = "default_ws_ping_interval_secs")]
+    pub ws_ping_interval_secs: u64,
+
+    /// Agent heartbeat timeout for "unhealthy" status (seconds)
+    #[serde(default = "default_heartbeat_timeout_secs")]
+    pub heartbeat_timeout_secs: u64,
+
+    /// Agent heartbeat send interval (seconds)
+    #[serde(default = "default_heartbeat_send_interval_secs")]
+    pub heartbeat_send_interval_secs: u64,
+
+    /// Gateway health check interval (seconds)
+    #[serde(default = "default_health_check_interval_secs")]
+    pub health_check_interval_secs: u64,
+
+    /// Number of historical events to replay on WebSocket connect
+    #[serde(default = "default_event_replay_limit")]
+    pub event_replay_limit: usize,
+}
+
+fn default_ws_ping_interval_secs() -> u64 {
+    10
+}
+fn default_heartbeat_timeout_secs() -> u64 {
+    3
+}
+fn default_heartbeat_send_interval_secs() -> u64 {
+    1
+}
+fn default_health_check_interval_secs() -> u64 {
+    5
+}
+fn default_event_replay_limit() -> usize {
+    100
+}
+
+impl Default for RealtimeTrackingConfig {
+    fn default() -> Self {
+        Self {
+            ws_ping_interval_secs: default_ws_ping_interval_secs(),
+            heartbeat_timeout_secs: default_heartbeat_timeout_secs(),
+            heartbeat_send_interval_secs: default_heartbeat_send_interval_secs(),
+            health_check_interval_secs: default_health_check_interval_secs(),
+            event_replay_limit: default_event_replay_limit(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_realtime {
+    use super::*;
 
     #[test]
     fn test_self_programming_trust_level_3() {
