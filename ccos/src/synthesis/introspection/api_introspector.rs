@@ -208,7 +208,8 @@ impl APIIntrospector {
                     // Try a small set of common API subdomains.
                     // Note: these are generic guesses; we keep the list short to avoid slow discovery.
                     for subdomain in ["api", "pro-api"] {
-                        let api_origin = format!("{}://{}.{}", parsed_url.scheme(), subdomain, host);
+                        let api_origin =
+                            format!("{}://{}.{}", parsed_url.scheme(), subdomain, host);
                         push_unique(&mut candidate_base_urls, api_origin);
                     }
                 }
@@ -1124,6 +1125,7 @@ impl APIIntrospector {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         })
     }
 

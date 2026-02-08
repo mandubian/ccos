@@ -409,7 +409,7 @@ impl SafeCapabilityExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability_marketplace::types::{EffectType, HttpCapability, ProviderType};
+    use crate::capability_marketplace::types::{ApprovalStatus, EffectType, HttpCapability, ProviderType};
     use std::collections::HashMap;
 
     /// Helper to create test manifests
@@ -435,6 +435,7 @@ mod tests {
             domains: vec![],
             categories: vec![],
             effect_type: EffectType::Pure,
+            approval_status: ApprovalStatus::AutoApproved,
         }
     }
 

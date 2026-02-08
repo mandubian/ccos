@@ -53,7 +53,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::default(), approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         };
 
         let result = synthesize_capabilities_with_marketplace(&convo, &[manifest.clone()]);

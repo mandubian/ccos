@@ -389,6 +389,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         }
     }
 
@@ -939,6 +940,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         };
 
         let mut warnings = Vec::new();
@@ -1122,6 +1124,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         };
 
         let warnings = vec![
@@ -1462,6 +1465,7 @@ mod tests {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         };
 
         assert!(synthesizer.validate_governance(&capability).unwrap());

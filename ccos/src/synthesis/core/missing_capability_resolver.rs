@@ -64,7 +64,8 @@ const CAPABILITY_PROMPT_ID: &str = "capability_synthesis";
 const CAPABILITY_PROMPT_VERSION: &str = "v1";
 
 static CAPABILITY_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
+    let base_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
     PromptManager::new(FilePromptStore::new(&base_dir))
 });
 
@@ -3568,7 +3569,7 @@ impl MissingCapabilityResolver {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::default(), approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         };
 
         if self.config.verbose_logging {
@@ -4431,6 +4432,7 @@ mod tests {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::AutoApproved,
         };
         marketplace
             .register_capability_manifest(manifest)

@@ -451,6 +451,7 @@ impl StaticAnalyzer for DependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability_marketplace::types::ApprovalStatus;
     use crate::capability_marketplace::types::EffectType;
 
     fn create_test_manifest() -> CapabilityManifest {
@@ -477,6 +478,7 @@ mod tests {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: ApprovalStatus::AutoApproved,
         }
     }
 

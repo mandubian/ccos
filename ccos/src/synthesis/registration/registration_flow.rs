@@ -525,6 +525,7 @@ pub struct TestResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability_marketplace::types::ApprovalStatus;
     use crate::capability_marketplace::types::CapabilityManifest;
     use crate::capability_marketplace::types::EffectType;
     use crate::capability_marketplace::types::LocalCapability;
@@ -559,6 +560,7 @@ mod tests {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: ApprovalStatus::AutoApproved,
         };
 
         // Test registration
@@ -597,6 +599,7 @@ mod tests {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: ApprovalStatus::AutoApproved,
         };
 
         let validation_result = ValidationResult {

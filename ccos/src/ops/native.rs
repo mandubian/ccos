@@ -45,6 +45,7 @@ pub async fn register_native_capabilities(
                 domains: vec!["cli".to_string()],
                 categories: vec!["system".to_string()],
                 effect_type,
+                approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
             };
             marketplace.register_capability_manifest(manifest).await?;
         }
@@ -133,6 +134,7 @@ pub async fn register_fs_capabilities(marketplace: &CapabilityMarketplace) -> Ru
                 "crud.write".to_string()
             }],
             effect_type,
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
         };
         marketplace.register_capability_manifest(manifest).await?;
     }

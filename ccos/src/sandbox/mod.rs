@@ -1,14 +1,22 @@
+pub mod bubblewrap;
+pub mod coding_agent;
 pub mod config;
+pub mod dependency_manager;
 pub mod filesystem;
 pub mod manager;
 pub mod network_proxy;
+pub mod refiner;
 pub mod resources;
 pub mod secret_injection;
 
+pub use bubblewrap::{BubblewrapSandbox, InputFile, SandboxExecutionResult, SecurityScanner};
+pub use coding_agent::{CodingAgent, CodingConstraints, CodingRequest, CodingResponse};
 pub use config::{SandboxConfig, SandboxRuntimeType};
+pub use dependency_manager::{DependencyManager, DependencyResolution};
 pub use filesystem::{FilesystemMode, Mount, MountMode, VirtualFilesystem};
 pub use manager::SandboxManager;
 pub use network_proxy::{NetworkProxy, NetworkRequest, NetworkResponse};
+pub use refiner::{ClassifiedError, ErrorClass, ErrorRefiner};
 pub use resources::{ResourceLimits, ResourceMetrics};
 pub use secret_injection::{SecretInjector, SecretMount};
 

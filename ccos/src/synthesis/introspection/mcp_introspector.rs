@@ -798,6 +798,7 @@ impl MCPIntrospector {
             domains: Vec::new(),
             categories: Vec::new(),
             effect_type: EffectType::default(),
+            approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
         })
     }
 

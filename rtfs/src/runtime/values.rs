@@ -226,6 +226,13 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

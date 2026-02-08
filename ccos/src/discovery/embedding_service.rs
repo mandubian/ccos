@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 // Use RuntimeError from rtfs, but check if it's available
 type RuntimeError = rtfs::runtime::error::RuntimeError;
-type RuntimeResult<T> = Result<T, RuntimeError>;
+use rtfs::runtime::RuntimeResult;
 
 /// Embedding provider configuration
 #[derive(Debug, Clone)]
