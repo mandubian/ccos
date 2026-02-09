@@ -13,7 +13,8 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 | **[CCOS Gateway-Agent Architecture](ccos-gateway-agent-architecture.md)** | Complete architecture specification | System architects, security engineers |
 | **[Gateway-Agent Quick Start](gateway-agent-quickstart.md)** | Step-by-step setup guide | Developers, operators |
 | **[Feature Reference](gateway-agent-features.md)** | Detailed feature documentation | Developers, integrators |
-| **[Autonomy Implementation Plan](autonomy-implementation-plan.md)** | What’s implemented vs next for Runs/autonomy | Developers, architects |
+| **[Iterative LLM Consultation](iterative-llm-consultation.md)** | Autonomous multi-step task execution | Developers, architects |
+| **[Autonomy Implementation Plan](autonomy-implementation-plan.md)** | What's implemented vs next for Runs/autonomy | Developers, architects |
 | **[Autonomy Backlog](ccos-chat-gateway-autonomy-backlog.md)** | Remaining work items for autonomy hardening | Maintainers |
 | **[Budget Enforcement Spec](spec-resource-budget-enforcement.md)** | Current + planned budget enforcement semantics | Developers, operators |
 | **[Skill Onboarding Specification](spec-skill-onboarding.md)** | Multi-step skill onboarding | Skill developers |
@@ -103,12 +104,14 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 ### Agent Features
 - **Event Polling**: Continuous polling for new messages
 - **LLM Integration**: OpenAI/Anthropic support for planning
+- **Iterative LLM Consultation**: Autonomous multi-step task execution with dynamic planning
 - **Configuration Files**: TOML config support with profile management
 - **Skill System**: Dynamic skill loading and onboarding
 - **Jailed Execution**: No direct access to secrets or network
 
 ## Communication Flow
 
+### Basic Flow
 ```
 1. User sends message via webhook
 2. Gateway creates session + token
@@ -120,6 +123,18 @@ The Gateway-Agent architecture separates the **high-privilege Gateway** (Sheriff
 8. All actions recorded in Causal Chain
 ```
 
+### Iterative LLM Consultation Flow
+```
+1. Agent receives message
+2. Iteration 1: LLM plans initial action
+3. Agent executes action through Gateway
+4. Iteration 2+: LLM analyzes result, plans next action
+5. Repeat until LLM marks task_complete
+6. Send final response to user
+```
+
+See [Iterative LLM Consultation](iterative-llm-consultation.md) for complete details.
+
 ## Documentation Structure
 
 ```
@@ -128,6 +143,7 @@ docs/new_arch/
 ├── ccos-gateway-agent-architecture.md     # Complete architecture spec
 ├── gateway-agent-quickstart.md            # Step-by-step guide
 ├── gateway-agent-features.md              # Feature reference
+├── iterative-llm-consultation.md          # Autonomous multi-step execution
 ├── autonomy-implementation-plan.md        # Autonomy plan + status
 ├── ccos-chat-gateway-autonomy-backlog.md  # Autonomy backlog
 ├── spec-resource-budget-enforcement.md    # Budget enforcement spec
@@ -211,6 +227,7 @@ When modifying the Gateway-Agent system:
 - **Architecture questions**: See [Architecture Spec](ccos-gateway-agent-architecture.md)
 - **Setup issues**: See [Quick Start](gateway-agent-quickstart.md)
 - **Feature details**: See [Feature Reference](gateway-agent-features.md)
+- **Iterative execution**: See [Iterative LLM Consultation](iterative-llm-consultation.md)
 - **Skill development**: See [Onboarding Spec](spec-skill-onboarding.md)
 
 ---
