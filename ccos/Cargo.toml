@@ -84,6 +84,7 @@ axum = { version = "0.7", features = ["ws"], optional = true }
 tokio-tungstenite = { version = "0.23", features = ["native-tls"], optional = true }
 tower-http = { version = "0.5", features = ["fs"], optional = true }
 libc = "0.2.180"
+tracing-log = "0.2.0"
 
 [features]
 default = ["repl", "tui", "server"]
