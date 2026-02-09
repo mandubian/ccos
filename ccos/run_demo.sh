@@ -17,23 +17,20 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Check if we're in the right directory
-if [ ! -f "Cargo.toml" ]; then
-    echo -e "${RED}Error: Must run from ccos/ccos directory${NC}"
-    echo "Usage: cd /path/to/ccos/ccos && ./run_demo.sh"
-    exit 1
-fi
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 export CCOS_QUARANTINE_KEY="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
 export CCOS_GATEWAY_SPAWN_AGENTS=1
-export CCOS_AGENT_BINARY="./target/release/ccos-agent"
+export CCOS_AGENT_BINARY="$SCRIPT_DIR/../target/release/ccos-agent"
 
 # Agent configuration
-export CCOS_AGENT_CONFIG_PATH="$(pwd)/config/agent_config.toml"
+export CCOS_AGENT_CONFIG_PATH="$SCRIPT_DIR/../config/agent_config.toml"
 export CCOS_AGENT_ENABLE_LLM=true
 
 # Pass API keys through (will be picked up by agent config logic)
 export GEMINI_API_KEY=${GEMINI_API_KEY}
 export OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+export RUST_LOG=ccos_agent=debug
 
 # Build the binaries first
 echo -e "${BLUE}Building binaries...${NC}"
@@ -77,12 +74,14 @@ trap cleanup EXIT INT TERM
 
 # Start the Gateway
 echo -e "${BLUE}Starting Gateway on port ${GATEWAY_PORT}...${NC}"
-./target/release/ccos-chat-gateway serve \
+"$SCRIPT_DIR/../target/release/ccos-chat-gateway" serve \
     --bind-addr 127.0.0.1:${GATEWAY_PORT} \
     --connector-bind-addr 127.0.0.1:8833 \
     --connector-secret "demo-secret" \
     --allow-senders "user1" \
     --allow-channels "moltbook-demo" \
+    --http-allow-hosts api.coingecko.com \
+    --min-send-interval-ms 0 \
     --mentions "@agent" > /tmp/gateway.log 2>&1 &
 
 GATEWAY_PID=$!
@@ -101,7 +100,7 @@ echo ""
 
 # Start the Gateway Monitor
 echo -e "${BLUE}Starting Gateway Monitor...${NC}"
-./target/release/ccos-gateway-monitor \
+"$SCRIPT_DIR/../target/release/ccos-gateway-monitor" \
     --gateway-url ${GATEWAY_URL} \
     --token "admin-token" &
 MONITOR_PID=$!
