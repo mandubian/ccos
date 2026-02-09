@@ -219,8 +219,11 @@ impl BubblewrapSandbox {
         cmd.arg("--die-with-parent");
         cmd.arg("--new-session");
 
-        // Conditionally enable network if allowlists are present
-        if !config.allowed_hosts.is_empty() || !config.allowed_ports.is_empty() {
+        // Conditionally enable network if allowlists are present or explicitly enabled
+        if config.network_enabled
+            || !config.allowed_hosts.is_empty()
+            || !config.allowed_ports.is_empty()
+        {
             cmd.arg("--share-net");
         }
 
@@ -234,8 +237,34 @@ impl BubblewrapSandbox {
         if Path::new("/sbin").exists() {
             cmd.arg("--ro-bind").arg("/sbin").arg("/sbin");
         }
+        if Path::new("/etc/ssl/certs").exists() {
+            cmd.arg("--ro-bind")
+                .arg("/etc/ssl/certs")
+                .arg("/etc/ssl/certs");
+        }
+        if Path::new("/etc/ssl/openssl.cnf").exists() {
+            cmd.arg("--ro-bind")
+                .arg("/etc/ssl/openssl.cnf")
+                .arg("/etc/ssl/openssl.cnf");
+        }
+        if Path::new("/etc/pki").exists() {
+            // Some distros use /etc/pki for public certs too
+            cmd.arg("--ro-bind").arg("/etc/pki").arg("/etc/pki");
+        }
+        if Path::new("/etc/ca-certificates").exists() {
+            cmd.arg("--ro-bind")
+                .arg("/etc/ca-certificates")
+                .arg("/etc/ca-certificates");
+        }
+        if Path::new("/usr/share/ca-certificates").exists() {
+            cmd.arg("--ro-bind")
+                .arg("/usr/share/ca-certificates")
+                .arg("/usr/share/ca-certificates");
+        }
         if Path::new("/etc/resolv.conf").exists()
-            && (!config.allowed_hosts.is_empty() || !config.allowed_ports.is_empty())
+            && (config.network_enabled
+                || !config.allowed_hosts.is_empty()
+                || !config.allowed_ports.is_empty())
         {
             cmd.arg("--ro-bind")
                 .arg("/etc/resolv.conf")
