@@ -9,7 +9,7 @@
 //! Usage:
 //!   ccos-agent --token <TOKEN> --gateway-url <URL> --session-id <ID>
 
-use ccos::chat::agent_llm::{AgentLlmClient, LlmConfig};
+use ccos::chat::agent_llm::{ActionResult, AgentLlmClient, IterativeAgentPlan, LlmConfig};
 use ccos::config::types::AgentConfig;
 use ccos::secrets::SecretStore;
 use ccos::utils::fs::get_workspace_root;
@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use ccos::utils::log_redaction::{redact_json_for_logs, redact_text_for_logs};
 
@@ -90,6 +90,14 @@ struct Args {
     #[arg(long, env = "CCOS_LLM_BASE_URL")]
     llm_base_url: Option<String>,
 
+    /// LLM Max Tokens
+    #[arg(long, env = "CCOS_LLM_MAX_TOKENS")]
+    llm_max_tokens: Option<u32>,
+
+    /// Gateway HTTP timeout in seconds
+    #[arg(long, env = "CCOS_GATEWAY_TIMEOUT_SECS", default_value_t = 120)]
+    gateway_timeout_secs: u64,
+
     /// Allowlist of agent context keys to share with LLM (comma-separated)
     #[arg(long, env = "CCOS_LLM_CONTEXT_ALLOWLIST", value_delimiter = ',')]
     llm_context_allowlist: Option<Vec<String>>,
@@ -124,6 +132,27 @@ struct Args {
     /// instead of asking. Example: --skill-url-hint "moltbook=http://localhost:8765/skill.md"
     #[arg(long, env = "CCOS_SKILL_URL_HINTS", value_delimiter = ',')]
     skill_url_hint: Option<Vec<String>>,
+
+    // ── Autonomous Mode Configuration ─────────────────────────────────────────
+    /// Enable autonomous iterative mode (consult LLM after each action)
+    #[arg(long, env = "CCOS_AUTONOMOUS_ENABLED")]
+    autonomous_enabled: Option<bool>,
+
+    /// Maximum iterations per user request (safety limit, 0 = use config default)
+    #[arg(long, env = "CCOS_AUTONOMOUS_MAX_ITERATIONS")]
+    autonomous_max_iterations: Option<u32>,
+
+    /// Enable intermediate progress responses to user
+    #[arg(long, env = "CCOS_AUTONOMOUS_INTERMEDIATE")]
+    autonomous_intermediate: Option<bool>,
+
+    /// Failure handling: "ask_user" or "abort"
+    #[arg(long, env = "CCOS_AUTONOMOUS_FAILURE")]
+    autonomous_failure: Option<String>,
+
+    /// Configuration reference (populated from config file)
+    #[arg(skip)]
+    config: AgentConfig,
 }
 
 impl Args {
@@ -174,11 +203,13 @@ impl Args {
                             if self.llm_base_url.is_none() {
                                 self.llm_base_url = profile.base_url.clone();
                             }
-                            // API key from environment variable specified in config
                             if let Some(ref api_key_env) = profile.api_key_env {
                                 if self.llm_api_key.is_none() {
                                     self.llm_api_key = std::env::var(api_key_env).ok();
                                 }
+                            }
+                            if self.llm_max_tokens.is_none() {
+                                self.llm_max_tokens = profile.max_tokens;
                             }
                         } else {
                             warn!("LLM profile not found in config: {}", profile_name);
@@ -192,13 +223,38 @@ impl Args {
                             self.enable_llm = true;
                         }
                     }
+
+                    // Store config for later use
+                    self.config = config;
                 }
                 Err(e) => {
                     warn!("Failed to load config from {}: {}", config_path, e);
-                    // Continue with CLI args only
+                    // Continue with CLI args only, use default config
+                    self.config = AgentConfig::default();
                 }
             }
+        } else {
+            // No config path provided, use default
+            self.config = AgentConfig::default();
         }
+
+        // Apply CLI overrides for autonomous mode settings
+        // CLI args take precedence over config file
+        if let Some(enabled) = self.autonomous_enabled {
+            self.config.autonomous_agent.enabled = enabled;
+        }
+        if let Some(max_iter) = self.autonomous_max_iterations {
+            if max_iter > 0 {
+                self.config.autonomous_agent.max_iterations = max_iter;
+            }
+        }
+        if let Some(intermediate) = self.autonomous_intermediate {
+            self.config.autonomous_agent.send_intermediate_responses = intermediate;
+        }
+        if let Some(ref failure) = self.autonomous_failure {
+            self.config.autonomous_agent.failure_handling = failure.clone();
+        }
+
         Ok(self)
     }
 }
@@ -363,7 +419,7 @@ struct AgentRuntime {
 impl AgentRuntime {
     fn new(args: Args) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(args.gateway_timeout_secs))
             .build()
             .expect("Failed to create HTTP client");
 
@@ -395,6 +451,7 @@ impl AgentRuntime {
                     api_key: api_key.clone(),
                     model: model.clone(),
                     base_url: args.llm_base_url.clone(),
+                    max_tokens: args.llm_max_tokens.unwrap_or(1000),
                 };
                 match AgentLlmClient::new(llm_config) {
                     Ok(client) => {
@@ -644,6 +701,10 @@ impl AgentRuntime {
             self.args.gateway_url, self.args.session_id
         );
 
+        info!(
+            "[Agent→Gateway] Poll events session={} url={}",
+            self.args.session_id, url
+        );
         let response = self
             .client
             .get(&url)
@@ -653,6 +714,11 @@ impl AgentRuntime {
 
         if response.status().is_success() {
             let events_resp: EventsResponse = response.json().await?;
+            info!(
+                "[Gateway→Agent] Events response session={} count={}",
+                self.args.session_id,
+                events_resp.messages.len()
+            );
             Ok(events_resp.messages)
         } else if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             Err(anyhow::anyhow!("Authentication failed - invalid token"))
@@ -740,12 +806,15 @@ impl AgentRuntime {
 
         inputs.insert("content_class".to_string(), serde_json::json!("public"));
 
-        let _ = self
+        if let Err(e) = self
             .execute_capability(
                 "ccos.chat.egress.send_outbound",
                 serde_json::Value::Object(inputs),
             )
-            .await;
+            .await
+        {
+            error!("Failed to send outbound response: {}", e);
+        }
         Ok(())
     }
 
@@ -837,726 +906,397 @@ impl AgentRuntime {
             .map(|s| s.to_string()))
     }
 
-    /// Process message using LLM
+    /// Process message using iterative LLM consultation
     async fn process_with_llm(&mut self, event: ChatEvent) -> anyhow::Result<()> {
-        if let Some(llm) = &self.llm_client {
-            info!(
-                "Processing message with LLM: {}",
-                redact_text_for_logs(&event.content)
-            );
+        if self.llm_client.is_none() {
+            return self.send_simple_echo(&event).await;
+        }
 
-            // Build context from message history
-            let context: Vec<String> = self
-                .message_history
-                .iter()
-                .map(|e| format!("{}: {}", e.sender, e.content))
-                .collect();
+        // Clone config to avoid borrow issues
+        let config = self.args.config.autonomous_agent.clone();
+        
+        info!(
+            "Processing message with iterative LLM: {}",
+            redact_text_for_logs(&event.content)
+        );
+        info!(
+            "Autonomous mode: enabled={}, max_iterations={}, intermediate={}",
+            config.enabled, config.max_iterations, config.send_intermediate_responses
+        );
 
-            let agent_context = self.build_llm_context();
+        // Build initial context from message history
+        let mut context: Vec<String> = self
+            .message_history
+            .iter()
+            .map(|e| format!("{}: {}", e.sender, e.content))
+            .collect();
 
-            // Process with LLM
-            match llm
-                .process_message(&event.content, &context, &self.capabilities, &agent_context)
-                .await
-            {
-                Ok(plan) => {
-                    info!("LLM understanding: {}", plan.understanding);
-                    info!("Planned {} actions", plan.actions.len());
+        let agent_context = self.build_llm_context();
+        let mut iteration = 0;
+        let mut action_history: Vec<ActionResult> = Vec::new();
+        let mut consecutive_failures = 0;
+        let mut final_response_sent = false;
 
-                    // Hybrid: send immediate response first (what we're about to do).
-                    if !plan.response.is_empty() {
-                        self.send_response(&event, &plan.response).await?;
-                        self.record_in_history("agent", plan.response.clone(), &event.channel_id);
-                    }
+        loop {
+            iteration += 1;
 
-                    // Collect follow-up events (e.g., continue after skill load)
-                    let mut follow_up_events: Vec<ChatEvent> = Vec::new();
-                    let mut failed_actions: Vec<String> = Vec::new();
-                    let mut completed_actions: Vec<String> = Vec::new();
-                    let mut missing_inputs: Vec<(String, Vec<String>)> = Vec::new();
-                    let mut skill_load_failures: Vec<String> = Vec::new();
-                    // User-facing messages extracted from action results (e.g., verification tweets, instructions).
-                    let mut user_facing_messages: Vec<String> = Vec::new();
+            // Safety limit check
+            if iteration > config.max_iterations {
+                warn!("Max iterations ({}) reached", config.max_iterations);
+                let summary = self.format_action_summary(&action_history);
+                let msg = format!(
+                    "I've reached the maximum number of steps ({}). Here's what I completed:\n\n{}",
+                    config.max_iterations, summary
+                );
+                self.send_response(&event, &msg).await?;
+                self.record_in_history("agent", msg, &event.channel_id);
+                break;
+            }
 
-                    // Execute planned actions through Gateway
-                    for (idx, action) in plan.actions.iter().enumerate() {
-                        // ── Budget Check ────────────────────────────────────
-                        let (exceeded, reason) = self.check_budget();
-                        if exceeded {
-                            if let Some(reason) = reason {
-                                if self.handle_budget_exceeded(&reason, &event).await {
-                                    // Skip remaining actions
-                                    failed_actions.push(format!(
-                                        "{}: skipped (budget exceeded)",
-                                        action.capability_id
-                                    ));
-                                    break;
-                                }
-                            }
-                        }
-
+            // Consult LLM
+            let plan = if iteration == 1 {
+                // First iteration - get initial plan
+                info!("Iteration {}: Getting initial plan", iteration);
+                match self.llm_client.as_ref().unwrap()
+                    .process_message(&event.content, &context, &self.capabilities, &agent_context)
+                    .await
+                {
+                    Ok(initial_plan) => {
                         info!(
-                            "Executing action {}/{}: {}",
-                            idx + 1,
-                            plan.actions.len(),
-                            action.capability_id
+                            "Initial plan: understanding='{}', actions={}",
+                            initial_plan.understanding,
+                            initial_plan.actions.len()
                         );
-                        info!("Reasoning: {}", action.reasoning);
-
-                        if action.capability_id == "ccos.skill.load" {
-                            let existing_url = action
-                                .inputs
-                                .get("url")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            if let Some(url) = existing_url {
-                                if self.loaded_skill_urls.contains(&url) {
-                                    completed_actions.push(format!(
-                                        "ccos.skill.load (skipped, already loaded url: {})",
-                                        url
-                                    ));
-
-                                    let known_skill_id = self
-                                        .last_loaded_skill_id
-                                        .clone()
-                                        .unwrap_or_else(|| "unknown".to_string());
-                                    let caps = if self.loaded_skill_capabilities.is_empty() {
-                                        "<none>".to_string()
-                                    } else {
-                                        let mut caps: Vec<String> = self
-                                            .loaded_skill_capabilities
-                                            .iter()
-                                            .cloned()
-                                            .collect();
-                                        caps.sort();
-                                        caps.join(", ")
-                                    };
-                                    let follow_up_content = format!(
-                                        "The skill is already loaded. Skill ID: {}\n\nRegistered capabilities:\n{}\n\nPlease continue with onboarding using ccos.skill.execute for the steps required.",
-                                        known_skill_id, caps
-                                    );
-                                    let follow_up_event = ChatEvent {
-                                        id: format!("followup-{}", event.id),
-                                        channel_id: event.channel_id.clone(),
-                                        content: follow_up_content,
-                                        sender: "system".to_string(),
-                                        timestamp: Utc::now().to_rfc3339(),
-                                    };
-                                    follow_up_events.push(follow_up_event);
-                                    continue;
-                                }
-                            }
+                        
+                        // Send initial response if provided and intermediate mode is on
+                        if config.send_intermediate_responses && !initial_plan.response.is_empty() {
+                            self.send_response(&event, &initial_plan.response).await?;
+                            self.record_in_history("agent", initial_plan.response.clone(), &event.channel_id);
                         }
-
-                        // Add session/run/step IDs to inputs
-                        let mut inputs = action.inputs.clone();
-                        let mut skip_action = false;
-                        if let Some(obj) = inputs.as_object_mut() {
-                            obj.insert(
-                                "session_id".to_string(),
-                                serde_json::json!(self.args.session_id),
-                            );
-                            let run_id = obj
-                                .get("run_id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .or_else(|| self.args.run_id.clone())
-                                .unwrap_or_else(|| format!("run-{}-{}", event.id, idx));
-                            obj.insert("run_id".to_string(), serde_json::json!(run_id.clone()));
-
-                            let step_id = obj
-                                .get("step_id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| format!("{}-step-{}-{}", run_id, event.id, idx));
-                            obj.insert("step_id".to_string(), serde_json::json!(step_id));
-
-                            // AUTO-FIX: Mark all LLM-planned outbound messages as public for egress
-                            if action.capability_id == "ccos.chat.egress.send_outbound"
-                                || action.capability_id == "ccos.chat.egress.prepare_outbound"
-                            {
-                                obj.insert(
-                                    "content_class".to_string(),
-                                    serde_json::json!("public"),
-                                );
-                            }
-
-                            if action.capability_id == "ccos.skill.execute" {
-                                if let Some(last_skill_id) = &self.last_loaded_skill_id {
-                                    let skill_value = obj.get("skill").and_then(|v| v.as_str());
-                                    if skill_value.is_none() {
-                                        obj.insert(
-                                            "skill".to_string(),
-                                            serde_json::json!(last_skill_id),
-                                        );
-                                    }
-                                }
-
-                                // Guardrail: if the LLM "asked a question" but still planned a skill.execute
-                                // without specifying an operation, don't execute (it will always fail).
-                                // We'll just rely on the natural-language response we already sent.
-                                if obj.get("operation").and_then(|v| v.as_str()).is_none() {
-                                    warn!(
-                                        "Skipping ccos.skill.execute: missing operation (LLM plan likely needs clarification)"
-                                    );
-                                    skip_action = true;
-                                }
-
-                                let operation = obj.get("operation").and_then(|v| v.as_str());
-                                let skill = obj.get("skill").and_then(|v| v.as_str());
-                                let cap_id = match (operation, skill) {
-                                    (Some(op), _) if op.contains('.') => Some(op.to_string()),
-                                    (Some(op), Some(sk)) => Some(format!("{}.{}", sk, op)),
-                                    _ => None,
-                                };
-
-                                if let Some(cap_id) = cap_id {
-                                    if let Some(required) =
-                                        self.capability_required.get(&cap_id).cloned()
-                                    {
-                                        let params_value = obj
-                                            .entry("params".to_string())
-                                            .or_insert_with(|| serde_json::json!({}));
-                                        if let Some(pmap) = params_value.as_object_mut() {
-                                            for field in &required {
-                                                if !pmap.contains_key(field) {
-                                                    if let Some(value) =
-                                                        self.autofill_value_for_field(field)
-                                                    {
-                                                        pmap.insert(
-                                                            field.to_string(),
-                                                            serde_json::json!(value),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            let missing = required
-                                                .into_iter()
-                                                .filter(|k| !pmap.contains_key(k))
-                                                .collect::<Vec<_>>();
-                                            if !missing.is_empty() {
-                                                missing_inputs.push((cap_id.clone(), missing));
-                                                failed_actions.push(format!(
-                                                    "{}: missing required inputs",
-                                                    cap_id
-                                                ));
-                                                skip_action = true;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Best-effort: if we already have a bearer token for this skill,
-                                // inject it into params.headers.Authorization unless the LLM provided one.
-                                self.maybe_inject_wrapper_skill_auth(obj);
-                            }
-                        }
-
-                        if skip_action {
-                            continue;
-                        }
-
-                        // Guardrail: if the LLM planned an action but left required
-                        // inputs as null, it means it doesn't have the value yet (it
-                        // likely asked the user in the response). Skip the action and
-                        // treat the null fields as missing inputs that need user input.
-                        if let Some(obj) = inputs.as_object() {
-                            let skip_keys = ["session_id", "run_id", "step_id", "content_class"];
-                            let mut null_fields: Vec<String> = obj
-                                .iter()
-                                .filter(|(k, v)| v.is_null() && !skip_keys.contains(&k.as_str()))
-                                .map(|(k, _)| k.clone())
-                                .collect();
-                            // Also check inside nested "params" (used by ccos.skill.execute).
-                            if let Some(params) = obj.get("params").and_then(|v| v.as_object()) {
-                                for (k, v) in params {
-                                    if v.is_null() && !skip_keys.contains(&k.as_str()) {
-                                        null_fields.push(format!("params.{}", k));
-                                    }
-                                }
-                            }
-                            if !null_fields.is_empty() {
-                                warn!(
-                                    "Skipping {}: LLM left required inputs as null: {}",
-                                    action.capability_id,
-                                    null_fields.join(", ")
-                                );
-                                missing_inputs.push((action.capability_id.clone(), null_fields));
-                                continue;
-                            }
-                        }
-
-                        // Best-effort: if a direct skill capability is being called (skill.op),
-                        // inject Authorization header from cached onboarding secret.
-                        Self::maybe_inject_direct_skill_auth(
-                            &self.skill_bearer_tokens,
-                            &action.capability_id,
-                            &mut inputs,
-                        );
-
-                        match self.execute_capability(&action.capability_id, inputs).await {
-                            Ok(response) => {
-                                if !response.success {
-                                    let error_msg = response
-                                        .error
-                                        .clone()
-                                        .or_else(|| {
-                                            response.result.as_ref().and_then(|r| {
-                                                r.get("error")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(|s| s.to_string())
-                                            })
-                                        })
-                                        .unwrap_or_else(|| "Unknown error".to_string());
-                                    if let Some((cap_id, missing)) =
-                                        Self::parse_missing_inputs(&error_msg)
-                                    {
-                                        missing_inputs.push((cap_id, missing));
-                                    } else {
-                                        let missing = Self::extract_missing_fields(&error_msg);
-                                        if !missing.is_empty() {
-                                            missing_inputs
-                                                .push((action.capability_id.clone(), missing));
-                                        }
-                                    }
-                                    if action.capability_id == "ccos.skill.load" {
-                                        skill_load_failures.push(error_msg.clone());
-                                    }
-                                    warn!("Action {} failed: {}", action.capability_id, error_msg);
-                                    failed_actions
-                                        .push(format!("{}: {}", action.capability_id, error_msg));
-                                    self.record_in_history(
-                                        "system",
-                                        format!(
-                                            "[action failed] {}: {}",
-                                            action.capability_id, error_msg
-                                        ),
-                                        &event.channel_id,
-                                    );
-                                    continue;
-                                }
-                                let redacted_response = serde_json::to_value(&response)
-                                    .ok()
-                                    .map(|value| redact_json_for_logs(&value).to_string())
-                                    .unwrap_or_else(|| "<non-serializable response>".to_string());
-                                info!(
-                                    "Action {} succeeded: {}",
-                                    action.capability_id, redacted_response
-                                );
-                                let mut action_summary = action.capability_id.clone();
-                                if action.capability_id == "ccos.skill.load" && response.success {
-                                    if let Some(result) = &response.result {
-                                        if let Some(skill_id) = result.get("skill_id") {
-                                            action_summary =
-                                                format!("ccos.skill.load (skill_id: {})", skill_id);
-                                        }
-                                    }
-                                }
-                                if action.capability_id == "ccos.skill.execute" && response.success
-                                {
-                                    if let Some(result) = &response.result {
-                                        if let Some(body) =
-                                            result.get("body").and_then(|v| v.as_str())
-                                        {
-                                            if let Ok(json) =
-                                                serde_json::from_str::<serde_json::Value>(body)
-                                            {
-                                                if let Some(agent_id) =
-                                                    json.get("agent_id").and_then(|v| v.as_str())
-                                                {
-                                                    action_summary = format!(
-                                                        "ccos.skill.execute (registered agent_id: {})",
-                                                        agent_id
-                                                    );
-                                                }
-
-                                                // Cache onboarding secret (if any) for subsequent authenticated calls.
-                                                if let Some(secret) =
-                                                    json.get("secret").and_then(|v| v.as_str())
-                                                {
-                                                    if let Some(skill_id) = action
-                                                        .inputs
-                                                        .get("skill")
-                                                        .and_then(|v| v.as_str())
-                                                    {
-                                                        self.skill_bearer_tokens.insert(
-                                                            skill_id.to_string(),
-                                                            secret.to_string(),
-                                                        );
-
-                                                        if self.args.persist_skill_secrets {
-                                                            let key =
-                                                                Self::secret_store_key_for_skill(
-                                                                    skill_id,
-                                                                );
-                                                            match SecretStore::new(Some(
-                                                                get_workspace_root(),
-                                                            )) {
-                                                                Ok(mut store) => {
-                                                                    if let Err(e) = store.set_local(
-                                                                        &key,
-                                                                        secret.to_string(),
-                                                                    ) {
-                                                                        warn!("Failed to persist skill token to SecretStore ({}): {}", key, e);
-                                                                    }
-                                                                }
-                                                                Err(e) => {
-                                                                    warn!("Failed to open SecretStore for persistence: {}", e);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Extract user-facing messages from the response body.
-                                // Many skill operations return a JSON body with "message",
-                                // "verification_tweet_text", or similar fields that the user
-                                // needs to see and act on.
-                                if response.success {
-                                    if let Some(result) = &response.result {
-                                        if let Some(body_str) =
-                                            result.get("body").and_then(|v| v.as_str())
-                                        {
-                                            if let Ok(body_json) =
-                                                serde_json::from_str::<serde_json::Value>(body_str)
-                                            {
-                                                // Collect all string fields that look user-facing.
-                                                let mut parts = Vec::new();
-                                                if let Some(msg) = body_json
-                                                    .get("message")
-                                                    .and_then(|v| v.as_str())
-                                                {
-                                                    parts.push(msg.to_string());
-                                                }
-                                                // Surface any field containing instructions/text for the user
-                                                for key in &[
-                                                    "verification_tweet_text",
-                                                    "instructions",
-                                                    "next_step",
-                                                    "action_required",
-                                                ] {
-                                                    if let Some(val) =
-                                                        body_json.get(*key).and_then(|v| v.as_str())
-                                                    {
-                                                        parts.push(format!("{}: {}", key, val));
-                                                    }
-                                                }
-                                                if !parts.is_empty() {
-                                                    user_facing_messages.push(format!(
-                                                        "[{}] {}",
-                                                        action.capability_id,
-                                                        parts.join("\n")
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // If a skill operation is executed directly and returns a secret, cache it.
-                                if response.success {
-                                    self.maybe_cache_secret_from_response(
-                                        &action.capability_id,
-                                        &response,
-                                    );
-                                }
-                                completed_actions.push(action_summary.clone());
-                                self.increment_step();
-
-                                // Record action result in history so LLM context carries forward.
-                                let result_summary = if let Some(result) = &response.result {
-                                    // Compact summary: capability + key fields (redacted)
-                                    let redacted = redact_json_for_logs(result);
-                                    format!("[action ok] {}: {}", action.capability_id, redacted)
-                                } else {
-                                    format!("[action ok] {}", action.capability_id)
-                                };
-                                self.record_in_history("system", result_summary, &event.channel_id);
-
-                                // Check if this was a skill load and we need to continue onboarding
-                                if action.capability_id == "ccos.skill.load" && response.success {
-                                    if let Some(result) = &response.result {
-                                        let loaded_skill_id = result
-                                            .get("skill_id")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("unknown");
-                                        let loaded_caps = result
-                                            .get("registered_capabilities")
-                                            .or_else(|| result.get("capabilities"))
-                                            .and_then(|v| v.as_array())
-                                            .map(|caps| {
-                                                caps.iter()
-                                                    .filter_map(|c| c.as_str())
-                                                    .collect::<Vec<_>>()
-                                                    .join(", ")
-                                            })
-                                            .unwrap_or_else(|| "<none>".to_string());
-                                        let requires_approval = result
-                                            .get("requires_approval")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false);
-                                        info!(
-                                            "Skill loaded: id={}, requires_approval={}, capabilities=[{}]",
-                                            loaded_skill_id, requires_approval, loaded_caps
-                                        );
-                                        if let Some(skill_id) =
-                                            result.get("skill_id").and_then(|v| v.as_str())
-                                        {
-                                            self.last_loaded_skill_id = Some(skill_id.to_string());
-                                            self.loaded_skill_ids.insert(skill_id.to_string());
-                                            if let Some(url) =
-                                                result.get("url").and_then(|v| v.as_str())
-                                            {
-                                                self.loaded_skill_urls.insert(url.to_string());
-                                            }
-                                        }
-                                        if let Some(caps) = result
-                                            .get("registered_capabilities")
-                                            .or_else(|| result.get("capabilities"))
-                                            .and_then(|v| v.as_array())
-                                        {
-                                            for cap in caps.iter().filter_map(|c| c.as_str()) {
-                                                self.loaded_skill_capabilities
-                                                    .insert(cap.to_string());
-                                            }
-                                        }
-                                        let _ = self.fetch_capabilities().await;
-                                        if result.get("skill_definition").is_some() {
-                                            let skill_id = result
-                                                .get("skill_id")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("unknown");
-
-                                            // Store the raw skill definition for future LLM context.
-                                            if let Some(def_text) = result
-                                                .get("skill_definition")
-                                                .and_then(|v| v.as_str())
-                                            {
-                                                self.loaded_skill_definitions.insert(
-                                                    skill_id.to_string(),
-                                                    def_text.to_string(),
-                                                );
-                                            }
-
-                                            let cap_lines = result
-                                                .get("registered_capabilities")
-                                                .or_else(|| result.get("capabilities"))
-                                                .and_then(|v| v.as_array())
-                                                .map(|caps| {
-                                                    caps.iter()
-                                                        .filter_map(|c| c.as_str())
-                                                        .map(|c| format!("- {}", c))
-                                                        .collect::<Vec<_>>()
-                                                        .join("\n")
-                                                })
-                                                .unwrap_or_else(|| "- <none>".to_string());
-
-                                            // Include skill definition in follow-up so LLM
-                                            // can reason about onboarding steps.
-                                            let def_block = result
-                                                .get("skill_definition")
-                                                .and_then(|v| v.as_str())
-                                                .map(|d| {
-                                                    // Truncate if very long to keep prompt manageable.
-                                                    let max = 3000;
-                                                    if d.len() > max {
-                                                        format!(
-                                                            "\n\nSkill definition (truncated):\n{}...",
-                                                            &d[..max]
-                                                        )
-                                                    } else {
-                                                        format!("\n\nSkill definition:\n{}", d)
-                                                    }
-                                                })
-                                                .unwrap_or_default();
-
-                                            // Create a follow-up to continue onboarding
-                                            let follow_up_content = format!(
-                                                "The skill has been loaded. Skill ID: {}\n\nRegistered capabilities:\n{}{}\n\nPlease continue with the onboarding process to make this skill operational. Use ccos.skill.execute with this skill_id and the capability names above. Follow the onboarding steps described in the skill definition.",
-                                                skill_id, cap_lines, def_block
-                                            );
-                                            let follow_up_event = ChatEvent {
-                                                id: format!("followup-{}", event.id),
-                                                channel_id: event.channel_id.clone(),
-                                                content: follow_up_content,
-                                                sender: "system".to_string(),
-                                                timestamp: Utc::now().to_rfc3339(),
-                                            };
-                                            // Process the follow-up (this is recursive but bounded by the conversation)
-                                            info!("Skill loaded. Continuing with onboarding...");
-                                            follow_up_events.push(follow_up_event);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Action {} failed: {}", action.capability_id, e);
-                                failed_actions.push(format!("{}: {}", action.capability_id, e));
-                            }
+                        
+                        // Convert to iterative plan format
+                        IterativeAgentPlan {
+                            understanding: initial_plan.understanding,
+                            task_complete: initial_plan.actions.is_empty(),
+                            reasoning: "Initial plan from LLM".to_string(),
+                            actions: initial_plan.actions,
+                            response: initial_plan.response,
                         }
                     }
-
-                    // If this agent is running under a Run, best-effort transition the Run based on outcome.
-                    // This keeps the Gateway/Agent generic: the agent reports Done/Failed/Paused when it knows.
-                    if self.args.run_id.is_some() {
-                        let has_follow_up = !follow_up_events.is_empty();
-
-                        if self.budget_paused {
-                            // Budget pause transitions are handled where the pause is triggered.
-                        } else if !failed_actions.is_empty() {
-                            // Truncate to keep audit small.
-                            let reason = failed_actions.join("; ");
-                            let reason = if reason.len() > 500 {
-                                format!("{}...", &reason[..500])
-                            } else {
-                                reason
-                            };
-                            let _ = self.transition_run_state("Failed", Some(&reason)).await;
-                        } else if !missing_inputs.is_empty() || !skill_load_failures.is_empty() {
-                            let _ = self
-                                .transition_run_state(
-                                    "PausedExternalEvent",
-                                    Some("awaiting_user_input"),
-                                )
-                                .await;
-                        } else if !user_facing_messages.is_empty() {
-                            // Action results contain instructions for the user (e.g. "post this tweet").
-                            // The run is not done -- a human action is pending.
-                            let _ = self
-                                .transition_run_state(
-                                    "PausedExternalEvent",
-                                    Some("awaiting_human_action"),
-                                )
-                                .await;
-                        } else if !plan.actions.is_empty() && !has_follow_up {
-                            let predicate =
-                                self.fetch_run_completion_predicate().await.ok().flatten();
-                            let should_done = match predicate.as_deref() {
-                                Some("manual") | Some("never") => false,
-                                Some("always") => true,
-                                // If a predicate is set but we don't understand it, don't auto-complete.
-                                Some(_) => false,
-                                // Default: treat lack of a predicate as "finish when this step completed".
-                                None => true,
-                            };
-                            if should_done {
-                                let _ = self.transition_run_state("Done", None).await;
-                            }
-                        }
-                    }
-
-                    // Send follow-up summary (what actually happened + next steps).
-                    if !completed_actions.is_empty() || !failed_actions.is_empty() {
-                        let mut summary = String::new();
-                        if !completed_actions.is_empty() {
-                            summary.push_str("Completed:\n");
-                            for item in &completed_actions {
-                                summary.push_str(&format!("- {}\n", item));
-                            }
-                        }
-                        if !failed_actions.is_empty() {
-                            if !summary.is_empty() {
-                                summary.push_str("\n");
-                            }
-                            summary.push_str("Failed:\n");
-                            for failure in &failed_actions {
-                                summary.push_str(&format!("- {}\n", failure));
-                            }
-                        }
-
-                        // Include user-facing messages from action results (verification tweets, instructions, etc.)
-                        if !user_facing_messages.is_empty() {
-                            summary.push_str("\nAction results:\n");
-                            for msg in &user_facing_messages {
-                                summary.push_str(&format!("{}\n", msg));
-                            }
-                        }
-
-                        summary.push_str("\nNext:\n");
-                        if !skill_load_failures.is_empty() {
-                            summary.push_str("- The skill failed to load. Please provide a valid skill URL (Markdown/YAML/JSON), or the correct skill id/registry entry.\n");
-                        }
-                        if !missing_inputs.is_empty() {
-                            for (cap_id, missing) in &missing_inputs {
-                                summary.push_str(&format!(
-                                    "- Please provide {} for {}.\n",
-                                    missing.join(", "),
-                                    cap_id
-                                ));
-                            }
-                        } else if !user_facing_messages.is_empty() {
-                            // The action results contain instructions for the user -- don't
-                            // say "tell me to continue" because a human action is pending.
-                            summary.push_str("- Please follow the instructions above and provide the required information so I can proceed with the next step.\n");
-                        } else if skill_load_failures.is_empty() {
-                            // Heuristic next-steps for multi-stage onboarding flows:
-                            summary.push_str("- Tell me if you want me to continue.\n");
-                            summary.push_str("- If a capability requires extra inputs or a human action (e.g., a URL/code), provide what it asks for and I'll proceed.\n");
-                        }
-
-                        info!("Agent summary: {}", summary);
-                        let mut inputs = serde_json::Map::new();
-                        inputs.insert("content".to_string(), serde_json::json!(summary));
-                        inputs.insert(
-                            "channel_id".to_string(),
-                            serde_json::json!(event.channel_id),
-                        );
-                        inputs.insert("content_class".to_string(), serde_json::json!("public"));
-                        inputs.insert(
-                            "session_id".to_string(),
-                            serde_json::json!(self.args.session_id),
-                        );
-                        inputs.insert(
-                            "run_id".to_string(),
-                            serde_json::json!(format!("resp-{}", event.id)),
-                        );
-                        inputs.insert(
-                            "step_id".to_string(),
-                            serde_json::json!(format!("resp-step-{}", event.id)),
-                        );
-
-                        let _ = self
-                            .execute_capability(
-                                "ccos.chat.egress.send_outbound",
-                                serde_json::Value::Object(inputs),
-                            )
-                            .await;
-
-                        // Record summary in history for next-turn context.
-                        self.record_in_history("agent", summary, &event.channel_id);
-                    }
-
-                    // Process any follow-up events (e.g., continue onboarding)
-                    for follow_up in follow_up_events {
-                        info!(
-                            "Processing follow-up: {}",
-                            &follow_up.content[..50.min(follow_up.content.len())]
-                        );
-                        // Box the recursive call to avoid infinitely-sized future
-                        if let Err(e) = Box::pin(self.process_event(follow_up)).await {
-                            warn!("Follow-up processing failed: {}", e);
-                        }
+                    Err(e) => {
+                        warn!("LLM initial planning failed: {}", e);
+                        let error_msg = format!("I encountered an error planning your request: {}", e);
+                        self.send_response(&event, &error_msg).await?;
+                        self.record_in_history("agent", error_msg, &event.channel_id);
+                        return Ok(());
                     }
                 }
-                Err(e) => {
-                    warn!("LLM processing failed: {}", e);
-                    // Fallback: send simple response
-                    self.send_simple_response(&event).await?;
+            } else {
+                // Subsequent iterations - consult with results
+                info!("Iteration {}: Consulting LLM with action results", iteration);
+                
+                let last_result = action_history
+                    .last()
+                    .and_then(|r| r.result.clone())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                
+                match self.llm_client.as_ref().unwrap()
+                    .consult_after_action(
+                        &event.content,
+                        &action_history,
+                        &last_result,
+                        &context,
+                        &self.capabilities,
+                        &agent_context,
+                    )
+                    .await
+                {
+                    Ok(plan) => {
+                        info!(
+                            "Iterative response: task_complete={}, actions={}, reasoning='{}'",
+                            plan.task_complete,
+                            plan.actions.len(),
+                            plan.reasoning
+                        );
+                        plan
+                    }
+                    Err(e) => {
+                        warn!("LLM iterative consultation failed: {}", e);
+                        // Ask user what to do
+                        let summary = self.format_action_summary(&action_history);
+                        let msg = format!(
+                            "I encountered an error while working on your request: {}\n\nHere's what I've accomplished so far:\n\n{}\n\nHow would you like me to proceed?",
+                            e, summary
+                        );
+                        self.send_response(&event, &msg).await?;
+                        self.record_in_history("agent", msg, &event.channel_id);
+                        return Ok(());
+                    }
+                }
+            };
+
+            // Check if task is complete
+            if plan.task_complete {
+                info!("Task marked complete by LLM at iteration {}", iteration);
+                if !plan.response.is_empty() {
+                    self.send_response(&event, &plan.response).await?;
+                    self.record_in_history("agent", plan.response, &event.channel_id);
+                    final_response_sent = true;
+                }
+                break;
+            }
+
+            // Check if no actions planned (but task not marked complete)
+            if plan.actions.is_empty() {
+                warn!("No actions planned but task not marked complete");
+                let summary = self.format_action_summary(&action_history);
+                let msg = format!(
+                    "I'm not sure how to proceed with your request. Here's what I've done so far:\n\n{}\n\nCould you clarify what you'd like me to do next?",
+                    summary
+                );
+                self.send_response(&event, &msg).await?;
+                self.record_in_history("agent", msg, &event.channel_id);
+                break;
+            }
+
+            // Execute ONLY the first planned action (iterative mode)
+            let action = &plan.actions[0];
+            info!(
+                "Iteration {}: Executing action: {}",
+                iteration, action.capability_id
+            );
+            info!("Reasoning: {}", action.reasoning);
+
+            // Budget check
+            let (exceeded, reason) = self.check_budget();
+            if exceeded {
+                if let Some(reason) = reason {
+                    if self.handle_budget_exceeded(&reason, &event).await {
+                        let summary = self.format_action_summary(&action_history);
+                        let msg = format!(
+                            "I've paused due to budget constraints: {}\n\nHere's what I completed:\n\n{}\n\nPlease let me know if you'd like me to continue.",
+                            reason, summary
+                        );
+                        self.send_response(&event, &msg).await?;
+                        break;
+                    }
                 }
             }
-        } else {
-            warn!("LLM not available, using simple response");
-            self.send_simple_response(&event).await?;
+
+            // Prepare action inputs
+            let mut inputs = action.inputs.clone();
+            if let Some(obj) = inputs.as_object_mut() {
+                obj.insert(
+                    "session_id".to_string(),
+                    serde_json::json!(self.args.session_id),
+                );
+                let run_id = self
+                    .args
+                    .run_id
+                    .clone()
+                    .unwrap_or_else(|| format!("run-{}-{}", event.id, iteration));
+                obj.insert("run_id".to_string(), serde_json::json!(run_id.clone()));
+                obj.insert(
+                    "step_id".to_string(),
+                    serde_json::json!(format!("{}-step-{}", run_id, iteration)),
+                );
+
+                // Mark outbound messages as public
+                if action.capability_id == "ccos.chat.egress.send_outbound"
+                    || action.capability_id == "ccos.chat.egress.prepare_outbound"
+                {
+                    obj.insert("content_class".to_string(), serde_json::json!("public"));
+                }
+
+                // Inject auth for skill operations
+                if action.capability_id == "ccos.skill.load" {
+                    self.maybe_inject_wrapper_skill_auth(obj);
+                }
+                if action.capability_id == "ccos.skill.execute" {
+                    // Convert obj to Value for the function call
+                    let mut params_value = serde_json::Value::Object(obj.clone());
+                    Self::maybe_inject_direct_skill_auth(
+                        &self.skill_bearer_tokens,
+                        &action.capability_id,
+                        &mut params_value,
+                    );
+                    // Update obj from the modified params_value
+                    if let Some(new_obj) = params_value.as_object() {
+                        *obj = new_obj.clone();
+                    }
+                }
+            }
+
+            // Execute the action
+            let result = match self.execute_capability(&action.capability_id, inputs).await {
+                Ok(resp) => resp,
+                Err(e) => ExecuteResponse {
+                    success: false,
+                    result: None,
+                    error: Some(e.to_string()),
+                },
+            };
+
+            // Record the action result
+            let action_result = ActionResult {
+                capability_id: action.capability_id.clone(),
+                success: result.success,
+                result: result.result.clone(),
+                error: result.error.clone(),
+                iteration,
+            };
+            action_history.push(action_result.clone());
+
+            // Update context
+            context.push(format!(
+                "Step {}: {} - {}",
+                iteration,
+                action.capability_id,
+                if result.success { "success" } else { "failed" }
+            ));
+
+            // Manage context size
+            if context.len() > config.max_context_entries {
+                match config.context_strategy.as_str() {
+                    "truncate" => {
+                        // Remove oldest entries (keep most recent)
+                        let remove_count = context.len() - config.max_context_entries;
+                        context.drain(0..remove_count);
+                    }
+                    _ => {
+                        // Default to truncate
+                        let remove_count = context.len() - config.max_context_entries;
+                        context.drain(0..remove_count);
+                    }
+                }
+            }
+
+            // Track consecutive failures
+            if result.success {
+                consecutive_failures = 0;
+            } else {
+                consecutive_failures += 1;
+            }
+
+            // Record in history
+            let result_summary = if let Some(ref res) = result.result {
+                format!(
+                    "[step {}] {}: {}",
+                    iteration,
+                    action.capability_id,
+                    redact_json_for_logs(res)
+                )
+            } else {
+                format!(
+                    "[step {}] {}: {}",
+                    iteration,
+                    action.capability_id,
+                    if result.success { "ok" } else { "failed" }
+                )
+            };
+            self.record_in_history("system", result_summary, &event.channel_id);
+
+            // Handle failure
+            if !result.success {
+                let error_msg = result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                warn!("Action failed: {}", error_msg);
+
+                // Check if we should ask user or abort
+                if config.failure_handling == "ask_user"
+                    || consecutive_failures >= config.max_consecutive_failures
+                {
+                    let summary = self.format_action_summary(&action_history);
+                    let msg = format!(
+                        "I encountered an issue with {}:\n\nError: {}\n\nHere's what I've accomplished so far:\n\n{}\n\nWould you like me to retry, try a different approach, or would you prefer to handle this manually?",
+                        action.capability_id, error_msg, summary
+                    );
+                    self.send_response(&event, &msg).await?;
+                    self.record_in_history("agent", msg, &event.channel_id);
+                    return Ok(());
+                }
+            }
+
+            // Send intermediate response if enabled
+            if config.send_intermediate_responses && !plan.response.is_empty() {
+                self.send_response(&event, &plan.response).await?;
+                self.record_in_history("agent", plan.response.clone(), &event.channel_id);
+            }
+
+            // Handle skill load special case
+            if action.capability_id == "ccos.skill.load" && result.success {
+                if let Some(ref res) = result.result {
+                    if let Some(skill_id) = res.get("skill_id").and_then(|v| v.as_str()) {
+                        self.last_loaded_skill_id = Some(skill_id.to_string());
+                        self.loaded_skill_ids.insert(skill_id.to_string());
+                        
+                        if let Some(url) = res.get("url").and_then(|v| v.as_str()) {
+                            self.loaded_skill_urls.insert(url.to_string());
+                        }
+                        
+                        if let Some(caps) = res
+                            .get("registered_capabilities")
+                            .or_else(|| res.get("capabilities"))
+                            .and_then(|v| v.as_array())
+                        {
+                            for cap in caps.iter().filter_map(|c| c.as_str()) {
+                                self.loaded_skill_capabilities.insert(cap.to_string());
+                            }
+                        }
+                        
+                        let _ = self.fetch_capabilities().await;
+                        
+                        // Cache secret if present
+                        self.maybe_cache_secret_from_response(&action.capability_id, &result);
+                    }
+                }
+            }
+        }
+
+        // Transition run state if applicable
+        if let Some(ref run_id) = self.args.run_id {
+            if !final_response_sent {
+                // Task didn't complete successfully
+                let summary = self.format_action_summary(&action_history);
+                let _ = self.transition_run_state("PausedExternalEvent", Some(&summary)).await;
+            } else if action_history.iter().all(|a| a.success) {
+                // All actions succeeded
+                let _ = self.transition_run_state("Done", None).await;
+            }
         }
 
         Ok(())
     }
 
-    /// Send a simple response (for testing without LLM)
+    /// Format action history for user messages
+    fn format_action_summary(&self, history: &[ActionResult]) -> String {
+        if history.is_empty() {
+            return "No actions taken yet.".to_string();
+        }
+
+        history
+            .iter()
+            .map(|r| {
+                let status = if r.success { "✓" } else { "✗" };
+                let result_str = r
+                    .result
+                    .as_ref()
+                    .map(|res| {
+                        let s = redact_json_for_logs(res).to_string();
+                        if s.len() > 150 {
+                            format!("{}...", &s[..150])
+                        } else {
+                            s
+                        }
+                    })
+                    .unwrap_or_else(|| "completed".to_string());
+                format!("{} Step {}: {} - {}", status, r.iteration, r.capability_id, result_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
     async fn send_simple_response(&self, event: &ChatEvent) -> anyhow::Result<()> {
         info!("Would respond to: {}", event.content);
 
@@ -1629,6 +1369,14 @@ impl AgentRuntime {
             }
         }
         fields
+    }
+
+    fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+        if value.chars().count() <= max_chars {
+            return value.to_string();
+        }
+        let truncated: String = value.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
     }
 
     fn extract_required_fields(schema: &serde_json::Value) -> Option<Vec<String>> {
@@ -1854,6 +1602,15 @@ impl AgentRuntime {
     ) -> anyhow::Result<ExecuteResponse> {
         let url = format!("{}/chat/execute", self.args.gateway_url);
 
+        let redacted_inputs = redact_json_for_logs(&inputs);
+        info!(
+            "[Agent→Gateway] Execute cap={} session={} url={}",
+            capability_id, self.args.session_id, url
+        );
+        debug!(
+            "[Agent→Gateway] Execute inputs cap={} inputs={}",
+            capability_id, redacted_inputs
+        );
         let request = ExecuteRequest {
             capability_id: capability_id.to_string(),
             inputs,
@@ -1874,14 +1631,30 @@ impl AgentRuntime {
             if exec_resp.success {
                 info!("Capability {} executed successfully", capability_id);
             } else {
+                let error_msg = exec_resp
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Unknown error (None)".to_string());
                 warn!(
                     "Capability {} failed: {}",
                     capability_id,
-                    redact_text_for_logs(&format!("{:?}", exec_resp.error))
+                    redact_text_for_logs(&error_msg)
+                );
+            }
+            if let Some(result) = &exec_resp.result {
+                debug!(
+                    "[Gateway→Agent] Execute result cap={} result={}",
+                    capability_id,
+                    redact_json_for_logs(result)
                 );
             }
             Ok(exec_resp)
         } else {
+            warn!(
+                "[Gateway→Agent] Execute failed cap={} status={}",
+                capability_id,
+                response.status()
+            );
             Err(anyhow::anyhow!(
                 "Capability execution failed: {}",
                 response.status()
@@ -1956,7 +1729,11 @@ impl AgentRuntime {
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter("ccos_agent=info")
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("ccos_agent=info".parse().unwrap()),
+        )
+        .with_ansi(false)
         .init();
 
     // Parse arguments and merge with config file
