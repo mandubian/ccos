@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::Engine as _;
-use chrono::{DateTime, Duration, Utc};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chrono::{DateTime, Duration, Utc};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -143,7 +143,11 @@ pub struct FileQuarantineStore {
 }
 
 impl FileQuarantineStore {
-    pub fn new(root_dir: PathBuf, key: QuarantineKey, default_ttl: Duration) -> RuntimeResult<Self> {
+    pub fn new(
+        root_dir: PathBuf,
+        key: QuarantineKey,
+        default_ttl: Duration,
+    ) -> RuntimeResult<Self> {
         fs::create_dir_all(&root_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create quarantine dir: {}", e))
         })?;
@@ -158,9 +162,8 @@ impl FileQuarantineStore {
     pub fn purge_expired_in_dir(root_dir: &Path) -> RuntimeResult<usize> {
         let mut removed = 0usize;
         let now = Utc::now();
-        let entries = fs::read_dir(root_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read quarantine dir: {}", e))
-        })?;
+        let entries = fs::read_dir(root_dir)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read quarantine dir: {}", e)))?;
         for entry in entries {
             let entry = entry.map_err(|e| {
                 RuntimeError::Generic(format!("Failed to read quarantine dir entry: {}", e))
@@ -187,9 +190,8 @@ impl FileQuarantineStore {
 
     pub fn purge_all_in_dir(root_dir: &Path) -> RuntimeResult<usize> {
         let mut removed = 0usize;
-        let entries = fs::read_dir(root_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read quarantine dir: {}", e))
-        })?;
+        let entries = fs::read_dir(root_dir)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read quarantine dir: {}", e)))?;
         for entry in entries {
             let entry = entry.map_err(|e| {
                 RuntimeError::Generic(format!("Failed to read quarantine dir entry: {}", e))
@@ -249,8 +251,9 @@ impl FileQuarantineStore {
     }
 
     fn write_entry(&self, path: &Path, entry: &StoredBlob) -> RuntimeResult<()> {
-        let data = serde_json::to_string(entry)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to encode quarantine blob: {}", e)))?;
+        let data = serde_json::to_string(entry).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to encode quarantine blob: {}", e))
+        })?;
         fs::write(path, data)
             .map_err(|e| RuntimeError::Generic(format!("Failed to write quarantine blob: {}", e)))
     }
@@ -260,7 +263,11 @@ impl QuarantineStore for FileQuarantineStore {
     fn put_bytes(&self, bytes: Vec<u8>, ttl: Duration) -> RuntimeResult<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let effective_ttl = if ttl.num_milliseconds() > 0 { ttl } else { self.default_ttl };
+        let effective_ttl = if ttl.num_milliseconds() > 0 {
+            ttl
+        } else {
+            self.default_ttl
+        };
         let expires_at = now + effective_ttl;
         let (nonce_b64, ciphertext_b64) = self.encrypt_bytes(&bytes)?;
         let entry = StoredBlob {
@@ -272,17 +279,20 @@ impl QuarantineStore for FileQuarantineStore {
         };
         let path = self.entry_path(&id);
         self.write_entry(&path, &entry)?;
+        log::debug!("[Quarantine] Stored encrypted blob to {}", path.display());
         Ok(id)
     }
 
     fn get_bytes(&self, pointer_id: &str) -> RuntimeResult<Vec<u8>> {
         let path = self.entry_path(pointer_id);
         if !path.exists() {
+            log::warn!("[Quarantine] Pointer NOT FOUND on disk: {}", path.display());
             return Err(RuntimeError::Generic(format!(
                 "Quarantine pointer not found: {}",
                 pointer_id
             )));
         }
+        log::debug!("[Quarantine] Reading blob from {}", path.display());
         let entry = self.read_entry(&path)?;
         if Utc::now() > entry.expires_at {
             fs::remove_file(&path).map_err(|e| {

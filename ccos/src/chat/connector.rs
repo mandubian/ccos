@@ -233,6 +233,9 @@ impl LoopbackWebhookConnector {
     }
 
     fn enforce_rate_limit(&self) -> RuntimeResult<()> {
+        if self.state.config.min_send_interval_ms == 0 {
+            return Ok(());
+        }
         let mut guard = self
             .last_send_at
             .lock()
@@ -364,6 +367,7 @@ async fn inbound_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if secret != state.config.shared_secret {
+        log::warn!("[Connector] Unauthorized inbound request (secret mismatch)");
         return (
             StatusCode::UNAUTHORIZED,
             Json(LoopbackInboundResponse {
@@ -383,6 +387,11 @@ async fn inbound_handler(
             .activation
             .is_allowed_channel(&payload.channel_id)
     {
+        log::debug!(
+            "[Connector] Message from {} in {} rejected by activation rules",
+            payload.sender_id,
+            payload.channel_id
+        );
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
@@ -412,7 +421,10 @@ async fn inbound_handler(
 
     let ttl = chrono::Duration::seconds(state.config.default_ttl_seconds);
     let content_ref = match state.quarantine.put_bytes(payload.text.into_bytes(), ttl) {
-        Ok(pointer) => pointer,
+        Ok(pointer) => {
+            log::debug!("[Connector] Message text quarantined: ref={}", pointer);
+            pointer
+        }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
