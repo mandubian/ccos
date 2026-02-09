@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
 
 use ccos::chat::connector::{ActivationRules, LoopbackConnectorConfig};
 use ccos::chat::gateway::ChatGateway;
@@ -90,7 +91,14 @@ struct PurgeArgs {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_log::LogTracer::init();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("ccos=info".parse().unwrap()),
+        )
+        .with_ansi(false)
+        .finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
     let cli = Cli::parse();
 
     let result = match cli.command {

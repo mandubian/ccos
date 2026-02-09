@@ -205,6 +205,7 @@ pub async fn register_network_capabilities(
 
                 // Add headers if provided
                 let mut has_content_type = false;
+                let mut has_user_agent = false;
                 if let Some(Value::Map(hdrs)) = headers_map.as_ref() {
                     for (key, value) in hdrs.iter() {
                         let key_str = match key {
@@ -215,10 +216,17 @@ pub async fn register_network_capabilities(
                         if key_str.eq_ignore_ascii_case("content-type") {
                             has_content_type = true;
                         }
+                        if key_str.eq_ignore_ascii_case("user-agent") {
+                            has_user_agent = true;
+                        }
                         if let Value::String(val_str) = value {
                             request = request.header(key_str, val_str);
                         }
                     }
+                }
+                if !has_user_agent {
+                    request =
+                        request.header("User-Agent", "ccos-chat-gateway/0.1 (ccos.http-fetch)");
                 }
 
                 // Add body if provided
