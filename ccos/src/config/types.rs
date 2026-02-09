@@ -88,6 +88,9 @@ pub struct AgentConfig {
     /// Coding agents configuration for specialized code generation
     #[serde(default)]
     pub coding_agents: CodingAgentsConfig,
+    /// Autonomous agent configuration for iterative LLM consultation
+    #[serde(default)]
+    pub autonomous_agent: AutonomousAgentConfig,
 }
 
 impl Default for AgentConfig {
@@ -118,8 +121,78 @@ impl Default for AgentConfig {
             realtime_tracking: RealtimeTrackingConfig::default(),
             sandbox: SandboxConfig::default(),
             coding_agents: CodingAgentsConfig::default(),
+            autonomous_agent: AutonomousAgentConfig::default(),
         }
     }
+}
+
+/// Autonomous agent configuration for iterative LLM consultation
+/// Controls how the agent consults with LLM after each action
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutonomousAgentConfig {
+    /// Enable iterative mode (agent consults LLM after each action)
+    #[serde(default = "default_autonomous_enabled")]
+    pub enabled: bool,
+    /// Maximum iterations per user request (safety limit)
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
+    /// Maximum context entries to keep in conversation history
+    #[serde(default = "default_max_context_entries")]
+    pub max_context_entries: usize,
+    /// Context management strategy: "truncate" or "summarize"
+    #[serde(default = "default_context_strategy")]
+    pub context_strategy: String,
+    /// Enable intermediate progress responses to user
+    #[serde(default = "default_send_intermediate")]
+    pub send_intermediate_responses: bool,
+    /// On action failure: "ask_user" or "abort"
+    #[serde(default = "default_failure_handling")]
+    pub failure_handling: String,
+    /// Max consecutive failures before asking user
+    #[serde(default = "default_max_consecutive_failures")]
+    pub max_consecutive_failures: u32,
+}
+
+impl Default for AutonomousAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_autonomous_enabled(),
+            max_iterations: default_max_iterations(),
+            max_context_entries: default_max_context_entries(),
+            context_strategy: default_context_strategy(),
+            send_intermediate_responses: default_send_intermediate(),
+            failure_handling: default_failure_handling(),
+            max_consecutive_failures: default_max_consecutive_failures(),
+        }
+    }
+}
+
+fn default_autonomous_enabled() -> bool {
+    true
+}
+
+fn default_max_iterations() -> u32 {
+    10
+}
+
+fn default_max_context_entries() -> usize {
+    20
+}
+
+fn default_context_strategy() -> String {
+    "truncate".to_string()
+}
+
+fn default_send_intermediate() -> bool {
+    false
+}
+
+fn default_failure_handling() -> String {
+    "ask_user".to_string()
+}
+
+fn default_max_consecutive_failures() -> u32 {
+    2
 }
 
 /// Sandbox configuration for code execution
@@ -137,6 +210,9 @@ pub struct SandboxConfig {
     /// Pre-baked image configurations
     #[serde(default)]
     pub images: Vec<SandboxImageConfig>,
+    /// Whether network access is enabled in the sandbox
+    #[serde(default = "default_true")]
+    pub network_enabled: bool,
     /// Package cache directory
     #[serde(default = "default_package_cache_dir")]
     pub package_cache_dir: String,
@@ -152,6 +228,7 @@ impl Default for SandboxConfig {
             runtime: default_sandbox_runtime(),
             package_allowlist: PackageAllowlistConfig::default(),
             images: vec![SandboxImageConfig::default()],
+            network_enabled: true,
             package_cache_dir: default_package_cache_dir(),
             enable_package_cache: default_true(),
         }
@@ -306,7 +383,7 @@ fn default_coding_profiles() -> Vec<CodingAgentProfile> {
         CodingAgentProfile {
             name: "deepseek-coder".to_string(),
             provider: "openrouter".to_string(),
-            model: "deepseek/deepseek-coder-v2-instruct".to_string(),
+            model: "deepseek/deepseek-v3.2".to_string(),
             api_key_env: "OPENROUTER_API_KEY".to_string(),
             system_prompt: "You are an expert code generation assistant. Generate clean, well-documented code. Always include: 1. Import statements, 2. Type hints (Python) or TypeScript types (JS), 3. Error handling, 4. Brief comments explaining logic, 5. Unit tests.".to_string(),
             max_tokens: 4096,
