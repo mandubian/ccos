@@ -33,6 +33,8 @@ pub struct SpawnConfig {
     pub budget_policy: Option<String>,
     /// Optional run ID for correlation
     pub run_id: Option<String>,
+    /// Optional LLM max tokens
+    pub llm_max_tokens: Option<u32>,
 }
 
 impl SpawnConfig {
@@ -57,6 +59,11 @@ impl SpawnConfig {
 
     pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
         self.run_id = Some(run_id.into());
+        self
+    }
+
+    pub fn with_llm_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.llm_max_tokens = Some(max_tokens);
         self
     }
 }
@@ -188,6 +195,9 @@ impl AgentSpawner for ProcessSpawner {
             }
             if let Some(run_id) = &config.run_id {
                 cmd.arg("--run-id").arg(run_id);
+            }
+            if let Some(max_tokens) = config.llm_max_tokens {
+                cmd.arg("--llm-max-tokens").arg(max_tokens.to_string());
             }
 
             // Add environment variables
@@ -329,6 +339,9 @@ impl AgentSpawner for JailedProcessSpawner {
             }
             if let Some(run_id) = &config.run_id {
                 cmd.arg("--run-id").arg(run_id);
+            }
+            if let Some(max_tokens) = config.llm_max_tokens {
+                cmd.arg("--llm-max-tokens").arg(max_tokens.to_string());
             }
 
             for (key, value) in env_vars {
