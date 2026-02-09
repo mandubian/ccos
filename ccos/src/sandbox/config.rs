@@ -41,6 +41,7 @@ pub struct SandboxConfig {
     pub secret_mount_dir: Option<String>,
     pub filesystem: Option<VirtualFilesystem>,
     pub resources: Option<ResourceLimits>,
+    pub network_enabled: bool,
 }
 
 impl Default for SandboxConfig {
@@ -55,6 +56,7 @@ impl Default for SandboxConfig {
             secret_mount_dir: None,
             filesystem: None,
             resources: None,
+            network_enabled: true,
         }
     }
 }
