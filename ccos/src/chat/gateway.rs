@@ -235,15 +235,28 @@ impl GatewayState {
     ) -> Result<(), StatusCode> {
         // Create SpawnConfig from budget
         let spawn_config = if let Some(ref b) = budget {
-            SpawnConfig::new()
+            let sc = SpawnConfig::new()
                 .with_max_steps(b.max_steps)
                 .with_max_duration_secs(b.max_duration_secs)
-                .with_budget_policy("pause_approval")
+                .with_budget_policy("pause_approval");
+            if let Some(mt) = b.max_tokens {
+                sc.with_llm_max_tokens(mt as u32)
+            } else {
+                sc
+            }
         } else {
             SpawnConfig::default()
         };
 
         let spawn_config = spawn_config.with_run_id(run_id);
+        log::info!(
+            "[Gateway] Spawning agent for run {} session {} (budget: steps={}, duration_secs={}, max_tokens={:?})",
+            run_id,
+            session_id,
+            spawn_config.max_steps,
+            spawn_config.max_duration_secs,
+            spawn_config.llm_max_tokens
+        );
 
         let token = self
             .session_registry
@@ -298,6 +311,14 @@ impl GatewayState {
 pub struct SheriffLogger;
 
 impl SheriffLogger {
+    fn truncate_for_log(value: &str, max_chars: usize) -> String {
+        if value.chars().count() <= max_chars {
+            return value.to_string();
+        }
+        let truncated: String = value.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+
     pub fn log_run(event: &str, run_id: &str, session_id: &str, details: &str) {
         println!(
             "{} {:<10} | {:<20} | run={:<12} session={:<32} | {}",
@@ -312,11 +333,7 @@ impl SheriffLogger {
 
     pub fn log_action(run_id: &str, capability_id: &str, inputs: &serde_json::Value) {
         let inputs_str = serde_json::to_string(inputs).unwrap_or_default();
-        let truncated = if inputs_str.len() > 100 {
-            format!("{}...", &inputs_str[..97])
-        } else {
-            inputs_str
-        };
+        let truncated = Self::truncate_for_log(&inputs_str, 100);
         println!(
             "{} {:<10} | {:<20} | run={:<12} | cap={:<24} inputs={}",
             Utc::now().format("%H:%M:%S"),
@@ -335,11 +352,7 @@ impl SheriffLogger {
         result: &serde_json::Value,
     ) {
         let res_str = serde_json::to_string(result).unwrap_or_default();
-        let truncated = if res_str.len() > 140 {
-            format!("{}...", &res_str[..137])
-        } else {
-            res_str
-        };
+        let truncated = Self::truncate_for_log(&res_str, 512);
         let status = if success {
             "✅ SUCCESS"
         } else {
@@ -421,6 +434,11 @@ impl ChatGateway {
                 config.http_allow_hosts.clone()
             };
             let mut guard = registry.write().await;
+            log::debug!(
+                "[Gateway] Setting HTTP allowlist: hosts={:?}, ports={:?}",
+                allow_hosts,
+                config.http_allow_ports
+            );
             guard.set_http_allow_hosts(allow_hosts)?;
             guard.set_http_allow_ports(config.http_allow_ports.clone())?;
         }
@@ -618,6 +636,18 @@ impl ChatGateway {
             }
             chosen.unwrap_or_else(|| format!("chat-run-{}", Utc::now().timestamp_millis()))
         };
+        let trigger = envelope
+            .activation
+            .as_ref()
+            .and_then(|a| a.trigger.clone())
+            .unwrap_or_else(|| "none".to_string());
+        log::debug!(
+            "[Gateway] Inbound message {} correlated to run {} (session={}, trigger={})",
+            envelope.id,
+            run_id,
+            session_id,
+            trigger
+        );
         let step_id = format!("message-ingest-{}", envelope.id);
         envelope.session_id = Some(session_id.clone());
         envelope.run_id = Some(run_id.clone());
@@ -662,6 +692,7 @@ impl ChatGateway {
             meta,
         )
         .await?;
+        log::debug!("[Gateway] Recorded message.ingest event for run {}", run_id);
 
         // Hybrid session handling: Get or create session with smart agent management
         let (session, is_new_session) = self
@@ -673,20 +704,23 @@ impl ChatGateway {
 
         // Determine if we need to spawn an agent
         let needs_agent_spawn = if is_new_session {
-            log::debug!(
-                "[Gateway] Created new session {} for channel {} sender {}",
-                session.session_id,
-                envelope.channel_id,
-                envelope.sender_id
+            SheriffLogger::log_agent(
+                "SESSION",
+                &session_id,
+                &format!(
+                    "Created new session for channel {} sender {}",
+                    envelope.channel_id, envelope.sender_id
+                ),
             );
             true
         } else {
             // Existing session - check if agent is running
             let agent_running = session.is_agent_running();
             if !agent_running {
-                log::info!(
-                    "[Gateway] Reconnecting to session {} but agent not running - will respawn",
-                    session_id
+                SheriffLogger::log_agent(
+                    "SESSION",
+                    &session_id,
+                    "Reconnected to session but agent not running - will respawn",
                 );
                 // Update status to indicate agent is not running
                 self.state
@@ -698,10 +732,13 @@ impl ChatGateway {
                     .await;
                 true
             } else {
-                log::debug!(
-                    "[Gateway] Reconnected to session {} with agent running (PID {:?})",
-                    session_id,
-                    session.agent_pid
+                SheriffLogger::log_agent(
+                    "SESSION",
+                    &session_id,
+                    &format!(
+                        "Reconnected to session with agent running (PID {:?})",
+                        session.agent_pid
+                    ),
                 );
                 false
             }
@@ -799,6 +836,12 @@ impl ChatGateway {
                 envelope.content_ref.clone()
             }
         };
+        log::debug!(
+            "[Gateway] Resolved inbound content for {} (len={}, ref_fallback={})",
+            envelope.id,
+            content_to_push.len(),
+            content_to_push == envelope.content_ref
+        );
 
         // Handle Slash Commands
         if content_to_push.starts_with('/') {
@@ -1246,6 +1289,11 @@ async fn execute_handler(
 
     // Check session status
     if session.status != crate::chat::session::SessionStatus::Active {
+        log::warn!(
+            "[Gateway] Execute rejected: session {} not active ({:?})",
+            payload.session_id,
+            session.status
+        );
         return Ok(Json(ExecuteResponse {
             success: false,
             result: None,
@@ -1258,7 +1306,19 @@ async fn execute_handler(
             || capability_id.starts_with("ccos.chat.transform.")
     }
 
-    let _redacted_inputs = redact_json_for_logs(&payload.inputs);
+    let redacted_inputs = redact_json_for_logs(&payload.inputs);
+    log::info!(
+        "[Gateway] Execute request cap={} session={} run_id={:?} step_id={:?}",
+        payload.capability_id,
+        payload.session_id,
+        payload.inputs.get("run_id").and_then(|v| v.as_str()),
+        payload.inputs.get("step_id").and_then(|v| v.as_str())
+    );
+    log::debug!(
+        "[Gateway] Execute inputs (redacted) cap={} inputs={}",
+        payload.capability_id,
+        redacted_inputs
+    );
 
     // Best-effort: if this execute is correlated to a known Run, enforce run state/budget and update its step counters.
     // (Runs are created via POST /chat/run and correlated via the run_id input.)
@@ -1276,7 +1336,20 @@ async fn execute_handler(
         let mut budget_exceeded_prev_state: Option<String> = None;
         if let Ok(mut store) = state.run_store.lock() {
             if let Some(run) = store.get_run_mut(run_id) {
+                log::debug!(
+                    "[Gateway] Run {} state={:?} budget={:?} for capability {}",
+                    run_id,
+                    run.state,
+                    run.budget,
+                    payload.capability_id
+                );
                 if run.state.is_terminal() && !allowed_while_paused(&payload.capability_id) {
+                    log::warn!(
+                        "[Gateway] Execute refused: run {} terminal ({:?}) cap={}",
+                        run_id,
+                        run.state,
+                        payload.capability_id
+                    );
                     return Ok(Json(ExecuteResponse {
                         success: false,
                         result: None,
@@ -1287,6 +1360,12 @@ async fn execute_handler(
                     }));
                 }
                 if run.state.is_paused() && !allowed_while_paused(&payload.capability_id) {
+                    log::warn!(
+                        "[Gateway] Execute refused: run {} paused ({:?}) cap={}",
+                        run_id,
+                        run.state,
+                        payload.capability_id
+                    );
                     return Ok(Json(ExecuteResponse {
                         success: false,
                         result: None,
@@ -1300,6 +1379,11 @@ async fn execute_handler(
                 if let Some(exceeded) = run.check_budget() {
                     budget_exceeded_reason = Some(format!("{:?}", exceeded));
                     budget_exceeded_prev_state = Some(format!("{:?}", run.state));
+                    log::warn!(
+                        "[Gateway] Budget exceeded for run {} ({:?}), pausing",
+                        run_id,
+                        exceeded
+                    );
                     // Pause the run by default when budget is exceeded.
                     run.transition(crate::chat::run::RunState::PausedApproval {
                         reason: budget_exceeded_reason.clone().unwrap_or_default(),
@@ -1368,6 +1452,11 @@ async fn execute_handler(
                     "PAUSED",
                     &format!("Refusing capability {}", payload.capability_id),
                 );
+                log::warn!(
+                    "[Gateway] Execute refused: budget exceeded for run {} cap={}",
+                    run_id,
+                    payload.capability_id
+                );
                 return Ok(Json(ExecuteResponse {
                     success: false,
                     result: None,
@@ -1391,7 +1480,23 @@ async fn execute_handler(
         .await
     {
         Ok((result, success)) => {
+            log::debug!(
+                "[Gateway] Capability {} execution result: success={}",
+                payload.capability_id,
+                success
+            );
             SheriffLogger::log_result(run_id_for_log, &payload.capability_id, success, &result);
+            if !success {
+                let err = result
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                log::warn!(
+                    "[Gateway] Capability {} returned failure: {}",
+                    payload.capability_id,
+                    err
+                );
+            }
             if let Some(run_id) = payload.inputs.get("run_id").and_then(|v| v.as_str()) {
                 if let Ok(mut store) = state.run_store.lock() {
                     if let Some(run) = store.get_run_mut(run_id) {
@@ -1426,15 +1531,27 @@ async fn execute_handler(
                     .get("requires_approval")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                log::info!(
-                    "[Gateway] Skill load result: id={}, registered_capabilities={}, requires_approval={}",
-                    skill_id, cap_count, requires_approval
+                SheriffLogger::log_agent(
+                    "SKILL",
+                    &payload.session_id,
+                    &format!(
+                        "Skill load result: id={}, registered_capabilities={}, requires_approval={}",
+                        skill_id, cap_count, requires_approval
+                    ),
                 );
             }
             Ok(Json(ExecuteResponse {
                 success,
-                result: Some(result),
-                error: None,
+                result: Some(result.clone()),
+                error: if success {
+                    None
+                } else {
+                    result
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| Some("Capability returned failure result".to_string()))
+                },
             }))
         }
         Err(e) => Ok(Json(ExecuteResponse {
@@ -1519,6 +1636,12 @@ async fn send_handler(
         .to_string();
 
     if content_text.is_empty() {
+        log::warn!(
+            "[Gateway] Outbound prepare produced empty content (session={}, run={}, step={})",
+            payload.session_id,
+            payload.run_id,
+            payload.step_id
+        );
         return Ok(Json(SendResponse {
             success: false,
             error: Some("Prepared outbound content is empty".to_string()),
@@ -1526,6 +1649,7 @@ async fn send_handler(
         }));
     }
 
+    let channel_id = payload.channel_id.clone();
     let outbound = OutboundRequest {
         channel_id: payload.channel_id,
         content: content_text,
@@ -1540,11 +1664,19 @@ async fn send_handler(
         .map_err(|e| e);
 
     match result {
-        Ok(send_result) => Ok(Json(SendResponse {
-            success: send_result.success,
-            error: send_result.error,
-            message_id: send_result.message_id,
-        })),
+        Ok(send_result) => {
+            log::info!(
+                "[Gateway] Outbound send result success={} message_id={:?} channel={}",
+                send_result.success,
+                send_result.message_id,
+                channel_id
+            );
+            Ok(Json(SendResponse {
+                success: send_result.success,
+                error: send_result.error,
+                message_id: send_result.message_id,
+            }))
+        }
         Err(e) => Ok(Json(SendResponse {
             success: false,
             error: Some(format!("send failed: {}", e)),
@@ -1597,6 +1729,11 @@ async fn events_handler(
         .session_registry
         .drain_session_inbox(&session_id)
         .await;
+    log::debug!(
+        "[Gateway] Events poll for session {} -> {} messages",
+        session_id,
+        messages.len()
+    );
 
     Ok(Json(EventsResponse {
         messages,
@@ -1756,7 +1893,7 @@ pub struct CreateRunRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct BudgetContextRequest {
+pub struct BudgetContextRequest {
     max_steps: Option<u32>,
     max_duration_secs: Option<u64>,
     max_tokens: Option<u64>,
@@ -1879,6 +2016,11 @@ async fn create_run_handler(
             return Err(StatusCode::CONFLICT);
         }
         store.create_run(run);
+        log::debug!(
+            "[Gateway] Run {} created for session {}",
+            run_id,
+            payload.session_id
+        );
     }
 
     SheriffLogger::log_run(
@@ -1924,6 +2066,10 @@ async fn create_run_handler(
             meta,
         )
         .await;
+        log::debug!(
+            "[Gateway] Persistence for run {} creation requested",
+            run_id
+        );
     }
 
     if !is_scheduled {
@@ -1932,7 +2078,12 @@ async fn create_run_handler(
             .spawn_agent_for_run(&payload.session_id, &run_id, budget)
             .await
         {
-            log::error!("[Gateway] Failed to spawn agent for run {}: {}", run_id, e);
+            SheriffLogger::log_run(
+                "SPAWN_ERROR",
+                &run_id,
+                &payload.session_id,
+                &format!("Failed to spawn agent: {}", e),
+            );
         }
 
         // Kick off the run by enqueueing a synthetic system message with the goal.
@@ -2421,12 +2572,7 @@ async fn cancel_run_handler(
         store.cancel_run(&run_id)
     }; // Guard dropped here
 
-    log::info!(
-        "[Gateway] Cancelled run {}: previous_state={}, cancelled={}",
-        run_id,
-        previous_state,
-        cancelled
-    );
+    SheriffLogger::log_run("CANCELLED", &run_id, &session_id, "Run cancelled via API");
 
     // Persist run cancellation to the causal chain (minimal audit trail).
     {
@@ -2559,9 +2705,11 @@ async fn transition_run_handler(
             };
 
             if !actions_satisfied {
-                log::warn!(
-                    "[Gateway] Manual transition to Done rejected for run {}: completion predicate not satisfied.",
-                    run_id
+                SheriffLogger::log_run(
+                    "TRANSITION_REJECTED",
+                    &run_id,
+                    &session_id,
+                    "Manual transition to Done rejected: completion predicate not satisfied.",
                 );
                 return Err(StatusCode::CONFLICT);
             }
