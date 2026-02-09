@@ -79,6 +79,7 @@ max_repair_attempts = 2
 max_runtime_repair_attempts = 5
 # LLM profile to use for validation (from llm_profiles section)
 # Uses a lower quality/faster model for validation tasks
+# Uses a lower quality/faster model for validation tasks
 validation_profile = "openrouter_free:balanced_gfl"
 
 # Real-time tracking and observability configuration
@@ -253,7 +254,7 @@ expiry_hours = 168
 risk_default = "medium"
 
 [llm_profiles]
-default = "openrouter_free:step_35_flash"
+default = "openrouter_free:balanced_ds_32"
 
 # Google Gemini profile
 # [[llm_profiles.model_sets]]
@@ -283,7 +284,7 @@ name = "openrouter_free"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "step_35_flash"
+default = "balanced_gfl"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"
@@ -517,3 +518,34 @@ Response format (JSON):
 """
 max_tokens = 4096
 temperature = 0.2
+
+# =============================================================================
+# AUTONOMOUS AGENT CONFIGURATION
+# =============================================================================
+# Controls iterative LLM consultation and autonomous action execution
+
+[autonomous_agent]
+# Enable iterative mode (agent consults LLM after each action)
+enabled = true
+
+# Maximum iterations per user request (safety limit)
+max_iterations = 10
+
+# Maximum context entries to keep in conversation history
+# When exceeded, older entries are handled according to context_strategy
+max_context_entries = 20
+
+# Context management strategy when max_context_entries exceeded:
+# - "truncate": Remove oldest entries
+# - "summarize": Compress old entries into summary (not yet implemented, falls back to truncate)
+context_strategy = "truncate"
+
+# Enable intermediate progress responses to user
+# When true, agent sends updates after each action
+send_intermediate_responses = false
+
+# On action failure: "ask_user" or "abort"
+failure_handling = "ask_user"
+
+# Max consecutive failures before asking user (prevents infinite loops)
+max_consecutive_failures = 2

@@ -50,7 +50,8 @@ export CCOS_QUARANTINE_KEY="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=" # 32 b
     --allow-senders "user1" \
     --allow-channels "channel1" \
     --mentions "@agent" \
-    --outbound-url "http://127.0.0.1:8765/api/post-to-feed-mock" \
+    --outbound-url "http://127.0.0.1:8765/api/post-to-feed" \
+    --min-send-interval-ms 0 \
     > gateway.log 2>&1 &
 GATEWAY_PID=$!
 
