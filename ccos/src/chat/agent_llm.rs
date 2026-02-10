@@ -654,6 +654,13 @@ Your task:
 Available capabilities:
 {}
 
+IMPORTANT - Capability Input Formats:
+- ccos.network.http-fetch: {{"url": "https://api.example.com/data"}}
+- ccos.execute.python: {{"code": "print(0.2 * 68918)"}}
+- ccos.execute.javascript: {{"code": "console.log(0.2 * 68918)"}}
+- ccos.execute.rtfs: {{"code": "(* 0.2 68918)"}}  <- RTFS uses Lisp-like syntax
+- ccos.chat.egress.send_outbound: {{"content": "message text", "content_class": "public"}}
+
 Guidelines:
 - Be decisive: if the task is done, say so immediately
 - Only plan ONE action at a time (not multiple)
@@ -661,6 +668,7 @@ Guidelines:
 - Don't repeat actions that already succeeded unless necessary
 - If an action failed, you may retry with different parameters
 - When task is complete, set actions: [] and provide a comprehensive final answer
+- ALWAYS provide the required parameters for each capability as shown above
 
 Respond in JSON format:
 {{
