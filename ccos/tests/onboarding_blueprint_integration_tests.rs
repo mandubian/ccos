@@ -2,7 +2,6 @@
 //!
 //! Verifies that onboarding config metadata is correctly stored and retrievable.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ccos::capabilities::registry::CapabilityRegistry;
@@ -13,7 +12,7 @@ use tokio::sync::RwLock;
 #[tokio::test]
 async fn test_onboarding_config_metadata_storage() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-    let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    let _marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
     // Create a simple onboarding config
     let onboarding_config = OnboardingConfig {
