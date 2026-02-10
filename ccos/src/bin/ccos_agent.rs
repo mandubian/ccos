@@ -10,6 +10,7 @@
 //!   ccos-agent --token <TOKEN> --gateway-url <URL> --session-id <ID>
 
 use ccos::chat::agent_llm::{ActionResult, AgentLlmClient, IterativeAgentPlan, LlmConfig};
+use ccos::chat::agent_log::{AgentLogRequest, AgentLogResponse, PlannedCapability};
 use ccos::config::types::AgentConfig;
 use ccos::secrets::SecretStore;
 use ccos::utils::fs::get_workspace_root;
@@ -549,6 +550,7 @@ impl AgentRuntime {
     }
 
     /// Increment step counter and return the new count
+    #[allow(dead_code)]
     fn increment_step(&mut self) -> u32 {
         self.step_count += 1;
         self.step_count
@@ -878,6 +880,7 @@ impl AgentRuntime {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn fetch_run_completion_predicate(&self) -> anyhow::Result<Option<String>> {
         let Some(run_id) = &self.args.run_id else {
             return Ok(None);
@@ -914,7 +917,7 @@ impl AgentRuntime {
 
         // Clone config to avoid borrow issues
         let config = self.args.config.autonomous_agent.clone();
-        
+
         info!(
             "Processing message with iterative LLM: {}",
             redact_text_for_logs(&event.content)
@@ -957,7 +960,10 @@ impl AgentRuntime {
             let plan = if iteration == 1 {
                 // First iteration - get initial plan
                 info!("Iteration {}: Getting initial plan", iteration);
-                match self.llm_client.as_ref().unwrap()
+                match self
+                    .llm_client
+                    .as_ref()
+                    .unwrap()
                     .process_message(&event.content, &context, &self.capabilities, &agent_context)
                     .await
                 {
@@ -967,25 +973,40 @@ impl AgentRuntime {
                             initial_plan.understanding,
                             initial_plan.actions.len()
                         );
-                        
+
                         // Send initial response if provided and intermediate mode is on
                         if config.send_intermediate_responses && !initial_plan.response.is_empty() {
                             self.send_response(&event, &initial_plan.response).await?;
-                            self.record_in_history("agent", initial_plan.response.clone(), &event.channel_id);
+                            self.record_in_history(
+                                "agent",
+                                initial_plan.response.clone(),
+                                &event.channel_id,
+                            );
                         }
-                        
+
                         // Convert to iterative plan format
-                        IterativeAgentPlan {
+                        let plan = IterativeAgentPlan {
                             understanding: initial_plan.understanding,
                             task_complete: initial_plan.actions.is_empty(),
                             reasoning: "Initial plan from LLM".to_string(),
                             actions: initial_plan.actions,
                             response: initial_plan.response,
+                        };
+
+                        // Log the initial consultation to Causal Chain
+                        if let Err(e) = self
+                            .log_llm_consultation(iteration, true, &plan, &event)
+                            .await
+                        {
+                            warn!("Failed to log initial LLM consultation: {}", e);
                         }
+
+                        plan
                     }
                     Err(e) => {
                         warn!("LLM initial planning failed: {}", e);
-                        let error_msg = format!("I encountered an error planning your request: {}", e);
+                        let error_msg =
+                            format!("I encountered an error planning your request: {}", e);
                         self.send_response(&event, &error_msg).await?;
                         self.record_in_history("agent", error_msg, &event.channel_id);
                         return Ok(());
@@ -993,14 +1014,20 @@ impl AgentRuntime {
                 }
             } else {
                 // Subsequent iterations - consult with results
-                info!("Iteration {}: Consulting LLM with action results", iteration);
-                
+                info!(
+                    "Iteration {}: Consulting LLM with action results",
+                    iteration
+                );
+
                 let last_result = action_history
                     .last()
                     .and_then(|r| r.result.clone())
                     .unwrap_or_else(|| serde_json::json!({}));
-                
-                match self.llm_client.as_ref().unwrap()
+
+                match self
+                    .llm_client
+                    .as_ref()
+                    .unwrap()
                     .consult_after_action(
                         &event.content,
                         &action_history,
@@ -1018,6 +1045,15 @@ impl AgentRuntime {
                             plan.actions.len(),
                             plan.reasoning
                         );
+
+                        // Log the follow-up consultation to Causal Chain
+                        if let Err(e) = self
+                            .log_llm_consultation(iteration, false, &plan, &event)
+                            .await
+                        {
+                            warn!("Failed to log follow-up LLM consultation: {}", e);
+                        }
+
                         plan
                     }
                     Err(e) => {
@@ -1231,11 +1267,11 @@ impl AgentRuntime {
                     if let Some(skill_id) = res.get("skill_id").and_then(|v| v.as_str()) {
                         self.last_loaded_skill_id = Some(skill_id.to_string());
                         self.loaded_skill_ids.insert(skill_id.to_string());
-                        
+
                         if let Some(url) = res.get("url").and_then(|v| v.as_str()) {
                             self.loaded_skill_urls.insert(url.to_string());
                         }
-                        
+
                         if let Some(caps) = res
                             .get("registered_capabilities")
                             .or_else(|| res.get("capabilities"))
@@ -1245,9 +1281,9 @@ impl AgentRuntime {
                                 self.loaded_skill_capabilities.insert(cap.to_string());
                             }
                         }
-                        
+
                         let _ = self.fetch_capabilities().await;
-                        
+
                         // Cache secret if present
                         self.maybe_cache_secret_from_response(&action.capability_id, &result);
                     }
@@ -1256,11 +1292,13 @@ impl AgentRuntime {
         }
 
         // Transition run state if applicable
-        if let Some(ref run_id) = self.args.run_id {
+        if let Some(ref _run_id) = self.args.run_id {
             if !final_response_sent {
                 // Task didn't complete successfully
                 let summary = self.format_action_summary(&action_history);
-                let _ = self.transition_run_state("PausedExternalEvent", Some(&summary)).await;
+                let _ = self
+                    .transition_run_state("PausedExternalEvent", Some(&summary))
+                    .await;
             } else if action_history.iter().all(|a| a.success) {
                 // All actions succeeded
                 let _ = self.transition_run_state("Done", None).await;
@@ -1292,11 +1330,15 @@ impl AgentRuntime {
                         }
                     })
                     .unwrap_or_else(|| "completed".to_string());
-                format!("{} Step {}: {} - {}", status, r.iteration, r.capability_id, result_str)
+                format!(
+                    "{} Step {}: {} - {}",
+                    status, r.iteration, r.capability_id, result_str
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")
     }
+    #[allow(dead_code)]
     async fn send_simple_response(&self, event: &ChatEvent) -> anyhow::Result<()> {
         info!("Would respond to: {}", event.content);
 
@@ -1335,6 +1377,7 @@ impl AgentRuntime {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn parse_missing_inputs(error_msg: &str) -> Option<(String, Vec<String>)> {
         let prefix = "Missing required inputs for ";
         let start = error_msg.find(prefix)?;
@@ -1352,6 +1395,7 @@ impl AgentRuntime {
         Some((cap_id.trim().to_string(), missing))
     }
 
+    #[allow(dead_code)]
     fn extract_missing_fields(error_msg: &str) -> Vec<String> {
         let mut fields = Vec::new();
         let mut rest = error_msg;
@@ -1371,6 +1415,7 @@ impl AgentRuntime {
         fields
     }
 
+    #[allow(dead_code)]
     fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
         if value.chars().count() <= max_chars {
             return value.to_string();
@@ -1427,6 +1472,7 @@ impl AgentRuntime {
         }
     }
 
+    #[allow(dead_code)]
     fn autofill_value_for_field(&self, field: &str) -> Option<String> {
         match field {
             "name" | "agent_name" => self
@@ -1586,6 +1632,7 @@ impl AgentRuntime {
             .and_then(|store| store.get(&key))
     }
 
+    #[allow(dead_code)]
     fn allowed_context_value(&self, key: &str) -> Option<String> {
         if self.llm_context_allowlist.iter().any(|k| k == key) {
             self.context_value(key)
@@ -1660,6 +1707,114 @@ impl AgentRuntime {
                 response.status()
             ))
         }
+    }
+
+    /// Log an LLM consultation to the Causal Chain via the Gateway
+    ///
+    /// This preserves a complete timeline of agent decision-making,
+    /// including understanding, reasoning, and planned actions.
+    async fn log_llm_consultation(
+        &self,
+        iteration: u32,
+        is_initial: bool,
+        plan: &IterativeAgentPlan,
+        event: &ChatEvent,
+    ) -> anyhow::Result<()> {
+        let url = format!("{}/chat/agent/log", self.args.gateway_url);
+
+        // Build run_id and step_id
+        let run_id = self
+            .args
+            .run_id
+            .clone()
+            .unwrap_or_else(|| format!("run-{}", event.id));
+        let step_id = format!("{}-llm-{}", run_id, iteration);
+
+        // Build planned capabilities
+        let planned_capabilities: Vec<PlannedCapability> = plan
+            .actions
+            .iter()
+            .map(|action| {
+                let mut cap = PlannedCapability::new(&action.capability_id, &action.reasoning);
+                if let Some(inputs) = action.inputs.as_object() {
+                    // Sanitize inputs - remove sensitive fields
+                    let mut sanitized = serde_json::Map::new();
+                    for (k, v) in inputs.iter() {
+                        if k.contains("secret")
+                            || k.contains("token")
+                            || k.contains("password")
+                            || k.contains("key")
+                        {
+                            sanitized.insert(k.clone(), serde_json::json!("[REDACTED]"));
+                        } else {
+                            sanitized.insert(k.clone(), v.clone());
+                        }
+                    }
+                    cap = cap.with_inputs(serde_json::Value::Object(sanitized));
+                }
+                cap
+            })
+            .collect();
+
+        // Build the request
+        let mut request = if is_initial {
+            AgentLogRequest::initial(
+                &self.args.session_id,
+                &run_id,
+                &step_id,
+                &plan.understanding,
+                &plan.reasoning,
+            )
+        } else {
+            AgentLogRequest::follow_up(
+                &self.args.session_id,
+                &run_id,
+                &step_id,
+                iteration,
+                &plan.understanding,
+                &plan.reasoning,
+                plan.task_complete,
+            )
+        };
+
+        // Add planned capabilities
+        for cap in planned_capabilities {
+            request = request.with_planned_capability(cap);
+        }
+
+        // Add model info if available
+        if let Some(ref model) = self.args.llm_model {
+            request = request.with_model(model);
+        }
+
+        // Send to gateway
+        let response = self
+            .client
+            .post(&url)
+            .header("X-Agent-Token", &self.args.token)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let log_resp: AgentLogResponse = response.json().await?;
+            if log_resp.success {
+                debug!(
+                    "Logged LLM consultation: iteration={}, complete={}, action_id={}",
+                    iteration, plan.task_complete, log_resp.action_id
+                );
+            } else {
+                warn!("Failed to log LLM consultation: {:?}", log_resp.error);
+            }
+        } else {
+            warn!(
+                "Failed to log LLM consultation: status={}",
+                response.status()
+            );
+        }
+
+        Ok(())
     }
 
     /// Spawn a background task to send heartbeats to the Gateway
