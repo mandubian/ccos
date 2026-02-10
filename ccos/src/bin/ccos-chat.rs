@@ -4,16 +4,16 @@
 
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use reqwest::Client;
@@ -62,6 +62,7 @@ struct ChatMessage {
     sender: String,
     content: String,
     timestamp: chrono::DateTime<chrono::Local>,
+    #[allow(dead_code)]
     metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
@@ -262,8 +263,9 @@ async fn main() -> anyhow::Result<()> {
     // Check session status before connecting
     let ws_session = format!("chat:{}:{}", args.channel_id, args.user_id);
     let session_client = Client::new();
-    let session_status = check_session_status(&session_client, &args.gateway_url, &ws_session).await;
-    
+    let session_status =
+        check_session_status(&session_client, &args.gateway_url, &ws_session).await;
+
     match session_status {
         SessionStatus::New => {
             let _ = tx.send(AppEvent::Message(ChatMessage {
@@ -754,26 +756,20 @@ async fn fetch_status(client: &Client, url: &str) -> anyhow::Result<serde_json::
 #[derive(Debug, serde::Deserialize)]
 struct OutboundRequest {
     content: String,
+    #[allow(dead_code)]
     channel_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct ChatAuditEntryResponse {
     timestamp: u64,
     event_type: String,
     function_name: Option<String>,
-    #[allow(dead_code)]
     session_id: Option<String>,
-    // #[allow(dead_code)]
-    // run_id: Option<String>,
-    // #[allow(dead_code)]
-    // step_id: Option<String>,
-    // #[allow(dead_code)]
-    // rule_id: Option<String>,
-    // #[allow(dead_code)]
-    // decision: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct ChatAuditResponse {
     events: Vec<ChatAuditEntryResponse>,
@@ -797,7 +793,8 @@ async fn check_session_status(
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(info) = response.json::<serde_json::Value>().await {
-                let agent_running = info.get("agent_running")
+                let agent_running = info
+                    .get("agent_running")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 SessionStatus::Reconnecting { agent_running }
