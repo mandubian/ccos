@@ -16,7 +16,7 @@ impl Scheduler {
         Self { run_store }
     }
 
-    pub async fn start(self: Arc<Self>, state: Arc<GatewayState>) {
+    pub(crate) async fn start(self: Arc<Self>, state: Arc<GatewayState>) {
         info!("[Scheduler] Starting background scheduler loop...");
         let mut tick = interval(Duration::from_secs(10));
 

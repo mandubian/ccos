@@ -33,6 +33,7 @@ pub struct AgentMonitor {
     /// How long without heartbeat before considered unhealthy (seconds)
     heartbeat_timeout: chrono::Duration,
     /// Reference to Causal Chain for recording crash events
+    #[allow(dead_code)]
     chain: Arc<Mutex<CausalChain>>,
     /// Session registry for agent state
     registry: SessionRegistry,
