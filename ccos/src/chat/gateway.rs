@@ -37,6 +37,7 @@ use crate::chat::{ResourceStore, SharedResourceStore};
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
+use crate::chat::agent_log::{AgentLogRequest, AgentLogResponse};
 use super::connector::{
     ChatConnector, ConnectionHandle, LoopbackConnectorConfig, LoopbackWebhookConnector,
     OutboundRequest,
@@ -577,6 +578,7 @@ impl ChatGateway {
             .route("/chat/heartbeat/:session_id", post(heartbeat_handler))
             .route("/chat/session/:session_id", get(get_session_handler))
             .route("/chat/sessions", get(list_sessions_handler))
+            .route("/chat/agent/log", post(agent_log_handler))
             .route("/chat/run", post(create_run_handler).get(list_runs_handler))
             .route("/chat/run/:run_id", get(get_run_handler))
             .route("/chat/run/:run_id/actions", get(list_run_actions_handler))
@@ -2956,4 +2958,146 @@ async fn heartbeat_handler(
         .await;
 
     StatusCode::OK.into_response()
+}
+
+// =============================================================================
+// Agent LLM Consultation Logging Endpoint
+// =============================================================================
+
+/// Handler for POST /chat/agent/log
+///
+/// Logs agent LLM consultation events to the Causal Chain.
+/// This preserves a complete timeline of agent decision-making,
+/// separate from capability executions.
+async fn agent_log_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<AgentLogRequest>,
+) -> Result<Json<AgentLogResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            log::warn!("[Gateway] Agent log request missing X-Agent-Token header");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    // Validate token against session registry
+    let _session = state
+        .session_registry
+        .validate_token(&payload.session_id, token)
+        .await
+        .ok_or_else(|| {
+            log::warn!(
+                "[Gateway] Invalid token for agent log session {}",
+                payload.session_id
+            );
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    // Log the agent LLM consultation to the Causal Chain
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let plan_id = format!("agent-plan-{}", Utc::now().timestamp_millis());
+    
+    // Build metadata from the request
+    let mut metadata = HashMap::new();
+    metadata.insert("session_id".to_string(), Value::String(payload.session_id.clone()));
+    metadata.insert("run_id".to_string(), Value::String(payload.run_id.clone()));
+    metadata.insert("step_id".to_string(), Value::String(payload.step_id.clone()));
+    metadata.insert("iteration".to_string(), Value::Integer(payload.iteration as i64));
+    metadata.insert("is_initial".to_string(), Value::Boolean(payload.is_initial));
+    metadata.insert("understanding".to_string(), Value::String(payload.understanding.clone()));
+    metadata.insert("reasoning".to_string(), Value::String(payload.reasoning.clone()));
+    metadata.insert("task_complete".to_string(), Value::Boolean(payload.task_complete));
+    
+    // Add planned capabilities
+    let caps: Vec<Value> = payload.planned_capabilities
+        .iter()
+        .map(|c| {
+            let mut cap_map = HashMap::new();
+            cap_map.insert(MapKey::String("capability_id".to_string()), Value::String(c.capability_id.clone()));
+            cap_map.insert(MapKey::String("reasoning".to_string()), Value::String(c.reasoning.clone()));
+            if let Some(ref inputs) = c.inputs {
+                if let Ok(rtfs_val) = json_to_rtfs_value(inputs) {
+                    cap_map.insert(MapKey::String("inputs".to_string()), rtfs_val);
+                }
+            }
+            Value::Map(cap_map)
+        })
+        .collect();
+    metadata.insert("planned_capabilities".to_string(), Value::Vector(caps));
+    
+    // Add token usage if available
+    if let Some(ref usage) = payload.token_usage {
+        let mut usage_map = HashMap::new();
+        usage_map.insert(MapKey::String("prompt_tokens".to_string()), Value::Integer(usage.prompt_tokens as i64));
+        usage_map.insert(MapKey::String("completion_tokens".to_string()), Value::Integer(usage.completion_tokens as i64));
+        usage_map.insert(MapKey::String("total_tokens".to_string()), Value::Integer(usage.total_tokens as i64));
+        metadata.insert("token_usage".to_string(), Value::Map(usage_map));
+    }
+    
+    // Add model if available
+    if let Some(ref model) = payload.model {
+        metadata.insert("model".to_string(), Value::String(model.clone()));
+    }
+    
+    // Create the action
+    let action = crate::types::Action {
+        action_id: action_id.clone(),
+        parent_action_id: None,
+        session_id: Some(payload.session_id.clone()),
+        plan_id,
+        intent_id: payload.run_id.clone(),
+        action_type: crate::types::ActionType::AgentLlmConsultation,
+        function_name: Some(format!(
+            "agent.llm.{}",
+            if payload.is_initial { "initial" } else { "follow_up" }
+        )),
+        arguments: None,
+        result: None,
+        cost: None,
+        duration_ms: None,
+        timestamp: Utc::now().timestamp_millis() as u64,
+        metadata,
+    };
+    
+    // Append to Causal Chain
+    match state.chain.lock() {
+        Ok(mut chain) => {
+            if let Err(e) = chain.append(&action) {
+                log::error!(
+                    "[Gateway] Failed to append agent LLM consultation to Causal Chain: {}",
+                    e
+                );
+                return Ok(Json(AgentLogResponse {
+                    success: false,
+                    action_id: String::new(),
+                    error: Some(format!("Failed to append to Causal Chain: {}", e)),
+                }));
+            }
+        }
+        Err(e) => {
+            log::error!("[Gateway] Failed to lock Causal Chain: {}", e);
+            return Ok(Json(AgentLogResponse {
+                success: false,
+                action_id: String::new(),
+                error: Some("Failed to lock Causal Chain".to_string()),
+            }));
+        }
+    }
+    
+    log::debug!(
+        "[Gateway] Logged agent LLM consultation: session={} run={} iteration={} complete={}",
+        payload.session_id,
+        payload.run_id,
+        payload.iteration,
+        payload.task_complete
+    );
+    
+    Ok(Json(AgentLogResponse {
+        success: true,
+        action_id,
+        error: None,
+    }))
 }
