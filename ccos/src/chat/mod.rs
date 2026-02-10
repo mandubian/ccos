@@ -33,6 +33,7 @@ use crate::capability_marketplace::types::{
 };
 
 pub mod agent_llm;
+pub mod agent_log;
 pub mod agent_monitor;
 pub mod checkpoint;
 pub mod connector;
@@ -3044,3 +3045,5 @@ mod tests {
         assert_eq!(out.get(&MapKey::String("status".to_string())).unwrap().as_string().unwrap(), "scheduled");
     }
 }
+
+

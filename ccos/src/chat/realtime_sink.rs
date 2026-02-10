@@ -7,6 +7,7 @@ use crate::causal_chain::CausalChain;
 use crate::event_sink::CausalChainEventSink;
 use crate::types::Action;
 use chrono::Utc;
+use rtfs::runtime::values::Value as RtfsValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,6 +60,9 @@ pub struct ActionView {
     pub success: Option<bool>,
     pub duration_ms: Option<u64>,
     pub summary: String,
+    /// Metadata for agent LLM consultations and other rich data
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl From<&Action> for ActionView {
@@ -90,6 +94,40 @@ impl From<&Action> for ActionView {
             }
         );
 
+        // Convert metadata to JSON for streaming
+        let mut json_map = serde_json::Map::new();
+        for (key, value) in &action.metadata {
+            // Convert RTFS Value to JSON Value
+            let json_val = rtfs_value_to_json(value);
+            json_map.insert(key.clone(), json_val);
+        }
+        
+        // Also extract result value fields for code execution details
+        if let Some(ref result) = action.result {
+            if let RtfsValue::Map(ref result_map) = result.value {
+                // Extract common execution result fields
+                for key in ["stdout", "stderr", "code", "success", "exit_code", "explanation"].iter() {
+                    // Try both String and Keyword keys
+                    let rtfs_key = rtfs::ast::MapKey::String(key.to_string());
+                    let kw_key = rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(key.to_string()));
+                    
+                    if let Some(val) = result_map.get(&rtfs_key).or_else(|| result_map.get(&kw_key)) {
+                        // Only add if not already in metadata
+                        if !json_map.contains_key(*key) {
+                            let json_val = rtfs_value_to_json(val);
+                            json_map.insert(key.to_string(), json_val);
+                        }
+                    }
+                }
+            }
+        }
+
+        let metadata_json = if json_map.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(json_map))
+        };
+
         Self {
             action_id: action.action_id.to_string(),
             action_type: format!("{:?}", action.action_type),
@@ -100,7 +138,35 @@ impl From<&Action> for ActionView {
             success,
             duration_ms: action.duration_ms,
             summary,
+            metadata: metadata_json,
         }
+    }
+}
+
+/// Helper function to convert RTFS Value to JSON Value
+fn rtfs_value_to_json(value: &RtfsValue) -> serde_json::Value {
+    match value {
+        RtfsValue::String(s) => serde_json::Value::String(s.clone()),
+        RtfsValue::Integer(i) => serde_json::Value::Number((*i).into()),
+        RtfsValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        RtfsValue::Boolean(b) => serde_json::Value::Bool(*b),
+        RtfsValue::Nil => serde_json::Value::Null,
+        RtfsValue::Vector(v) => {
+            serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect())
+        }
+        RtfsValue::Map(m) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in m {
+                map.insert(k.to_string(), rtfs_value_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        RtfsValue::List(v) => {
+            serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect())
+        }
+        _ => serde_json::Value::Null,
     }
 }
 
