@@ -1,6 +1,3 @@
-use chrono::{Duration, Utc};
-use log;
-use std::sync::Arc;
 use tokio;
 
 #[tokio::test]

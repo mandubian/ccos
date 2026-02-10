@@ -49,15 +49,19 @@ struct Post {
 struct Agent {
     id: String,
     name: String,
+    #[allow(dead_code)]
     model: String,
     secret: String,
     human_x_username: Option<String>,
     verified: bool,
+    #[allow(dead_code)]
     created_at: String,
 }
 
 struct VerificationStatus {
+    #[allow(dead_code)]
     agent_id: String,
+    #[allow(dead_code)]
     tweet_text: String,
     tweet_url: Option<String>,
     verified: bool,
@@ -69,6 +73,7 @@ struct RegisterAgentRequest {
     name: String,
     model: String,
     #[serde(default)]
+    #[allow(dead_code)]
     created_by: Option<String>,
 }
 
