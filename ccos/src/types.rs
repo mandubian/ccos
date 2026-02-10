@@ -247,6 +247,10 @@ pub enum ActionType {
     BudgetExhausted,
     /// Budget extended after human approval
     BudgetExtended,
+
+    // Agent LLM Interactions
+    /// Agent consulted LLM for iterative planning decision
+    AgentLlmConsultation,
 }
 
 /// Represents the outcome of an executed action or plan.
