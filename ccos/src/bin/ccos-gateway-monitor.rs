@@ -83,6 +83,17 @@ impl Default for AgentInfo {
     }
 }
 
+/// Code execution details for detailed display
+#[derive(Debug, Clone)]
+struct CodeExecutionDetails {
+    language: String,
+    code: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    duration_ms: Option<u64>,
+}
+
 /// System event
 #[derive(Debug, Clone)]
 struct SystemEvent {
@@ -90,6 +101,12 @@ struct SystemEvent {
     event_type: String,
     session_id: String,
     details: String,
+    /// Full details for detailed view (optional)
+    full_details: Option<String>,
+    /// Code execution specific details
+    code_execution: Option<CodeExecutionDetails>,
+    /// Raw metadata for flexible display
+    metadata: Option<serde_json::Value>,
 }
 
 /// LLM Consultation event details
@@ -104,13 +121,27 @@ struct LlmConsultation {
     model: Option<String>,
 }
 
+/// Detailed action event data for rich display
+#[derive(Debug, Clone)]
+struct ActionEventDetails {
+    action_type: String,
+    function_name: String,
+    success: Option<bool>,
+    duration_ms: Option<u64>,
+    summary: String,
+    /// Code execution specific details
+    code_execution: Option<CodeExecutionDetails>,
+    /// Raw metadata for additional display
+    metadata: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone)]
 enum MonitorEvent {
     Input(Event),
     SessionUpdate(Vec<SessionInfo>),
     AgentHeartbeat(String, AgentInfo),
     AgentCrashed(String, u32),
-    ActionEvent(String, String), // session_id, action_details
+    ActionEvent(String, ActionEventDetails), // session_id, action_details
     LlmConsultation(String, LlmConsultation), // session_id, consultation_details
     Tick,
 }
@@ -124,6 +155,10 @@ struct MonitorState {
     llm_consultations: Vec<(String, LlmConsultation)>, // (session_id, consultation)
     selected_tab: usize,
     selected_agent_index: usize,
+    /// Selected event index in Events tab
+    selected_event_index: usize,
+    /// Whether event detail popup is shown
+    show_event_detail: bool,
     #[allow(dead_code)]
     last_refresh: Instant,
     should_quit: bool,
@@ -140,6 +175,8 @@ impl MonitorState {
             llm_consultations: Vec::new(),
             selected_tab: 0,
             selected_agent_index: 0,
+            selected_event_index: 0,
+            show_event_detail: false,
             last_refresh: Instant::now(),
             should_quit: false,
             status_message: "Connected to gateway".to_string(),
@@ -163,29 +200,59 @@ impl MonitorState {
         }
     }
 
-    fn get_filtered_events(&self) -> Vec<&SystemEvent> {
+    /// Get filtered event indices for selection navigation
+    fn get_filtered_event_indices(&self) -> Vec<usize> {
         if let Some(selected_id) = self.get_selected_session_id() {
             self.events
                 .iter()
-                .filter(|e| e.session_id == selected_id)
+                .enumerate()
+                .filter(|(_, e)| e.session_id == selected_id)
+                .map(|(i, _)| i)
                 .collect()
         } else {
-            self.events.iter().collect()
+            self.events.iter().enumerate().map(|(i, _)| i).collect()
         }
     }
 
     fn add_event(&mut self, event_type: &str, session_id: &str, details: &str) {
+        self.add_event_full(event_type, session_id, details, None, None, None);
+    }
+
+    fn add_event_full(
+        &mut self,
+        event_type: &str,
+        session_id: &str,
+        details: &str,
+        full_details: Option<String>,
+        code_execution: Option<CodeExecutionDetails>,
+        metadata: Option<serde_json::Value>,
+    ) {
         self.events.push(SystemEvent {
             timestamp: Instant::now(),
             event_type: event_type.to_string(),
             session_id: session_id.to_string(),
             details: details.to_string(),
+            full_details,
+            code_execution,
+            metadata,
         });
 
         // Keep only last 100 events
         if self.events.len() > 100 {
             self.events.remove(0);
+            // Adjust selected_event_index if needed
+            if self.selected_event_index > 0 {
+                self.selected_event_index -= 1;
+            }
         }
+    }
+
+    /// Get the currently selected event (if any)
+    fn get_selected_event(&self) -> Option<&SystemEvent> {
+        let filtered_indices = self.get_filtered_event_indices();
+        filtered_indices
+            .get(self.selected_event_index)
+            .and_then(|&idx| self.events.get(idx))
     }
 
     fn add_llm_consultation(&mut self, session_id: String, consultation: LlmConsultation) {
@@ -347,6 +414,15 @@ async fn main() -> anyhow::Result<()> {
             match event {
                 MonitorEvent::Input(event) => {
                     if let Event::Key(key) = event {
+                        // Handle Escape to close detail popup first
+                        if state.show_event_detail {
+                            if key.code == KeyCode::Esc {
+                                state.show_event_detail = false;
+                            }
+                            // Consume all other keys while popup is open
+                            continue;
+                        }
+
                         match key.code {
                             KeyCode::Char('q') => state.should_quit = true,
                             KeyCode::Tab => {
@@ -360,7 +436,7 @@ async fn main() -> anyhow::Result<()> {
                                 };
                             }
                             KeyCode::Up => {
-                                // Navigate agents in Agents tab
+                                // Navigate agents in Agents tab or events in Events tab
                                 if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
                                     if state.selected_agent_index > 0 {
                                         state.selected_agent_index -= 1;
@@ -368,13 +444,39 @@ async fn main() -> anyhow::Result<()> {
                                         state.selected_agent_index =
                                             state.agent_session_ids.len() - 1;
                                     }
+                                } else if state.selected_tab == 2 {
+                                    // Navigate events in Events tab
+                                    let filtered_count = state.get_filtered_event_indices().len();
+                                    if filtered_count > 0 {
+                                        if state.selected_event_index > 0 {
+                                            state.selected_event_index -= 1;
+                                        } else {
+                                            state.selected_event_index = filtered_count - 1;
+                                        }
+                                    }
                                 }
                             }
                             KeyCode::Down => {
-                                // Navigate agents in Agents tab
+                                // Navigate agents in Agents tab or events in Events tab
                                 if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
                                     state.selected_agent_index = (state.selected_agent_index + 1)
                                         % state.agent_session_ids.len();
+                                } else if state.selected_tab == 2 {
+                                    // Navigate events in Events tab
+                                    let filtered_count = state.get_filtered_event_indices().len();
+                                    if filtered_count > 0 {
+                                        state.selected_event_index = (state.selected_event_index + 1)
+                                            % filtered_count;
+                                    }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                // Show event detail in Events tab
+                                if state.selected_tab == 2 {
+                                    let filtered_indices = state.get_filtered_event_indices();
+                                    if !filtered_indices.is_empty() {
+                                        state.show_event_detail = true;
+                                    }
                                 }
                             }
                             _ => {}
@@ -447,8 +549,47 @@ async fn main() -> anyhow::Result<()> {
                     state.add_event("CRASH", &session_id, &format!("Agent PID {} crashed", pid));
                     state.status_message = format!("⚠️  Agent crashed: {}", session_id);
                 }
-                MonitorEvent::ActionEvent(session_id, action) => {
-                    state.add_event("ACTION", &session_id, &action);
+                MonitorEvent::ActionEvent(session_id, action_details) => {
+                    // Build summary string for the event list
+                    let mut details = action_details.action_type.clone();
+                    if !action_details.function_name.is_empty() {
+                        details = format!("{}: {}", details, action_details.function_name);
+                    }
+                    if let Some(ms) = action_details.duration_ms {
+                        details = format!("{} ({}ms)", details, ms);
+                    }
+                    if let Some(s) = action_details.success {
+                        let status = if s { "✓" } else { "✗" };
+                        details = format!("{} {}", details, status);
+                    }
+                    if !action_details.summary.is_empty() && action_details.summary != action_details.action_type {
+                        details = format!("{} - {}", details, action_details.summary);
+                    }
+
+                    // Build full details for detail view
+                    let mut full_lines = vec![format!("Action: {}", action_details.action_type)];
+                    if !action_details.function_name.is_empty() {
+                        full_lines.push(format!("Function: {}", action_details.function_name));
+                    }
+                    if let Some(s) = action_details.success {
+                        full_lines.push(format!("Success: {}", s));
+                    }
+                    if let Some(ms) = action_details.duration_ms {
+                        full_lines.push(format!("Duration: {}ms", ms));
+                    }
+                    if !action_details.summary.is_empty() {
+                        full_lines.push(format!("Summary: {}", action_details.summary));
+                    }
+                    let full_details = full_lines.join("\n");
+
+                    state.add_event_full(
+                        "ACTION",
+                        &session_id,
+                        &details,
+                        Some(full_details),
+                        action_details.code_execution.clone(),
+                        action_details.metadata.clone(),
+                    );
                 }
                 MonitorEvent::LlmConsultation(session_id, consultation) => {
                     state.add_llm_consultation(session_id, consultation);
@@ -588,11 +729,12 @@ async fn connect_to_session_stream(
                                                         .await;
                                                 }
                                             } else {
-                                                // Regular action - extract more details
+                                                // Regular action - extract all details
                                                 let function_name = action
                                                     .get("function_name")
                                                     .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
+                                                    .unwrap_or("")
+                                                    .to_string();
                                                 let success =
                                                     action.get("success").and_then(|v| v.as_bool());
                                                 let duration_ms = action
@@ -601,89 +743,63 @@ async fn connect_to_session_stream(
                                                 let summary = action
                                                     .get("summary")
                                                     .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
+                                                    .unwrap_or("")
+                                                    .to_string();
 
                                                 // Extract code execution details from metadata
+                                                let metadata_val = action.get("metadata").cloned();
                                                 let metadata = action.get("metadata");
                                                 let code = metadata
                                                     .and_then(|m| m.get("code"))
-                                                    .and_then(|v| v.as_str());
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
+                                                let language = metadata
+                                                    .and_then(|m| m.get("language"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
                                                 let stdout = metadata
                                                     .and_then(|m| m.get("stdout"))
-                                                    .and_then(|v| v.as_str());
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
                                                 let stderr = metadata
                                                     .and_then(|m| m.get("stderr"))
-                                                    .and_then(|v| v.as_str());
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
+                                                let exit_code = metadata
+                                                    .and_then(|m| m.get("exit_code"))
+                                                    .and_then(|v| v.as_i64());
 
-                                                // Build a detailed action string
-                                                let mut details = action_type.to_string();
-                                                if !function_name.is_empty() {
-                                                    details =
-                                                        format!("{}: {}", details, function_name);
-                                                }
-                                                if let Some(ms) = duration_ms {
-                                                    details = format!("{} ({}ms)", details, ms);
-                                                }
-                                                if let Some(s) = success {
-                                                    let status = if s { "✓" } else { "✗" };
-                                                    details = format!("{} {}", details, status);
-                                                }
+                                                // Build code execution details if any code-related field is present
+                                                let code_execution = if code.is_some()
+                                                    || stdout.is_some()
+                                                    || stderr.is_some()
+                                                {
+                                                    Some(CodeExecutionDetails {
+                                                        language: language.unwrap_or_else(|| "unknown".to_string()),
+                                                        code: code.unwrap_or_default(),
+                                                        stdout: stdout.unwrap_or_default(),
+                                                        stderr: stderr.unwrap_or_default(),
+                                                        exit_code: exit_code.map(|c| c as i32),
+                                                        duration_ms,
+                                                    })
+                                                } else {
+                                                    None
+                                                };
 
-                                                // Add code execution details if available
-                                                if let Some(code_str) = code {
-                                                    // Show first line of code or truncate
-                                                    let code_preview =
-                                                        code_str.lines().next().unwrap_or("");
-                                                    let truncated = if code_preview.len() > 50 {
-                                                        format!("{}...", &code_preview[..47])
-                                                    } else {
-                                                        code_preview.to_string()
-                                                    };
-                                                    details = format!(
-                                                        "{}\n    Code: {}",
-                                                        details, truncated
-                                                    );
-                                                }
-                                                if let Some(stdout_str) = stdout {
-                                                    if !stdout_str.is_empty() {
-                                                        let output_preview =
-                                                            stdout_str.lines().next().unwrap_or("");
-                                                        let truncated = if output_preview.len() > 60
-                                                        {
-                                                            format!("{}...", &output_preview[..57])
-                                                        } else {
-                                                            output_preview.to_string()
-                                                        };
-                                                        details = format!(
-                                                            "{}\n    Out: {}",
-                                                            details, truncated
-                                                        );
-                                                    }
-                                                }
-                                                if let Some(stderr_str) = stderr {
-                                                    if !stderr_str.is_empty() {
-                                                        let err_preview =
-                                                            stderr_str.lines().next().unwrap_or("");
-                                                        let truncated = if err_preview.len() > 60 {
-                                                            format!("{}...", &err_preview[..57])
-                                                        } else {
-                                                            err_preview.to_string()
-                                                        };
-                                                        details = format!(
-                                                            "{}\n    Err: {}",
-                                                            details, truncated
-                                                        );
-                                                    }
-                                                }
-
-                                                if !summary.is_empty() && summary != action_type {
-                                                    details = format!("{} - {}", details, summary);
-                                                }
+                                                let action_details = ActionEventDetails {
+                                                    action_type: action_type.to_string(),
+                                                    function_name,
+                                                    success,
+                                                    duration_ms,
+                                                    summary,
+                                                    code_execution,
+                                                    metadata: metadata_val,
+                                                };
 
                                                 let _ = tx
                                                     .send(MonitorEvent::ActionEvent(
                                                         session_id.to_string(),
-                                                        details,
+                                                        action_details,
                                                     ))
                                                     .await;
                                             }
@@ -967,12 +1083,15 @@ fn draw_agents_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 }
 
 fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let filtered_events = state.get_filtered_events();
+    let filtered_indices = state.get_filtered_event_indices();
+    let filtered_count = filtered_indices.len();
 
-    let text: Vec<Line> = filtered_events
+    let text: Vec<Line> = filtered_indices
         .iter()
         .rev()
-        .map(|event| {
+        .enumerate()
+        .map(|(display_idx, &event_idx)| {
+            let event = &state.events[event_idx];
             let elapsed = event.timestamp.elapsed().as_secs();
             let time_str = if elapsed < 60 {
                 format!("{}s ago", elapsed)
@@ -988,28 +1107,53 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                 _ => Color::Gray,
             };
 
+            // Calculate the actual selected index in reversed list
+            let is_selected = display_idx == (filtered_count - 1 - state.selected_event_index);
+
+            let base_style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
             Line::from(vec![
                 Span::styled(
                     format!("[{}] ", time_str),
-                    Style::default().fg(Color::DarkGray),
+                    if is_selected {
+                        base_style
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
                 ),
                 Span::styled(
                     format!("[{}] ", event.event_type),
-                    Style::default().fg(color),
+                    if is_selected {
+                        base_style
+                    } else {
+                        Style::default().fg(color)
+                    },
                 ),
-                Span::raw(format!("{}: {}", event.session_id, event.details)),
+                Span::styled(
+                    format!("{}: {}", event.session_id, event.details),
+                    base_style,
+                ),
             ])
         })
         .collect();
 
     let title = if state.get_selected_session_id().is_some() {
         format!(
-            "Recent Events (filtered: {}/{})",
-            filtered_events.len(),
-            state.events.len()
+            "Recent Events (filtered: {}) - ↑↓ to select, Enter for details",
+            filtered_count
         )
     } else {
-        format!("Recent Events ({})", state.events.len())
+        format!(
+            "Recent Events ({}) - ↑↓ to select, Enter for details",
+            filtered_count
+        )
     };
 
     let paragraph = Paragraph::new(text)
@@ -1017,6 +1161,220 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .wrap(Wrap { trim: true });
 
     f.render_widget(paragraph, area);
+
+    // Draw event detail popup if enabled
+    if state.show_event_detail {
+        if let Some(selected_event) = state.get_selected_event() {
+            draw_event_detail_popup(f, area, selected_event);
+        }
+    }
+}
+
+/// Draw a popup showing detailed event information
+fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
+    // Calculate popup size (centered, 80% width, 80% height)
+    let popup_area = centered_rect(80, 80, area);
+
+    // Clear the area first
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![
+        Span::styled("Event Details", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Basic info
+    let elapsed = event.timestamp.elapsed().as_secs();
+    let time_str = if elapsed < 60 {
+        format!("{} seconds ago", elapsed)
+    } else if elapsed < 3600 {
+        format!("{} minutes ago", elapsed / 60)
+    } else {
+        format!("{} hours ago", elapsed / 3600)
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Type: ", Style::default().fg(Color::Yellow)),
+        Span::styled(&event.event_type, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Session: ", Style::default().fg(Color::Yellow)),
+        Span::styled(&event.session_id, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Time: ", Style::default().fg(Color::Yellow)),
+        Span::styled(&time_str, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Full details if available
+    if let Some(ref full_details) = event.full_details {
+        lines.push(Line::from(vec![
+            Span::styled("Details:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]));
+        for line in full_details.lines() {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(line, Style::default().fg(Color::White)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Code execution details
+    if let Some(ref code_exec) = event.code_execution {
+        lines.push(Line::from(vec![
+            Span::styled("━━━ Code Execution ━━━", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]));
+        lines.push(Line::from(""));
+
+        // Language
+        lines.push(Line::from(vec![
+            Span::styled("Language: ", Style::default().fg(Color::Yellow)),
+            Span::styled(&code_exec.language, Style::default().fg(Color::Cyan)),
+        ]));
+
+        // Duration
+        if let Some(ms) = code_exec.duration_ms {
+            lines.push(Line::from(vec![
+                Span::styled("Duration: ", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("{}ms", ms), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        // Exit code
+        if let Some(code) = code_exec.exit_code {
+            let color = if code == 0 { Color::Green } else { Color::Red };
+            lines.push(Line::from(vec![
+                Span::styled("Exit Code: ", Style::default().fg(Color::Yellow)),
+                Span::styled(code.to_string(), Style::default().fg(color)),
+            ]));
+        }
+        lines.push(Line::from(""));
+
+        // Code
+        if !code_exec.code.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Code:", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            ]));
+            for line in code_exec.code.lines().take(20) {
+                lines.push(Line::from(vec![
+                    Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(line, Style::default().fg(Color::White)),
+                ]));
+            }
+            if code_exec.code.lines().count() > 20 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Stdout
+        if !code_exec.stdout.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Stdout:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]));
+            for line in code_exec.stdout.lines().take(10) {
+                lines.push(Line::from(vec![
+                    Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(line, Style::default().fg(Color::Green)),
+                ]));
+            }
+            if code_exec.stdout.lines().count() > 10 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Stderr
+        if !code_exec.stderr.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Stderr:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            ]));
+            for line in code_exec.stderr.lines().take(10) {
+                lines.push(Line::from(vec![
+                    Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(line, Style::default().fg(Color::Red)),
+                ]));
+            }
+            if code_exec.stderr.lines().count() > 10 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    // Metadata if available
+    if let Some(ref metadata) = event.metadata {
+        lines.push(Line::from(vec![
+            Span::styled("━━━ Metadata ━━━", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+        ]));
+        if let Ok(json_str) = serde_json::to_string_pretty(metadata) {
+            let json_lines: Vec<&str> = json_str.lines().take(15).collect();
+            let total_lines = json_str.lines().count();
+            for line in json_lines {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(line.to_string(), Style::default().fg(Color::Blue)),
+                ]));
+            }
+            if total_lines > 15 {
+                lines.push(Line::from(vec![
+                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+    }
+
+    // Footer
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" to close", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Event Detail ")
+                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, popup_area);
+}
+
+/// Helper function to create a centered rectangle
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
