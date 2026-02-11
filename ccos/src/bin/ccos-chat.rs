@@ -43,7 +43,7 @@ struct Args {
     #[arg(long, default_value = "user1")]
     user_id: String,
 
-    #[arg(long, default_value = "moltbook-demo")]
+    #[arg(long, default_value = "general")]
     channel_id: String,
 }
 

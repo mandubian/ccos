@@ -60,6 +60,15 @@ pub struct ChatGatewayConfig {
     ///
     /// If empty, all ports are allowed (subject to host allowlist).
     pub http_allow_ports: Vec<u16>,
+    /// Admin tokens for privileged operations (listing sessions, WebSocket upgrade, etc.)
+    ///
+    /// If empty, no admin access is allowed via tokens. Can be set via CCOS_ADMIN_TOKENS env var
+    /// (comma-separated) or in config. Defaults to empty for production safety.
+    pub admin_tokens: Vec<String>,
+    /// Base URL for the Approval UI, used in nudge messages to direct users.
+    ///
+    /// Defaults to "http://localhost:3000" for development.
+    pub approval_ui_url: String,
 }
 
 #[derive(Clone)]
@@ -93,6 +102,10 @@ pub(crate) struct GatewayState {
     pub(crate) internal_api_secret: String,
     /// Real-time event tracking sink for WebSocket streaming
     pub(crate) realtime_sink: Arc<RealTimeTrackingSink>,
+    /// Admin tokens for privileged operations
+    pub(crate) admin_tokens: Vec<String>,
+    /// Base URL for the Approval UI
+    pub(crate) approval_ui_url: String,
 }
 
 #[async_trait]
@@ -191,16 +204,17 @@ impl GatewayState {
         }
     }
     async fn nudge_user(&self, session_id: &str, approval_id: &str, category: &ApprovalCategory) {
+        let approval_ui_url = &self.approval_ui_url;
         let message = match category {
             ApprovalCategory::SecretWrite {
                 key, description, ..
             } => {
-                format!("🔓 I need your approval to store a secret for **{}** ({}) .\n\nID: `{}`\n\nPlease visit the [Approval UI](http://localhost:3000/approvals) to complete this step.", key, description, approval_id)
+                format!("🔓 I need your approval to store a secret for **{}** ({}) .\n\nID: `{}`\n\nPlease visit the [Approval UI]({}/approvals) to complete this step.", key, description, approval_id, approval_ui_url)
             }
             ApprovalCategory::HumanActionRequest {
                 title, skill_id, ..
             } => {
-                format!("👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nPlease visit the [Approval UI](http://localhost:3000/approvals) to proceed.", title, skill_id, approval_id)
+                format!("👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nPlease visit the [Approval UI]({}/approvals) to proceed.", title, skill_id, approval_id, approval_ui_url)
             }
             _ => return,
         };
@@ -519,6 +533,8 @@ impl ChatGateway {
             checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             internal_api_secret,
             realtime_sink,
+            admin_tokens: config.admin_tokens.clone(),
+            approval_ui_url: config.approval_ui_url.clone(),
         });
 
         // Register gateway as approval consumer
@@ -1803,7 +1819,9 @@ async fn list_sessions_handler(
         .or_else(|| headers.get("X-Agent-Token"))
         .and_then(|v| v.to_str().ok());
 
-    let is_admin = provided_token == Some("admin-token") || provided_token == Some("demo-secret");
+    let is_admin = provided_token
+        .map(|t| state.admin_tokens.contains(&t.to_string()))
+        .unwrap_or(false);
 
     if !is_admin {
         return Err(StatusCode::UNAUTHORIZED);
@@ -2798,10 +2816,10 @@ async fn event_stream_handler(
     let token = params.get("token").cloned().unwrap_or_default();
 
     // Validate session and token before upgrading
-    // Master token bypass for system/demo clients
-    let is_master_token = token == "admin-token" || token == "demo-secret";
+    // Admin token bypass for system clients
+    let is_admin_token = state.admin_tokens.contains(&token);
 
-    if !is_master_token
+    if !is_admin_token
         && state
             .session_registry
             .validate_token(&session_id, &token)
