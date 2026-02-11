@@ -78,6 +78,19 @@ struct ServeArgs {
 
     #[arg(long, default_value = "1000")]
     min_send_interval_ms: u64,
+
+    /// Comma-separated list of admin tokens for privileged operations.
+    ///
+    /// Can also be set via CCOS_ADMIN_TOKENS environment variable.
+    /// If both are provided, CLI values take precedence.
+    #[arg(long, value_delimiter = ',', env = "CCOS_ADMIN_TOKENS")]
+    admin_tokens: Vec<String>,
+
+    /// Base URL for the Approval UI, used in nudge messages.
+    ///
+    /// Defaults to localhost for development.
+    #[arg(long, default_value = "http://localhost:3000", env = "CCOS_APPROVAL_UI_URL")]
+    approval_ui_url: String,
 }
 
 #[derive(Parser)]
@@ -145,6 +158,8 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
         connector,
         http_allow_hosts: args.http_allow_hosts,
         http_allow_ports: args.http_allow_ports,
+        admin_tokens: args.admin_tokens,
+        approval_ui_url: args.approval_ui_url,
     };
 
     ChatGateway::start(config)
