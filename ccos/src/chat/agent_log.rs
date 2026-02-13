@@ -50,6 +50,14 @@ pub struct AgentLogRequest {
     
     /// Model used for this consultation
     pub model: Option<String>,
+
+    /// Prompt sent to the LLM (or sanitized prompt excerpt)
+    #[serde(default)]
+    pub prompt: Option<String>,
+
+    /// Response returned by the LLM (or sanitized response excerpt)
+    #[serde(default)]
+    pub response: Option<String>,
 }
 
 /// A capability planned by the agent for execution.
@@ -112,6 +120,8 @@ impl AgentLogRequest {
             planned_capabilities: Vec::new(),
             token_usage: None,
             model: None,
+            prompt: None,
+            response: None,
         }
     }
     
@@ -137,6 +147,8 @@ impl AgentLogRequest {
             planned_capabilities: Vec::new(),
             token_usage: None,
             model: None,
+            prompt: None,
+            response: None,
         }
     }
     
@@ -155,6 +167,18 @@ impl AgentLogRequest {
     /// Set the model used for this consultation.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self
+    }
+
+    /// Set prompt information for this consultation.
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set response information for this consultation.
+    pub fn with_response(mut self, response: impl Into<String>) -> Self {
+        self.response = Some(response.into());
         self
     }
 }

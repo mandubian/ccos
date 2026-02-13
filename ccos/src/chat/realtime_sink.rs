@@ -87,10 +87,10 @@ impl From<&Action> for ActionView {
             "{:?} - {} - {}",
             action.action_type,
             action.function_name.as_deref().unwrap_or("unknown"),
-            if success.unwrap_or(false) {
-                "success"
-            } else {
-                "pending"
+            match success {
+                Some(true) => "success",
+                Some(false) => "failed",
+                None => "pending",
             }
         );
 
@@ -106,7 +106,18 @@ impl From<&Action> for ActionView {
         if let Some(ref result) = action.result {
             if let RtfsValue::Map(ref result_map) = result.value {
                 // Extract common execution result fields
-                for key in ["stdout", "stderr", "code", "success", "exit_code", "explanation"].iter() {
+                for key in [
+                    "stdout",
+                    "stderr",
+                    "code",
+                    "success",
+                    "exit_code",
+                    "explanation",
+                    "error",
+                    "capability_id",
+                ]
+                .iter()
+                {
                     // Try both String and Keyword keys
                     let rtfs_key = rtfs::ast::MapKey::String(key.to_string());
                     let kw_key = rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(key.to_string()));
