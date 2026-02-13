@@ -54,6 +54,24 @@ impl SecretStore {
         })
     }
 
+    /// Set a secret by name - loads, modifies, and saves
+    pub fn set(name: &str, value: &str, scope: &str) -> RuntimeResult<()> {
+        // Determine path - use workspace root
+        let workspace = crate::utils::fs::get_workspace_root();
+        let local_path = workspace.join(".ccos").join("secrets.toml");
+
+        // Load existing
+        let mut store = Self::new(Some(workspace))?;
+
+        // Set the secret
+        store
+            .local_secrets
+            .insert(name.to_string(), value.to_string());
+
+        // Save
+        store.save()
+    }
+
     /// Load secrets from a TOML file
     fn load_from_file(
         path: &PathBuf,

@@ -749,6 +749,10 @@ impl CausalChain {
         self.ledger.append_action(&action)?;
         self.metrics.record_action(&action)?;
 
+        // Emit real-time event for CapabilityCall.
+        // Without this, monitors only observe CapabilityResult for live executions.
+        self.notify_sinks(&action);
+
         // Log structured line
         self.log_action_json(&action, "capability_call");
 
