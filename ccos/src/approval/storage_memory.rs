@@ -79,6 +79,7 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                         }
                         super::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
                         super::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
+                        super::types::ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
                     };
                     if actual_type != cat_type {
                         return false;

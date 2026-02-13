@@ -140,6 +140,13 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "onboarding".to_string(),
             None,
         ),
+        ApprovalCategory::HttpHostApproval { host, port, requesting_url, reason, .. } => (
+            ApprovalType::Effect, // reuse Effect type for HTTP host approvals
+            format!("HTTP Host Approval: {}", host),
+            format!("{}:{} for {} - {}", host, port.map_or("default".to_string(), |p| p.to_string()), requesting_url, reason),
+            "network".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

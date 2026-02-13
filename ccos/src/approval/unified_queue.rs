@@ -1007,6 +1007,116 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         self.list_pending_by_category("SecretRequired").await
     }
 
+    // ========================================================================
+    // HTTP Host Approval Specific Operations
+    // ========================================================================
+
+    /// Add an HTTP host approval request for a host not in the allowlist
+    pub async fn add_http_host_approval(
+        &self,
+        host: String,
+        port: Option<u16>,
+        requesting_url: String,
+        scope: String,
+        requesting_context: Option<String>,
+        reason: String,
+        expires_in_hours: i64,
+        session_id: Option<String>,
+    ) -> RuntimeResult<String> {
+        // Check if a pending request already exists for this host:port
+        let pending = self.list_pending_http_hosts().await?;
+        for req in pending {
+            if let ApprovalCategory::HttpHostApproval {
+                host: h,
+                port: p,
+                ..
+            } = &req.category
+            {
+                if h == &host && p == &port {
+                    return Ok(req.id);
+                }
+            }
+        }
+
+        let mut request = ApprovalRequest::new(
+            ApprovalCategory::HttpHostApproval {
+                host,
+                port,
+                requesting_url,
+                scope,
+                requesting_context,
+                reason,
+            },
+            RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec!["Host not in HTTP allowlist".to_string()],
+            },
+            expires_in_hours,
+            None,
+        );
+        
+        // Store session_id in metadata so on_approval_resolved can notify the user
+        if let Some(sid) = session_id {
+            request.metadata.insert("session_id".to_string(), sid);
+        }
+        
+        self.add(request).await
+    }
+
+    /// List pending HTTP host approvals
+    pub async fn list_pending_http_hosts(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
+        self.list_pending_by_category("HttpHostApproval").await
+    }
+
+    /// Check if an HTTP host has been approved
+    /// Returns true if there's an approved HttpHostApproval for this host (and optionally port)
+    pub async fn is_http_host_approved(&self, host: &str, port: Option<u16>) -> RuntimeResult<bool> {
+        let approved = self
+            .storage
+            .list(ApprovalFilter {
+                category_type: Some("HttpHostApproval".to_string()),
+                status_pending: Some(false),
+                ..Default::default()
+            })
+            .await?;
+
+        for req in approved {
+            if !req.status.is_approved() {
+                continue;
+            }
+            if let ApprovalCategory::HttpHostApproval {
+                host: h,
+                port: p,
+                ..
+            } = &req.category
+            {
+                // Match host (case-insensitive)
+                if h.to_lowercase() == host.to_lowercase() {
+                    // If port is specified in the approval, it must match
+                    // If port is None in the approval, it approves all ports for that host
+                    match (*p, port) {
+                        (Some(approved_port), Some(requested_port)) => {
+                            if approved_port == requested_port {
+                                return Ok(true);
+                            }
+                        }
+                        (None, _) => {
+                            // Approval covers all ports for this host
+                            return Ok(true);
+                        }
+                        (Some(_), None) => {
+                            // Approval is for a specific port, but request is for default port
+                            // This is a partial match - we'll continue looking for a better match
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Update a pending server entry in place
     pub async fn update_pending_server(&self, request: &ApprovalRequest) -> RuntimeResult<()> {
         self.storage.update(request).await
