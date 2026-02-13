@@ -18,6 +18,10 @@ use serde_json::json;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+lazy_static::lazy_static! {
+    static ref SECRET_INJECTION: RwLock<HashMap<String, String>> = RwLock::new(HashMap::new());
+}
 use std::net::IpAddr;
 use std::time::Duration;
 use urlencoding::encode;
@@ -1291,6 +1295,30 @@ impl CapabilityExecutor for HttpExecutor {
                 req = req.bearer_auth(token);
             }
 
+            // Check if this is a skill capability and inject secret if available
+            // SECURITY: Only inject secrets from SecretStore (which requires approval)
+            // Secrets pending approval in SECRET_INJECTION are NOT injected until approved
+            log::info!("[HttpExecutor] Checking for skill_id in metadata: {:?}", context.metadata.get("skill_id"));
+            if let Some(skill_id) = context.metadata.get("skill_id") {
+                log::info!("[HttpExecutor] Found skill_id: {}, looking for approved secret", skill_id);
+                
+                let secret_key = format!("{}.secret", skill_id);
+                
+                // Only use SecretStore - which requires approval
+                // This ensures governance is enforced
+                let cwd = std::env::current_dir().ok();
+                let secret_store = crate::secrets::SecretStore::new(cwd).ok();
+                
+                if let Some(secret_value) = secret_store.and_then(|store| store.get(&secret_key)) {
+                    log::info!("[HttpExecutor] Injecting APPROVED secret for skill '{}'", skill_id);
+                    req = req.bearer_auth(secret_value);
+                } else {
+                    log::info!("[HttpExecutor] No approved secret found for skill '{}'. Secret may be pending approval.", skill_id);
+                }
+            } else {
+                log::info!("[HttpExecutor] No skill_id in metadata, skipping secret injection");
+            }
+
             let method_upper = method.to_ascii_uppercase();
             let is_write = matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH");
             let has_content_type = headers_owned
@@ -1358,9 +1386,44 @@ impl CapabilityExecutor for HttpExecutor {
                 status,
                 redacted_body
             );
+
+            // Auto-handle secrets: store, create approval, hide from agent
+            let mut processed_body = resp_body.clone();
+            if status < 400 {
+                if let Some(returns_secret) = context.metadata.get("returns_secret") {
+                    if returns_secret == "true" {
+                        if let Some(skill_id) = context.metadata.get("skill_id") {
+                            // Try to extract secret from response
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp_body) {
+                                if let Some(secret_value) = json.get("secret").and_then(|v| v.as_str()) {
+                                    // Store secret in shared in-memory store for auto-injection
+                                    let secret_key = format!("{}.secret", skill_id);
+                                    SECRET_INJECTION.write().await.insert(secret_key.clone(), secret_value.to_string());
+                                    log::info!("[HttpExecutor] Auto-stored secret for skill '{}' (pending approval)", skill_id);
+
+                                    // Replace secret value in response to hide from agent
+                                    // Agent only sees that a secret exists, not its value
+                                    if let Ok(mut json_obj) = serde_json::from_str::<serde_json::Value>(&processed_body) {
+                                        if let Some(obj) = json_obj.as_object_mut() {
+                                            obj.insert("secret".to_string(), serde_json::Value::String("***PENDING_APPROVAL***".to_string()));
+                                            // Add helpful message
+                                            obj.insert("message".to_string(), serde_json::Value::String(format!(
+                                                "Secret received and stored pending approval. Use /approve to approve the '{}' secret, then subsequent skill operations will use it automatically.",
+                                                secret_key
+                                            )));
+                                            processed_body = serde_json::to_string(&json_obj).unwrap_or(processed_body);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let mut response_map = std::collections::HashMap::new();
             response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
-            response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
+            response_map.insert(MapKey::String("body".to_string()), Value::String(processed_body));
             let mut headers_map = std::collections::HashMap::new();
             for (k, v) in response_headers.iter() {
                 headers_map.insert(

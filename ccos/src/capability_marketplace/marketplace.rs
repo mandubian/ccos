@@ -1956,7 +1956,10 @@ impl CapabilityMarketplace {
         };
 
         if let Some(manifest) = self.capabilities.read().await.get(id) {
-            let effective_status = approval_status.unwrap_or(manifest.approval_status.clone());
+            let effective_status = approval_status.clone().unwrap_or(manifest.approval_status.clone());
+            
+            log::info!("[Marketplace] Capability {} check: manifest_status={:?}, override_status={:?}, effective_status={:?}, effect_type={:?}",
+                id, manifest.approval_status, approval_status, effective_status, manifest.effect_type);
 
             if manifest.effect_type == EffectType::Effectful {
                 match effective_status {
