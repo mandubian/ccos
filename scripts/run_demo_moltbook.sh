@@ -25,7 +25,12 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
 NC='\033[0m' # No Color
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+REPO_ROOT="${SCRIPT_DIR}/.."
 
 echo -e "${BLUE}=========================================${NC}"
 echo -e "${BLUE}CCOS Gateway-Agent Moltbook Demo${NC}"
@@ -54,6 +59,8 @@ trap cleanup INT TERM EXIT
 # Set environment
 export RUST_LOG="info,ccos_agent=debug"
 export CCOS_QUARANTINE_KEY="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+# LLM HTTP timeout for iterative consult calls (can exceed 60s on free/shared models)
+export CCOS_LLM_TIMEOUT_SECS=${CCOS_LLM_TIMEOUT_SECS:-180}
 
 # Build binaries
 echo -e "${BLUE}[1/5] Building binaries...${NC}"
@@ -69,7 +76,7 @@ if lsof -i :8765 > /dev/null 2>&1; then
     fuser -k -n tcp 8765 2>/dev/null || true
     sleep 1
 fi
-./target/debug/mock-moltbook > /tmp/moltbook.log 2>&1 &
+"${REPO_ROOT}/target/debug/mock-moltbook" > /tmp/moltbook.log 2>&1 &
 MOLTBOOK_PID=$!
 echo -e "${GREEN}✓ Mock Moltbook started (PID: $MOLTBOOK_PID)${NC}"
 echo -e "  ${YELLOW}Waiting for server to be ready...${NC}"
@@ -100,10 +107,10 @@ for port in 8822 8833; do
 done
 
 export CCOS_GATEWAY_SPAWN_AGENTS=1
-export CCOS_AGENT_BINARY="$(pwd)/target/debug/ccos-agent"
+export CCOS_AGENT_BINARY="${REPO_ROOT}/target/debug/ccos-agent"
 
 # Agent configuration
-export CCOS_AGENT_CONFIG_PATH="$(pwd)/config/agent_config.toml"
+export CCOS_AGENT_CONFIG_PATH="${REPO_ROOT}/config/agent_config.toml"
 export CCOS_AGENT_ENABLE_LLM=true
 # export CCOS_LLM_PROFILE=${CCOS_LLM_PROFILE:-"google:gemini-1.5-pro"}
 
@@ -113,12 +120,11 @@ export OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
 # Skill URL hints: let the agent resolve "moltbook" -> local mock server
 export CCOS_SKILL_URL_HINTS="moltbook=http://localhost:8765/skill.md"
-unset CCOS_SKILL_URL_HINTS
 
-./target/debug/ccos-chat-gateway serve \
+"${REPO_ROOT}/target/debug/ccos-chat-gateway" serve \
     --bind-addr 127.0.0.1:8822 \
     --connector-bind-addr 127.0.0.1:8833 \
-    --connector-secret "demo-secret-key" \
+    --connector-secret "demo-secret" \
     --min-send-interval-ms 0 \
     --allow-senders "user1" \
     --allow-channels "moltbook-demo" \
@@ -146,7 +152,7 @@ echo ""
 # Instruct user to start chat
 echo -e "${BLUE}[4/5] Services ready! Please start the interactive chat to begin...${NC}"
 echo -e "  ${YELLOW}Run this in a new terminal:${NC}"
-echo -e "  ${CYAN}./target/debug/ccos-chat --user-id user1 --channel-id moltbook-demo --status-url http://localhost:8765${NC}"
+echo -e "  ${CYAN}${REPO_ROOT}/target/debug/ccos-chat --user-id user1 --channel-id moltbook-demo --status-url http://localhost:8765${NC}"
 echo -e "  ${YELLOW}Then type in the chat:${NC}"
 echo -e "  ${WHITE}@agent onboard moltbook${NC}"
 echo ""
