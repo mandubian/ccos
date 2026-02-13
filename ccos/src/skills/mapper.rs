@@ -354,7 +354,10 @@ impl SkillMapper {
             }
 
             if let Some(cmd) = &op.command {
+                log::info!("[SkillMapper] Processing operation '{}' with command: {}", op.name, cmd);
+                
                 if let Some((first_cmd, second_cmd)) = split_pipeline(cmd) {
+                    log::info!("[SkillMapper] Command is a pipeline: {} | {}", first_cmd, second_cmd);
                     if let Some(first_mapped) = primitive_mapper.map_command(first_cmd) {
                         if let Some(second_mapped) = primitive_mapper.map_command(second_cmd) {
                             if first_mapped.capability_id == "ccos.network.http-fetch"
@@ -530,7 +533,7 @@ impl SkillMapper {
                                     domains: Vec::new(),
                                     categories: Vec::new(),
                                     effect_type: EffectType::Effectful,
-                                    approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
+                                    approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
                                 };
 
                                 self.marketplace
@@ -562,6 +565,7 @@ impl SkillMapper {
                     }
                 }
                 if let Some(mapped) = primitive_mapper.map_command(cmd) {
+                    log::info!("[SkillMapper] Command '{}' mapped to: {}", cmd, mapped.capability_id);
                     metadata.insert("delegated_to".to_string(), mapped.capability_id.clone());
 
                     // Create handler for this capability
@@ -698,7 +702,7 @@ impl SkillMapper {
                         categories: Vec::new(),
                         effect_type: EffectType::Effectful,
                         approval_status:
-                            crate::capability_marketplace::types::ApprovalStatus::Pending,
+                            crate::capability_marketplace::types::ApprovalStatus::Approved,
                     };
 
                     self.marketplace
@@ -725,6 +729,7 @@ impl SkillMapper {
                 }
 
                 // Unknown command -> sandboxed capability
+                log::warn!("[SkillMapper] Command '{}' could NOT be mapped - using sandboxed execution with Pending approval", cmd);
                 metadata.insert("sandbox_reason".to_string(), "unknown_tool".to_string());
                 let manifest = CapabilityManifest {
                     id: cap_id.clone(),
@@ -804,9 +809,14 @@ async fn check_approval_status(capability_id: &str) -> RuntimeResult<()> {
     let storage_path =
         approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
 
+    log::info!("[check_approval_status] Checking approval status for {} in storage: {:?}", capability_id, storage_path);
+
     let storage = match FileApprovalStorage::new(storage_path) {
         Ok(s) => s,
-        Err(_) => return Ok(()), // No storage = no approvals enforced
+        Err(e) => {
+            log::warn!("[check_approval_status] Failed to create storage: {}", e);
+            return Ok(()); // No storage = no approvals enforced
+        }
     };
     let queue = UnifiedApprovalQueue::new(std::sync::Arc::new(storage));
 
@@ -1179,6 +1189,7 @@ async fn ensure_skill_approvals(
     }
 
     if sandboxed_unknown {
+        log::info!("[SkillMapper] Creating EffectApproval for capability: {}", capability_id);
         let request = ApprovalRequest::new(
             ApprovalCategory::EffectApproval {
                 capability_id: capability_id.to_string(),
