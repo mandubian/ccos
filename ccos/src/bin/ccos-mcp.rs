@@ -611,7 +611,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let storage_path = agent_config
             .as_ref()
             .map(|cfg| ccos::utils::fs::resolve_workspace_path(&cfg.storage.approvals_dir))
-            .unwrap_or_else(|| std::path::PathBuf::from(".ccos/approvals"));
+            .unwrap_or_else(|| std::path::PathBuf::from("storage/approvals"));
 
         if args.verbose {
             eprintln!("[ccos-mcp] Using approval storage at: {}", storage_path.display());
@@ -3351,6 +3351,9 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::HumanActionRequest { action_type, title, instructions, skill_id, step_id, .. } => {
                             json!({ "type": "HumanActionRequest", "action_type": action_type, "title": title, "skill_id": skill_id, "step_id": step_id })
                         }
+                        ccos::approval::types::ApprovalCategory::HttpHostApproval { host, port, requesting_url, scope, .. } => {
+                            json!({ "type": "HttpHostApproval", "host": host, "port": port, "requesting_url": requesting_url, "scope": scope })
+                        }
                     };
 
                     json!({
@@ -3422,6 +3425,7 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
                     ccos::approval::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
                     ccos::approval::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
+                    ccos::approval::types::ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
                 };
 
                 Ok(json!({

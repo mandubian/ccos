@@ -111,6 +111,14 @@ struct SystemEvent {
 
 /// LLM Consultation event details
 #[derive(Debug, Clone)]
+struct TokenUsageDetails {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+
+/// LLM Consultation event details
+#[derive(Debug, Clone)]
 struct LlmConsultation {
     iteration: u32,
     is_initial: bool,
@@ -119,6 +127,9 @@ struct LlmConsultation {
     task_complete: bool,
     planned_capabilities: Vec<String>,
     model: Option<String>,
+    prompt: Option<String>,
+    response: Option<String>,
+    token_usage: Option<TokenUsageDetails>,
 }
 
 /// Detailed action event data for rich display
@@ -262,8 +273,12 @@ impl MonitorState {
         } else {
             consultation.planned_capabilities.join(", ")
         };
+        let model = consultation
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let details = format!(
-            "iter={} | {} | complete={} | caps=[{}]",
+            "iter={} | {} | complete={} | model={} | caps=[{}]",
             consultation.iteration,
             if consultation.is_initial {
                 "initial"
@@ -271,9 +286,75 @@ impl MonitorState {
                 "follow-up"
             },
             consultation.task_complete,
+            model,
             caps
         );
-        self.add_event("LLM", &session_id, &details);
+
+        let mut full_lines = vec![
+            format!("Iteration: {}", consultation.iteration),
+            format!(
+                "Type: {}",
+                if consultation.is_initial {
+                    "initial"
+                } else {
+                    "follow-up"
+                }
+            ),
+            format!("Task complete: {}", consultation.task_complete),
+            format!("Model: {}", model),
+            format!("Understanding: {}", consultation.understanding),
+            format!("Reasoning: {}", consultation.reasoning),
+            format!("Planned capabilities: {}", caps),
+        ];
+        if let Some(ref prompt) = consultation.prompt {
+            full_lines.push(format!("Prompt: {}", prompt));
+        }
+        if let Some(ref response) = consultation.response {
+            full_lines.push(format!("Response: {}", response));
+        }
+        if let Some(ref usage) = consultation.token_usage {
+            full_lines.push(format!(
+                "Token usage: prompt={} completion={} total={}",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            ));
+        }
+        let full_details = full_lines.join("\n");
+
+        let mut metadata_map = serde_json::Map::new();
+        metadata_map.insert("iteration".to_string(), serde_json::Value::from(consultation.iteration));
+        metadata_map.insert("is_initial".to_string(), serde_json::Value::from(consultation.is_initial));
+        metadata_map.insert(
+            "task_complete".to_string(),
+            serde_json::Value::from(consultation.task_complete),
+        );
+        if let Some(ref m) = consultation.model {
+            metadata_map.insert("model".to_string(), serde_json::Value::String(m.clone()));
+        }
+        if let Some(ref p) = consultation.prompt {
+            metadata_map.insert("prompt".to_string(), serde_json::Value::String(p.clone()));
+        }
+        if let Some(ref r) = consultation.response {
+            metadata_map.insert("response".to_string(), serde_json::Value::String(r.clone()));
+        }
+        if let Some(ref usage) = consultation.token_usage {
+            metadata_map.insert(
+                "token_usage".to_string(),
+                serde_json::json!({
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens
+                }),
+            );
+        }
+
+        self.add_event_full(
+            "LLM",
+            &session_id,
+            &details,
+            Some(full_details),
+            None,
+            Some(serde_json::Value::Object(metadata_map)),
+        );
 
         // Store full consultation for LLM tab
         self.llm_consultations.push((session_id, consultation));
@@ -445,13 +526,13 @@ async fn main() -> anyhow::Result<()> {
                                             state.agent_session_ids.len() - 1;
                                     }
                                 } else if state.selected_tab == 2 {
-                                    // Navigate events in Events tab
+                                    // Navigate events in Events tab - Inverted because latest is at top
                                     let filtered_count = state.get_filtered_event_indices().len();
                                     if filtered_count > 0 {
-                                        if state.selected_event_index > 0 {
-                                            state.selected_event_index -= 1;
+                                        if state.selected_event_index < filtered_count - 1 {
+                                            state.selected_event_index += 1;
                                         } else {
-                                            state.selected_event_index = filtered_count - 1;
+                                            state.selected_event_index = 0;
                                         }
                                     }
                                 }
@@ -462,11 +543,14 @@ async fn main() -> anyhow::Result<()> {
                                     state.selected_agent_index = (state.selected_agent_index + 1)
                                         % state.agent_session_ids.len();
                                 } else if state.selected_tab == 2 {
-                                    // Navigate events in Events tab
+                                    // Navigate events in Events tab - Inverted because latest is at top
                                     let filtered_count = state.get_filtered_event_indices().len();
                                     if filtered_count > 0 {
-                                        state.selected_event_index = (state.selected_event_index + 1)
-                                            % filtered_count;
+                                        if state.selected_event_index > 0 {
+                                            state.selected_event_index -= 1;
+                                        } else {
+                                            state.selected_event_index = filtered_count - 1;
+                                        }
                                     }
                                 }
                             }
@@ -550,6 +634,13 @@ async fn main() -> anyhow::Result<()> {
                     state.status_message = format!("⚠️  Agent crashed: {}", session_id);
                 }
                 MonitorEvent::ActionEvent(session_id, action_details) => {
+                    let error_text = action_details
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("error"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
                     // Build summary string for the event list
                     let mut details = action_details.action_type.clone();
                     if !action_details.function_name.is_empty() {
@@ -562,8 +653,19 @@ async fn main() -> anyhow::Result<()> {
                         let status = if s { "✓" } else { "✗" };
                         details = format!("{} {}", details, status);
                     }
-                    if !action_details.summary.is_empty() && action_details.summary != action_details.action_type {
+                    if !action_details.summary.is_empty()
+                        && action_details.summary != action_details.action_type
+                    {
                         details = format!("{} - {}", details, action_details.summary);
+                    }
+                    if let Some(err) = &error_text {
+                        let short_err = if err.chars().count() > 140 {
+                            let truncated: String = err.chars().take(137).collect();
+                            format!("{}...", truncated)
+                        } else {
+                            err.clone()
+                        };
+                        details = format!("{} | error: {}", details, short_err);
                     }
 
                     // Build full details for detail view
@@ -579,6 +681,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                     if !action_details.summary.is_empty() {
                         full_lines.push(format!("Summary: {}", action_details.summary));
+                    }
+                    if let Some(err) = &error_text {
+                        full_lines.push("Error:".to_string());
+                        for line in err.lines().take(20) {
+                            full_lines.push(format!("  {}", line));
+                        }
+                        if err.lines().count() > 20 {
+                            full_lines.push("  ... (truncated)".to_string());
+                        }
                     }
                     let full_details = full_lines.join("\n");
 
@@ -720,6 +831,31 @@ async fn connect_to_session_stream(
                                                             .get("model")
                                                             .and_then(|v| v.as_str())
                                                             .map(|s| s.to_string()),
+                                                        prompt: metadata
+                                                            .get("prompt")
+                                                            .and_then(|v| v.as_str())
+                                                            .map(|s| s.to_string()),
+                                                        response: metadata
+                                                            .get("response")
+                                                            .and_then(|v| v.as_str())
+                                                            .map(|s| s.to_string()),
+                                                        token_usage: metadata
+                                                            .get("token_usage")
+                                                            .and_then(|v| v.as_object())
+                                                            .map(|usage| TokenUsageDetails {
+                                                                prompt_tokens: usage
+                                                                    .get("prompt_tokens")
+                                                                    .and_then(|v| v.as_u64())
+                                                                    .unwrap_or(0),
+                                                                completion_tokens: usage
+                                                                    .get("completion_tokens")
+                                                                    .and_then(|v| v.as_u64())
+                                                                    .unwrap_or(0),
+                                                                total_tokens: usage
+                                                                    .get("total_tokens")
+                                                                    .and_then(|v| v.as_u64())
+                                                                    .unwrap_or(0),
+                                                            }),
                                                     };
                                                     let _ = tx
                                                         .send(MonitorEvent::LlmConsultation(
@@ -775,7 +911,9 @@ async fn connect_to_session_stream(
                                                     || stderr.is_some()
                                                 {
                                                     Some(CodeExecutionDetails {
-                                                        language: language.unwrap_or_else(|| "unknown".to_string()),
+                                                        language: language.unwrap_or_else(|| {
+                                                            "unknown".to_string()
+                                                        }),
                                                         code: code.unwrap_or_default(),
                                                         stdout: stdout.unwrap_or_default(),
                                                         stderr: stderr.unwrap_or_default(),
@@ -1181,9 +1319,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Header
-    lines.push(Line::from(vec![
-        Span::styled("Event Details", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "Event Details",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
     lines.push(Line::from(""));
 
     // Basic info
@@ -1212,9 +1353,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
 
     // Full details if available
     if let Some(ref full_details) = event.full_details {
-        lines.push(Line::from(vec![
-            Span::styled("Details:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "Details:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]));
         for line in full_details.lines() {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
@@ -1226,9 +1370,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
 
     // Code execution details
     if let Some(ref code_exec) = event.code_execution {
-        lines.push(Line::from(vec![
-            Span::styled("━━━ Code Execution ━━━", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "━━━ Code Execution ━━━",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )]));
         lines.push(Line::from(""));
 
         // Language
@@ -1257,9 +1404,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
 
         // Code
         if !code_exec.code.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Code:", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Code:",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )]));
             for line in code_exec.code.lines().take(20) {
                 lines.push(Line::from(vec![
                     Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
@@ -1267,18 +1417,22 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 ]));
             }
             if code_exec.code.lines().count() > 20 {
-                lines.push(Line::from(vec![
-                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  ... (truncated)",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
             lines.push(Line::from(""));
         }
 
         // Stdout
         if !code_exec.stdout.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Stdout:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Stdout:",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )]));
             for line in code_exec.stdout.lines().take(10) {
                 lines.push(Line::from(vec![
                     Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
@@ -1286,18 +1440,20 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 ]));
             }
             if code_exec.stdout.lines().count() > 10 {
-                lines.push(Line::from(vec![
-                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  ... (truncated)",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
             lines.push(Line::from(""));
         }
 
         // Stderr
         if !code_exec.stderr.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Stderr:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Stderr:",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )]));
             for line in code_exec.stderr.lines().take(10) {
                 lines.push(Line::from(vec![
                     Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
@@ -1305,9 +1461,10 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 ]));
             }
             if code_exec.stderr.lines().count() > 10 {
-                lines.push(Line::from(vec![
-                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  ... (truncated)",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
             lines.push(Line::from(""));
         }
@@ -1315,9 +1472,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
 
     // Metadata if available
     if let Some(ref metadata) = event.metadata {
-        lines.push(Line::from(vec![
-            Span::styled("━━━ Metadata ━━━", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "━━━ Metadata ━━━",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )]));
         if let Ok(json_str) = serde_json::to_string_pretty(metadata) {
             let json_lines: Vec<&str> = json_str.lines().take(15).collect();
             let total_lines = json_str.lines().count();
@@ -1328,9 +1488,10 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 ]));
             }
             if total_lines > 15 {
-                lines.push(Line::from(vec![
-                    Span::styled("  ... (truncated)", Style::default().fg(Color::DarkGray)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  ... (truncated)",
+                    Style::default().fg(Color::DarkGray),
+                )]));
             }
         }
     }
@@ -1339,7 +1500,12 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" to close", Style::default().fg(Color::DarkGray)),
     ]));
 
@@ -1347,7 +1513,11 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
         .block(
             Block::default()
                 .title(" Event Detail ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .title_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         )
@@ -1435,8 +1605,22 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
             } else {
                 consultation.reasoning.clone()
             };
+            let prompt_preview = consultation.prompt.as_ref().map(|p| {
+                if p.len() > 100 {
+                    format!("{}...", &p[..97])
+                } else {
+                    p.clone()
+                }
+            });
+            let response_preview = consultation.response.as_ref().map(|r| {
+                if r.len() > 100 {
+                    format!("{}...", &r[..97])
+                } else {
+                    r.clone()
+                }
+            });
 
-            vec![
+            let mut lines = vec![
                 Line::from(vec![
                     Span::styled(
                         format!("[Iter {}] ", consultation.iteration),
@@ -1468,8 +1652,33 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                     Span::styled("  Planned: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(caps_str, Style::default().fg(Color::Cyan)),
                 ]),
-                Line::from(""), // Empty line between consultations
-            ]
+            ];
+            if let Some(ref p) = prompt_preview {
+                lines.push(Line::from(vec![
+                    Span::styled("  Prompt: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(p.clone(), Style::default().fg(Color::White)),
+                ]));
+            }
+            if let Some(ref r) = response_preview {
+                lines.push(Line::from(vec![
+                    Span::styled("  Response: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(r.clone(), Style::default().fg(Color::White)),
+                ]));
+            }
+            if let Some(ref usage) = consultation.token_usage {
+                lines.push(Line::from(vec![
+                    Span::styled("  Tokens: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(
+                            "prompt={} completion={} total={}",
+                            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+                        ),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines
         })
         .collect();
 

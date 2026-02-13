@@ -95,6 +95,10 @@ struct Args {
     #[arg(long, env = "CCOS_LLM_MAX_TOKENS")]
     llm_max_tokens: Option<u32>,
 
+    /// LLM HTTP timeout in seconds
+    #[arg(long, env = "CCOS_LLM_TIMEOUT_SECS", default_value_t = 120)]
+    llm_timeout_secs: u64,
+
     /// Gateway HTTP timeout in seconds
     #[arg(long, env = "CCOS_GATEWAY_TIMEOUT_SECS", default_value_t = 120)]
     gateway_timeout_secs: u64,
@@ -386,6 +390,26 @@ struct CapabilitiesListResponse {
     capabilities: Vec<CapabilityInfo>,
 }
 
+/// Pending approval request with context for retry
+#[derive(Debug, Clone)]
+struct PendingApproval {
+    approval_id: String,
+    capability_id: String,
+    inputs: serde_json::Value,
+    event: ChatEvent,
+}
+
+impl PendingApproval {
+    fn new(approval_id: String, capability_id: String, inputs: serde_json::Value, event: ChatEvent) -> Self {
+        Self {
+            approval_id,
+            capability_id,
+            inputs,
+            event,
+        }
+    }
+}
+
 /// Agent Runtime state
 struct AgentRuntime {
     args: Args,
@@ -415,6 +439,9 @@ struct AgentRuntime {
     start_time: Instant,
     /// Whether the agent is paused due to budget exhaustion
     budget_paused: bool,
+    // ── Approval Tracking ────────────────────────────────────────────────────
+    /// Pending approvals waiting for resolution
+    pending_approvals: HashMap<String, PendingApproval>,
 }
 
 impl AgentRuntime {
@@ -453,6 +480,7 @@ impl AgentRuntime {
                     model: model.clone(),
                     base_url: args.llm_base_url.clone(),
                     max_tokens: args.llm_max_tokens.unwrap_or(1000),
+                    timeout_secs: args.llm_timeout_secs,
                 };
                 match AgentLlmClient::new(llm_config) {
                     Ok(client) => {
@@ -513,6 +541,8 @@ impl AgentRuntime {
             step_count: 0,
             start_time: Instant::now(),
             budget_paused: false,
+            // Approval tracking
+            pending_approvals: HashMap::new(),
         }
     }
 
@@ -665,6 +695,7 @@ impl AgentRuntime {
                 .filter(|c| {
                     c.id != "ccos.chat.egress.prepare_outbound"
                         && !c.id.starts_with("ccos.chat.transform.")
+                        && c.id != "ccos.approval.complete"
                 })
                 .map(|c| {
                     if let Some(schema) = &c.input_schema {
@@ -744,6 +775,79 @@ impl AgentRuntime {
 
         // Store in history
         self.message_history.push(event.clone());
+
+        // Check for approval resolution messages
+        if event.sender == "system" && event.content.contains("Approval `") {
+            if let Some(approval_id) = self.extract_approval_id(&event.content) {
+                info!("[Agent] Detected approval resolution: {}", approval_id);
+                
+                // Check if this is one of our pending approvals
+                if let Some(pending) = self.pending_approvals.remove(&approval_id) {
+                    let is_approved = event.content.contains("✅ Approved");
+                    
+                    if is_approved {
+                        info!("[Agent] Approval {} approved, retrying capability: {}", 
+                            approval_id, pending.capability_id);
+                        
+                        // Retry the original capability with the same inputs
+                        let retry_result = self.execute_capability(
+                            &pending.capability_id, 
+                            pending.inputs.clone()
+                        ).await;
+                        
+                        match retry_result {
+                            Ok(ref resp) => {
+                                if resp.success {
+                                    info!("[Agent] Retry succeeded for {}", pending.capability_id);
+                                    let msg = format!(
+                                        "✅ Action '{}' completed successfully after approval!",
+                                        pending.capability_id
+                                    );
+                                    self.send_response(&event, &msg).await?;
+                                } else {
+                                    let error_msg = resp.error.clone().unwrap_or_else(|| "Unknown error".to_string());
+                                    warn!("[Agent] Retry failed for {}: {}", pending.capability_id, error_msg);
+                                    let msg = format!(
+                                        "⚠️ Approval was granted but the action still failed: {}",
+                                        error_msg
+                                    );
+                                    self.send_response(&event, &msg).await?;
+                                }
+                            }
+                            Err(ref e) => {
+                                error!("[Agent] Retry error for {}: {}", pending.capability_id, e);
+                                let msg = format!(
+                                    "⚠️ Error retrying after approval: {}",
+                                    e
+                                );
+                                self.send_response(&event, &msg).await?;
+                            }
+                        }
+                        
+                        // Record in history
+                        let retry_success = retry_result.as_ref().map(|r| r.success).unwrap_or(false);
+                        let result_summary = format!(
+                            "[approval retry] {}: {}",
+                            pending.capability_id,
+                            if retry_success { "success" } else { "failed" }
+                        );
+                        self.record_in_history("system", result_summary, &event.channel_id);
+                        
+                        // Add the approval resolution to context
+                        self.message_history.push(event.clone());
+                        return Ok(());
+                    } else if event.content.contains("❌ Rejected") {
+                        info!("[Agent] Approval {} rejected", approval_id);
+                        let msg = format!(
+                            "❌ Your action '{}' was rejected by the approver.",
+                            pending.capability_id
+                        );
+                        self.send_response(&event, &msg).await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
 
         // Check if the agent is paused and the user sent "continue"
         if self.budget_paused {
@@ -832,12 +936,42 @@ impl AgentRuntime {
         });
     }
 
+    /// Extract approval ID from approval resolution message
+    /// Format: "Approval `12345-abc`: ✅ Approved." or "Approval `12345-abc`: ❌ Rejected: reason"
+    fn extract_approval_id(&self, content: &str) -> Option<String> {
+        if let Some(start) = content.find("Approval `") {
+            if let Some(id_start) = content[start..].find('`') {
+                let remaining = &content[start + id_start + 1..];
+                if let Some(id_end) = remaining.find('`') {
+                    return Some(remaining[..id_end].to_string());
+                }
+            }
+        }
+        None
+    }
+
     async fn send_simple_echo(&self, event: &ChatEvent) -> anyhow::Result<()> {
         self.send_response(
             event,
             &format!("I am a simple agent. You said: {}", event.content),
         )
         .await
+    }
+
+    /// Extract approval ID from capability error message
+    /// Error formats:
+    /// - "HTTP host 'xxx' requires approval. Approval ID: 12345-abc"
+    /// - "Capability requires approval. Approval ID: 12345-abc"
+    fn extract_approval_id_from_error(&self, error_msg: &str) -> Option<String> {
+        if error_msg.contains("requires approval") {
+            if let Some(id_start) = error_msg.find("Approval ID: ") {
+                let remaining = &error_msg[id_start + 14..];
+                // Extract until newline or end
+                let id_end = remaining.find('\n').unwrap_or(remaining.len());
+                return Some(remaining[..id_end].trim().to_string());
+            }
+        }
+        None
     }
 
     async fn transition_run_state(
@@ -1163,8 +1297,11 @@ impl AgentRuntime {
                 }
             }
 
-            // Execute the action
-            let result = match self.execute_capability(&action.capability_id, inputs).await {
+            // Execute the action with enriched context inputs
+            let result = match self
+                .execute_capability(&action.capability_id, inputs.clone())
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => ExecuteResponse {
                     success: false,
@@ -1172,6 +1309,47 @@ impl AgentRuntime {
                     error: Some(e.to_string()),
                 },
             };
+
+            // Check if this action requires approval and track it
+            if !result.success {
+                if let Some(ref error_msg) = result.error {
+                    if let Some(approval_id) = self.extract_approval_id_from_error(error_msg) {
+                        info!(
+                            "[Agent] Action requires approval: {} for capability '{}'",
+                            approval_id, action.capability_id
+                        );
+                        
+                        // Track this pending approval so we can retry after it's resolved
+                        self.pending_approvals.insert(
+                            approval_id.clone(),
+                            PendingApproval::new(
+                                approval_id,
+                                action.capability_id.clone(),
+                                inputs,
+                                event.clone(),
+                            ),
+                        );
+                        
+                        // Notify user about pending approval
+                        let msg = format!(
+                            "⏳ I've requested approval for '{}'. I'll automatically retry once approved. \
+                            You can approve it via the approval UI or /approve command.",
+                            action.capability_id
+                        );
+                        self.send_response(&event, &msg).await?;
+                        
+                        // Add to history and return - wait for approval
+                        let approval_summary = format!(
+                            "[step {}] {}: awaiting approval (ID: {})",
+                            iteration,
+                            action.capability_id,
+                            self.pending_approvals.keys().last().unwrap()
+                        );
+                        self.record_in_history("system", approval_summary, &event.channel_id);
+                        return Ok(());
+                    }
+                }
+            }
 
             // Record the action result
             let action_result = ActionResult {
@@ -1782,9 +1960,19 @@ impl AgentRuntime {
             request = request.with_planned_capability(cap);
         }
 
-        // Add model info if available
-        if let Some(ref model) = self.args.llm_model {
-            request = request.with_model(model);
+        // Add model info (fallback to "unknown" when not explicitly configured)
+        request = request.with_model(
+            self.args
+                .llm_model
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+
+        // Attach prompt/response context for monitor observability.
+        // Use the user message as a prompt excerpt to avoid logging full internal prompts.
+        request = request.with_prompt(event.content.clone());
+        if !plan.response.is_empty() {
+            request = request.with_response(plan.response.clone());
         }
 
         // Send to gateway
@@ -1910,6 +2098,7 @@ async fn main() -> anyhow::Result<()> {
             "LLM Model: {}",
             args.llm_model.as_deref().unwrap_or("gpt-3.5-turbo")
         );
+        info!("LLM Timeout: {}s", args.llm_timeout_secs);
     }
 
     // Validate required arguments
