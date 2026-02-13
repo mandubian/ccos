@@ -477,7 +477,8 @@ async fn main() -> anyhow::Result<()> {
                                     let mut text = state.input.trim().to_string();
 
                                     // Smart Mentions: Add @agent if no mention is present
-                                    if !text.starts_with('@') {
+                                    // BUT: Don't add @agent to slash commands (they're handled locally)
+                                    if !text.starts_with('@') && !text.starts_with('/') {
                                         text = format!("@agent {}", text);
                                     }
 
