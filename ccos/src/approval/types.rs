@@ -131,6 +131,23 @@ pub enum ApprovalCategory {
         /// Onboarding step identifier
         step_id: String,
     },
+
+    /// HTTP host allowlist exception approval
+    /// Required when a URL points to a host not in the HTTP allowlist
+    HttpHostApproval {
+        /// The host to allow (e.g., "localhost", "api.example.com")
+        host: String,
+        /// The port (if non-standard, e.g., 8765)
+        port: Option<u16>,
+        /// The full URL that triggered this approval request
+        requesting_url: String,
+        /// Scope of the approval: "session" (temporary) or "permanent"
+        scope: String,
+        /// Context that needs this host (e.g., skill_id, capability_id)
+        requesting_context: Option<String>,
+        /// Human-readable reason for the request
+        reason: String,
+    },
 }
 
 /// Health tracking for approved servers
@@ -193,6 +210,13 @@ impl fmt::Display for ApprovalCategory {
                 ..
             } => {
                 write!(f, "HumanActionRequest({} for {})", action_type, skill_id)
+            }
+            ApprovalCategory::HttpHostApproval { host, port, .. } => {
+                if let Some(p) = port {
+                    write!(f, "HttpHostApproval({}:{})", host, p)
+                } else {
+                    write!(f, "HttpHostApproval({})", host)
+                }
             }
         }
     }

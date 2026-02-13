@@ -188,6 +188,11 @@ impl FileApprovalStorage {
         Ok(())
     }
 
+    /// Reload all requests from disk, picking up any changes made by other processes
+    pub fn reload_from_disk(&self) -> RuntimeResult<()> {
+        self.load_all()
+    }
+
     /// Load a single request from a JSON file
     fn load_request_from_json(&self, path: &PathBuf) -> RuntimeResult<ApprovalRequest> {
         let content = std::fs::read_to_string(path).map_err(|e| {
@@ -486,6 +491,7 @@ impl FileApprovalStorage {
                 ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
                 ApprovalCategory::SecretWrite { .. } => "SecretWrite",
                 ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
+                ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
             };
             if request_type != category_type {
                 return false;
@@ -560,6 +566,9 @@ impl ApprovalStorage for FileApprovalStorage {
     }
 
     async fn get(&self, id: &str) -> RuntimeResult<Option<ApprovalRequest>> {
+        // Reload from disk to pick up any changes made by other processes
+        self.load_all()?;
+
         let cache = self.cache.read().map_err(|_| {
             RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
         })?;
@@ -567,6 +576,10 @@ impl ApprovalStorage for FileApprovalStorage {
     }
 
     async fn list(&self, filter: ApprovalFilter) -> RuntimeResult<Vec<ApprovalRequest>> {
+        // Reload from disk to pick up any changes made by other processes
+        // This ensures the web UI sees approvals created by ccos-chat-gateway
+        self.load_all()?;
+
         let cache = self.cache.read().map_err(|_| {
             RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
         })?;
