@@ -80,7 +80,7 @@ max_runtime_repair_attempts = 5
 # LLM profile to use for validation (from llm_profiles section)
 # Uses a lower quality/faster model for validation tasks
 # Uses a lower quality/faster model for validation tasks
-validation_profile = "openrouter_free:balanced_gfl"
+validation_profile = "openrouter_free:qwen3_coder_next"
 
 # Real-time tracking and observability configuration
 # Controls WebSocket streaming, heartbeat intervals, and event replay
@@ -254,7 +254,7 @@ expiry_hours = 168
 risk_default = "medium"
 
 [llm_profiles]
-default = "openrouter_free:balanced_ds_32"
+default = "openrouter:qwen3_coder_next"
 
 # Google Gemini profile
 # [[llm_profiles.model_sets]]
@@ -275,12 +275,12 @@ name = "stub/dev"
 provider = "stub"
 model = "stub-mini"
 # Note: This profile should only be used for basic tests
-# For realistic behavior, use openrouter_free:balanced (default) or openrouter_free:fast
+# For realistic behavior, use openrouter:balanced (default) or openrouter_free:fast
 
 
 # New: grouped model set
 [[llm_profiles.model_sets]]
-name = "openrouter_free"
+name = "openrouter"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
@@ -337,6 +337,14 @@ default = "balanced_gfl"
   max_completion_cost_per_1k = 0.0
   quality = "quality"
   notes = "StepFun: Step 3.5 Flash (free)."
+
+  [[llm_profiles.model_sets.models]]
+  name = "qwen3_coder_next"
+  model = "qwen/qwen3-coder-next"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "quality"
+  notes = "Qwen3 Coder Next."
 
 # Existing explicit profiles still work
 [[llm_profiles.profiles]]
