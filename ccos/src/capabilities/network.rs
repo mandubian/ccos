@@ -3,6 +3,7 @@
 //! Provides HTTP capabilities that can be discovered and executed
 //! through the CapabilityMarketplace.
 
+use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::capability_marketplace::CapabilityMarketplace;
 use futures::future::BoxFuture;
 use rtfs::ast::{Keyword, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
@@ -29,6 +30,7 @@ fn get_map_value<'a>(map: &'a HashMap<MapKey, Value>, key: &str) -> Option<&'a V
 /// Register network capabilities in the marketplace
 pub async fn register_network_capabilities(
     marketplace: &CapabilityMarketplace,
+    approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
 ) -> RuntimeResult<()> {
     // Input schema for http-fetch: {:url String :method? String :headers? Map :body? String :timeout_ms? Int}
     let input_schema = TypeExpr::Map {
@@ -116,6 +118,7 @@ pub async fn register_network_capabilities(
         Arc::new(move |input| {
             let input = input.clone();
             let capability_registry = Arc::clone(&capability_registry);
+            let approval_queue = approval_queue.clone();
             Box::pin(async move {
                 // Extract parameters from input
                 let (url, method, headers_map, body, timeout_ms) = match &input {
@@ -176,14 +179,24 @@ pub async fn register_network_capabilities(
 
                 {
                     let reg = capability_registry.read().await;
-                    if !reg.is_http_host_allowed(&host) {
+                    let host_allowed = reg.is_http_host_allowed(&host);
+                    let port_allowed = reg.is_http_port_allowed(port);
+                    
+                    // Also check if host has been explicitly approved via the approval system
+                    let host_approved = if let Some(queue) = &approval_queue {
+                        queue.is_http_host_approved(&host, Some(port)).await.unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    
+                    if !host_allowed && !host_approved {
                         return Err(RuntimeError::SecurityViolation {
                             operation: "ccos.network.http-fetch".to_string(),
                             capability: "ccos.network.http-fetch".to_string(),
                             context: format!("Host '{}' not in HTTP allowlist", host),
                         });
                     }
-                    if !reg.is_http_port_allowed(port) {
+                    if !port_allowed {
                         return Err(RuntimeError::SecurityViolation {
                             operation: "ccos.network.http-fetch".to_string(),
                             capability: "ccos.network.http-fetch".to_string(),
