@@ -638,13 +638,14 @@ async fn handle_api_approvals_list(
                 ),
                 ApprovalCategory::SynthesisApproval {
                     capability_id,
+                    generated_code,
                     is_pure,
-                    ..
                 } => (
                     "SynthesisApproval",
                     json!({
                         "capability_id": capability_id,
-                        "is_pure": is_pure
+                        "is_pure": is_pure,
+                        "generated_code": generated_code
                     }),
                 ),
                 ApprovalCategory::LlmPromptApproval {
@@ -653,6 +654,7 @@ async fn handle_api_approvals_list(
                 } => (
                     "LlmPromptApproval",
                     json!({
+                        "prompt": prompt,
                         "prompt_preview": prompt.chars().take(200).collect::<String>(),
                         "risk_reasons": risk_reasons
                     }),
@@ -737,16 +739,36 @@ async fn handle_api_approvals_list(
                     timeout_hours,
                     skill_id,
                     step_id,
-                    ..
+                    required_response_schema,
                 } => (
                     "HumanActionRequest",
                     json!({
                         "action_type": action_type,
                         "title": title,
+                        "instructions": instructions,
                         "instructions_preview": instructions.chars().take(200).collect::<String>(),
                         "timeout_hours": timeout_hours,
                         "skill_id": skill_id,
-                        "step_id": step_id
+                        "step_id": step_id,
+                        "required_response_schema": required_response_schema
+                    }),
+                ),
+                ApprovalCategory::HttpHostApproval {
+                    host,
+                    port,
+                    requesting_url,
+                    scope,
+                    requesting_context,
+                    reason,
+                } => (
+                    "HttpHostApproval",
+                    json!({
+                        "host": host,
+                        "port": port,
+                        "requesting_url": requesting_url,
+                        "scope": scope,
+                        "requesting_context": requesting_context,
+                        "reason": reason
                     }),
                 ),
             };
@@ -1169,7 +1191,7 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
 <head>
     <title>CCOS Approvals</title>
     <style>
-        body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
+        body { font-family: -apple-system, system-ui, sans-serif; max-width: 1100px; margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
         h1 { color: #58a6ff; display: flex; justify-content: space-between; align-items: center; }
         .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
         .tab { padding: 8px 16px; border: none; background: transparent; color: #8b949e; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 14px; }
@@ -1178,8 +1200,9 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
         .tab .count { background: #30363d; padding: 2px 8px; border-radius: 10px; margin-left: 6px; font-size: 12px; }
         .tab.active .count { background: #2ea043; }
         .approval-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
-        .approval-card h3 { margin-top: 0; color: #f0f6fc; display: flex; align-items: center; gap: 8px; }
+        .approval-card h3 { margin-top: 0; color: #f0f6fc; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .approval-card p { margin: 8px 0; color: #8b949e; }
+        .approval-card .uuid { font-family: monospace; font-size: 11px; color: #6e7681; word-break: break-all; background: #0d1117; padding: 4px 8px; border-radius: 4px; display: block; margin-bottom: 8px; }
         .approval-card .status-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
         .status-pending { background: #1f6feb; color: white; }
         .status-rejected { background: #da3633; color: white; }
@@ -1220,6 +1243,20 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
         .panel .status-approved { background: #238636; color: white; }
         .panel .status-rejected { background: #da3633; color: white; }
         .panel .status-expired { background: #6e7681; color: white; }
+        /* Expandable content sections */
+        .content-section { margin: 10px 0; }
+        .content-toggle { background: #21262d; border: 1px solid #30363d; color: #58a6ff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+        .content-toggle:hover { background: #30363d; }
+        .content-toggle::before { content: '▶'; font-size: 10px; transition: transform 0.2s; }
+        .content-toggle.expanded::before { transform: rotate(90deg); }
+        .content-body { display: none; margin-top: 8px; background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 12px; overflow-x: auto; }
+        .content-body.visible { display: block; }
+        .content-body pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace; font-size: 12px; color: #c9d1d9; }
+        .copy-btn { background: #30363d; border: none; color: #8b949e; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-left: 8px; }
+        .copy-btn:hover { background: #484f58; color: #c9d1d9; }
+        .detail-row { display: flex; gap: 8px; margin: 4px 0; }
+        .detail-label { color: #8b949e; min-width: 140px; flex-shrink: 0; }
+        .detail-value { color: #c9d1d9; word-break: break-all; }
         @media (max-width: 960px) {
             .layout { grid-template-columns: 1fr; }
         }
@@ -1260,6 +1297,28 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
             renderApprovals();
         }
         
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+        
+        function toggleContent(id) {
+            const toggle = document.querySelector(`[data-toggle="${id}"]`);
+            const body = document.querySelector(`[data-body="${id}"]`);
+            if (toggle && body) {
+                toggle.classList.toggle('expanded');
+                body.classList.toggle('visible');
+            }
+        }
+        
+        function copyToClipboard(text, btn) {
+            navigator.clipboard.writeText(text).then(() => {
+                const orig = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => btn.textContent = orig, 1500);
+            }).catch(err => console.error('Copy failed:', err));
+        }
+        
         function renderApprovals() {
             const container = document.getElementById('approvals');
             const filtered = allApprovals.filter(a => a.status === currentTab);
@@ -1275,21 +1334,126 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                              a.category_type === 'SynthesisApproval' ? '🛠️' :
                              a.category_type === 'LlmPromptApproval' ? '🤖' :
                              a.category_type === 'SecretRequired' ? '🔑' :
+                             a.category_type === 'SecretWrite' ? '🔐' :
+                             a.category_type === 'HumanActionRequest' ? '👤' :
+                             a.category_type === 'HttpHostApproval' ? '🌍' :
                              a.category_type === 'BudgetExtension' ? '💸' : '📋';
                 
-                const title = a.details.server_name || a.details.capability_id || a.category_type;
-                const endpoint = a.details.endpoint ? `<p><strong>Endpoint:</strong> ${a.details.endpoint}</p>` : '';
-                const domains = a.details.domain_match ? `<p><strong>Domains:</strong> ${a.details.domain_match.join(', ')}</p>` : '';
-                const effects = a.details.effects ? `<p><strong>Effects:</strong> ${a.details.effects.join(', ')}</p>` : '';
-                const secretType = a.details.secret_type ? `<p><strong>Type:</strong> ${a.details.secret_type}</p>` : '';
-                const description = a.details.description ? `<p><strong>Description:</strong> ${a.details.description}</p>` : '';
-                const budgetDetails = a.category_type === 'BudgetExtension' ? `
-                    <p><strong>Dimension:</strong> ${a.details.dimension}</p>
-                    <p><strong>Requested:</strong> ${a.details.requested_additional}</p>
-                    <p><strong>Consumed / Limit:</strong> ${a.details.consumed} / ${a.details.limit}</p>
-                    <p><strong>Plan:</strong> ${a.details.plan_id}</p>
-                    <p><strong>Intent:</strong> ${a.details.intent_id}</p>
-                ` : '';
+                const title = a.details.server_name || a.details.capability_id || a.details.title || a.category_type;
+                const uuid = a.id;
+                
+                // Build detail rows based on category
+                let detailRows = '';
+                
+                // ServerDiscovery details
+                if (a.category_type === 'ServerDiscovery') {
+                    if (a.details.endpoint) detailRows += `<div class="detail-row"><span class="detail-label">Endpoint:</span><span class="detail-value">${escapeHtml(a.details.endpoint)}</span></div>`;
+                    if (a.details.domain_match) detailRows += `<div class="detail-row"><span class="detail-label">Domains:</span><span class="detail-value">${a.details.domain_match.map(d => escapeHtml(d)).join(', ')}</span></div>`;
+                    if (a.details.requesting_goal) detailRows += `<div class="detail-row"><span class="detail-label">Goal:</span><span class="detail-value">${escapeHtml(a.details.requesting_goal)}</span></div>`;
+                }
+                
+                // EffectApproval details
+                if (a.category_type === 'EffectApproval') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Capability:</span><span class="detail-value">${escapeHtml(a.details.capability_id)}</span></div>`;
+                    if (a.details.effects) detailRows += `<div class="detail-row"><span class="detail-label">Effects:</span><span class="detail-value">${a.details.effects.map(e => escapeHtml(e)).join(', ')}</span></div>`;
+                    if (a.details.intent_description) detailRows += `<div class="detail-row"><span class="detail-label">Intent:</span><span class="detail-value">${escapeHtml(a.details.intent_description)}</span></div>`;
+                }
+                
+                // SynthesisApproval details with generated code
+                if (a.category_type === 'SynthesisApproval') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Capability:</span><span class="detail-value">${escapeHtml(a.details.capability_id)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Pure:</span><span class="detail-value">${a.details.is_pure ? 'Yes' : 'No'}</span></div>`;
+                    if (a.details.generated_code) {
+                        const codeId = `code-${a.id}`;
+                        detailRows += `
+                            <div class="content-section">
+                                <button class="content-toggle" data-toggle="${codeId}" onclick="toggleContent('${codeId}')">Show Generated Code</button>
+                                <button class="copy-btn" onclick="copyToClipboard(decodeURIComponent('${encodeURIComponent(a.details.generated_code)}'), this)">📋 Copy</button>
+                                <div class="content-body" data-body="${codeId}">
+                                    <pre>${escapeHtml(a.details.generated_code)}</pre>
+                                </div>
+                            </div>`;
+                    }
+                }
+                
+                // LlmPromptApproval details with full prompt
+                if (a.category_type === 'LlmPromptApproval') {
+                    if (a.details.risk_reasons) {
+                        detailRows += `<div class="detail-row"><span class="detail-label">Risk Reasons:</span><span class="detail-value">${a.details.risk_reasons.map(r => escapeHtml(r)).join(', ')}</span></div>`;
+                    }
+                    if (a.details.prompt) {
+                        const promptId = `prompt-${a.id}`;
+                        detailRows += `
+                            <div class="content-section">
+                                <button class="content-toggle" data-toggle="${promptId}" onclick="toggleContent('${promptId}')">Show Full Prompt</button>
+                                <button class="copy-btn" onclick="copyToClipboard(decodeURIComponent('${encodeURIComponent(a.details.prompt)}'), this)">📋 Copy</button>
+                                <div class="content-body" data-body="${promptId}">
+                                    <pre>${escapeHtml(a.details.prompt)}</pre>
+                                </div>
+                            </div>`;
+                    }
+                }
+                
+                // SecretRequired details
+                if (a.category_type === 'SecretRequired') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Capability:</span><span class="detail-value">${escapeHtml(a.details.capability_id)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Secret Type:</span><span class="detail-value">${escapeHtml(a.details.secret_type)}</span></div>`;
+                    if (a.details.description) detailRows += `<div class="detail-row"><span class="detail-label">Description:</span><span class="detail-value">${escapeHtml(a.details.description)}</span></div>`;
+                }
+                
+                // SecretWrite details
+                if (a.category_type === 'SecretWrite') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Key:</span><span class="detail-value">${escapeHtml(a.details.key)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Scope:</span><span class="detail-value">${escapeHtml(a.details.scope)}</span></div>`;
+                    if (a.details.skill_id) detailRows += `<div class="detail-row"><span class="detail-label">Skill ID:</span><span class="detail-value">${escapeHtml(a.details.skill_id)}</span></div>`;
+                    if (a.details.description) detailRows += `<div class="detail-row"><span class="detail-label">Description:</span><span class="detail-value">${escapeHtml(a.details.description)}</span></div>`;
+                }
+                
+                // HumanActionRequest details with full instructions
+                if (a.category_type === 'HumanActionRequest') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Action Type:</span><span class="detail-value">${escapeHtml(a.details.action_type)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Timeout:</span><span class="detail-value">${a.details.timeout_hours} hours</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Skill ID:</span><span class="detail-value">${escapeHtml(a.details.skill_id || 'N/A')}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Step ID:</span><span class="detail-value">${escapeHtml(a.details.step_id || 'N/A')}</span></div>`;
+                    if (a.details.instructions) {
+                        const instrId = `instr-${a.id}`;
+                        detailRows += `
+                            <div class="content-section">
+                                <button class="content-toggle" data-toggle="${instrId}" onclick="toggleContent('${instrId}')">Show Instructions</button>
+                                <div class="content-body" data-body="${instrId}">
+                                    <pre>${escapeHtml(a.details.instructions)}</pre>
+                                </div>
+                            </div>`;
+                    }
+                    if (a.details.required_response_schema) {
+                        const schemaId = `schema-${a.id}`;
+                        detailRows += `
+                            <div class="content-section">
+                                <button class="content-toggle" data-toggle="${schemaId}" onclick="toggleContent('${schemaId}')">Show Response Schema</button>
+                                <div class="content-body" data-body="${schemaId}">
+                                    <pre>${escapeHtml(JSON.stringify(a.details.required_response_schema, null, 2))}</pre>
+                                </div>
+                            </div>`;
+                    }
+                }
+                
+                // HttpHostApproval details
+                if (a.category_type === 'HttpHostApproval') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Host:</span><span class="detail-value">${escapeHtml(a.details.host)}${a.details.port ? ':' + a.details.port : ''}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Scope:</span><span class="detail-value">${escapeHtml(a.details.scope)}</span></div>`;
+                    if (a.details.requesting_url) detailRows += `<div class="detail-row"><span class="detail-label">Requesting URL:</span><span class="detail-value">${escapeHtml(a.details.requesting_url)}</span></div>`;
+                    if (a.details.requesting_context) detailRows += `<div class="detail-row"><span class="detail-label">Context:</span><span class="detail-value">${escapeHtml(a.details.requesting_context)}</span></div>`;
+                    if (a.details.reason) detailRows += `<div class="detail-row"><span class="detail-label">Reason:</span><span class="detail-value">${escapeHtml(a.details.reason)}</span></div>`;
+                }
+                
+                // BudgetExtension details
+                if (a.category_type === 'BudgetExtension') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Dimension:</span><span class="detail-value">${escapeHtml(a.details.dimension)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Requested:</span><span class="detail-value">${a.details.requested_additional}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Consumed/Limit:</span><span class="detail-value">${a.details.consumed} / ${a.details.limit}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Plan ID:</span><span class="detail-value">${escapeHtml(a.details.plan_id)}</span></div>`;
+                    detailRows += `<div class="detail-row"><span class="detail-label">Intent ID:</span><span class="detail-value">${escapeHtml(a.details.intent_id)}</span></div>`;
+                }
                 
                 const secretInputs = a.category_type === 'SecretRequired' ? `
                     <div class="secret-input">
@@ -1311,9 +1475,10 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 
                 return `
                     <div class="approval-card" data-id="${a.id}">
-                        <h3>${icon} ${title} <span class="status-badge status-${a.status}">${a.status}</span></h3>
-                        ${endpoint}${domains}${effects}${secretType}${description}${budgetDetails}
-                        <p style="font-size: 12px; color: #6e7681;">Requested: ${new Date(a.requested_at).toLocaleString()} | Expires: ${new Date(a.expires_at).toLocaleString()}</p>
+                        <h3>${icon} ${escapeHtml(title)} <span class="status-badge status-${a.status}">${a.status}</span></h3>
+                        <span class="uuid">UUID: ${uuid}</span>
+                        ${detailRows}
+                        <p style="font-size: 12px; color: #6e7681; margin-top: 12px;">Requested: ${new Date(a.requested_at).toLocaleString()} | Expires: ${new Date(a.expires_at).toLocaleString()}</p>
                         ${secretInputs}
                         <div class="actions">${actions}</div>
                     </div>
@@ -1341,9 +1506,9 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 const statusClass = `status-${a.status}`;
                 return `
                     <div class="budget-item">
-                        <div><strong>${a.details.dimension}</strong> <span class="status-tag ${statusClass}">${a.status}</span></div>
+                        <div><strong>${escapeHtml(a.details.dimension)}</strong> <span class="status-tag ${statusClass}">${a.status}</span></div>
                         <small>Requested ${a.details.requested_additional} • ${a.details.consumed}/${a.details.limit}</small>
-                        <small>Plan ${a.details.plan_id} • Intent ${a.details.intent_id}</small>
+                        <small>Plan ${escapeHtml(a.details.plan_id)} • Intent ${escapeHtml(a.details.intent_id)}</small>
                     </div>
                 `;
             }).join('');
