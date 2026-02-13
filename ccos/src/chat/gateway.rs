@@ -128,13 +128,28 @@ impl ApprovalConsumer for GatewayState {
 
         let session_id = request.metadata.get("session_id");
         if let Some(session_id) = session_id {
+            let category_label = match &request.category {
+                crate::approval::types::ApprovalCategory::HttpHostApproval { .. } => {
+                    "HTTP host approval"
+                }
+                crate::approval::types::ApprovalCategory::SecretWrite { .. } => {
+                    "secret write approval"
+                }
+                crate::approval::types::ApprovalCategory::HumanActionRequest { .. } => {
+                    "human action approval"
+                }
+                crate::approval::types::ApprovalCategory::EffectApproval { .. } => {
+                    "effect approval"
+                }
+                _ => "approval",
+            };
             // Notify chat about resolution
             let status_msg = match &request.status {
                 crate::approval::types::ApprovalStatus::Approved { .. } => {
-                    "✅ Approved.".to_string()
+                    format!("✅ Approved ({}).", category_label)
                 }
                 crate::approval::types::ApprovalStatus::Rejected { reason, .. } => {
-                    format!("❌ Rejected: {}", reason)
+                    format!("❌ Rejected ({}): {}", category_label, reason)
                 }
                 _ => return,
             };
@@ -145,12 +160,13 @@ impl ApprovalConsumer for GatewayState {
             .await;
 
             if request.status.is_approved() {
-                let run_id = {
+                // First, try to find and resume a paused run
+                let paused_run_id = {
                     let store = self.run_store.lock().unwrap();
                     store.get_latest_paused_approval_run_id_for_session(session_id)
                 };
 
-                if let Some(run_id) = run_id {
+                if let Some(run_id) = paused_run_id {
                     // Resume the run (we need lock again)
                     {
                         let mut store = self.run_store.lock().unwrap();
@@ -174,6 +190,68 @@ impl ApprovalConsumer for GatewayState {
                         HashMap::new(),
                     )
                     .await;
+                } else {
+                    // No paused run - this might be an HTTP host approval that blocked
+                    // a capability call. Push a retry hint to the agent's inbox.
+                    if matches!(
+                        &request.category,
+                        crate::approval::types::ApprovalCategory::HttpHostApproval { .. }
+                    ) {
+                        log::info!(
+                            "[Gateway] No paused run for HTTP host approval {}, pushing retry hint to agent",
+                            request.id
+                        );
+                        
+                        // Push a retry hint to the agent's inbox
+                        let parts: Vec<&str> = session_id.split(':').collect();
+                        if parts.len() >= 2 {
+                            let channel_id = parts[1];
+                            let retry_hint = "🔄 Host approved. You can now retry the previous operation.";
+                            let _ = self.session_registry.push_message_to_session(
+                                session_id,
+                                channel_id.to_string(),
+                                retry_hint.to_string(),
+                                "system".to_string(),
+                            ).await;
+                        }
+                    }
+                    
+                    // Also handle EffectApproval - update capability status in marketplace
+                    if let crate::approval::types::ApprovalCategory::EffectApproval { 
+                        ref capability_id, 
+                        .. 
+                    } = request.category {
+                        if request.status.is_approved() {
+                            log::info!(
+                                "[Gateway] Updating capability approval status for {}",
+                                capability_id
+                            );
+                            let _ = self.marketplace.update_approval_status(
+                                capability_id.clone(),
+                                crate::capability_marketplace::types::ApprovalStatus::Approved,
+                            ).await;
+                        }
+                    }
+
+                    // Handle SecretWrite - persist secret to SecretStore when approved
+                    if let crate::approval::types::ApprovalCategory::SecretWrite { 
+                        ref key, 
+                        ref scope, 
+                        value, 
+                        .. 
+                    } = &request.category {
+                        if request.status.is_approved() {
+                            if let Some(secret_value) = value {
+                                log::info!("[Gateway] Persisting approved secret '{}' to SecretStore", key);
+                                // Write to SecretStore
+                                if let Err(e) = crate::secrets::SecretStore::set(key, secret_value, scope) {
+                                    log::error!("[Gateway] Failed to persist secret '{}': {}", key, e);
+                                } else {
+                                    log::info!("[Gateway] Secret '{}' persisted successfully", key);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -215,6 +293,15 @@ impl GatewayState {
                 title, skill_id, ..
             } => {
                 format!("👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nPlease visit the [Approval UI]({}/approvals) to proceed.", title, skill_id, approval_id, approval_ui_url)
+            }
+            ApprovalCategory::HttpHostApproval {
+                host, port, requesting_url, ..
+            } => {
+                let port_str = port.map(|p| format!(":{}", p)).unwrap_or_default();
+                format!(
+                    "🌐 HTTP host approval required for **{}{}**\n\nURL: {}\n\nID: `{}`\n\nUse: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
+                    host, port_str, requesting_url, approval_id, approval_id, approval_ui_url
+                )
             }
             _ => return,
         };
@@ -459,6 +546,17 @@ impl ChatGateway {
         }
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
+        // Configure approval store for capability approval tracking
+        let approval_store_path = config.approvals_dir.join("capability_approvals.json");
+        if let Err(e) = marketplace.configure_approval_store(&approval_store_path).await {
+            log::warn!(
+                "[Gateway] Failed to configure approval store at {}: {}. 
+                Capability approvals will not be persisted.",
+                approval_store_path.display(),
+                e
+            );
+        }
+
         let connector = Arc::new(LoopbackWebhookConnector::new(
             config.connector.clone(),
             quarantine.clone(),
@@ -483,7 +581,7 @@ impl ChatGateway {
         // Register minimal non-chat primitives needed by autonomy flows.
         // We keep this intentionally small (no full marketplace bootstrap) to preserve
         // the chat security contract while still enabling governed resource ingestion.
-        crate::capabilities::network::register_network_capabilities(&*marketplace).await?;
+        crate::capabilities::network::register_network_capabilities(&*marketplace, approvals.clone()).await?;
 
         // Generate internal secret for native capabilities
         let internal_api_secret = uuid::Uuid::new_v4().to_string();
@@ -502,6 +600,44 @@ impl ChatGateway {
             crate::config::types::CodingAgentsConfig::default(),
         )
         .await?;
+
+        // Register onboarding capabilities (approval + secrets + onboarding memory)
+        // so chat agents can explicitly request human approvals during execution.
+        if let Some(ref approvals_queue) = approvals {
+            let secret_store = match crate::secrets::SecretStore::new(std::env::current_dir().ok())
+            {
+                Ok(store) => store,
+                Err(e) => {
+                    log::warn!(
+                        "[Gateway] Failed to initialize SecretStore from cwd: {}. Falling back to in-memory-only secret staging.",
+                        e
+                    );
+                    crate::secrets::SecretStore::empty()
+                }
+            };
+            let working_memory = crate::working_memory::WorkingMemory::new(Box::new(
+                crate::working_memory::InMemoryJsonlBackend::new(None, None, None),
+            ));
+
+            crate::skills::onboarding_capabilities::register_onboarding_capabilities(
+                marketplace.clone(),
+                Arc::new(Mutex::new(secret_store)),
+                Arc::new(Mutex::new(working_memory)),
+                Arc::new(approvals_queue.clone()),
+            )
+            .await?;
+
+            // Sanity check: request_human_action must be available to agents.
+            if marketplace
+                .get_manifest("ccos.approval.request_human_action")
+                .await
+                .is_none()
+            {
+                log::warn!(
+                    "[Gateway] Capability ccos.approval.request_human_action is not registered"
+                );
+            }
+        }
 
         // Initialize session management
         let session_registry = SessionRegistry::new();
@@ -882,14 +1018,7 @@ impl ChatGateway {
                 };
 
                 match result {
-                    Ok(_) => {
-                        self.state
-                            .send_chat_message(
-                                &session_id,
-                                format!("Processing approval `{}`...", id),
-                            )
-                            .await;
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         self.state
                             .send_chat_message(&session_id, format!("❌ Approval failed: {}", e))
@@ -973,6 +1102,28 @@ impl ChatGateway {
                 if let Some(sid) = &step_id {
                     meta.insert("step_id".to_string(), Value::String(sid.clone()));
                 }
+                // Include source code for execution capabilities so monitor can render
+                // launch events with language + code before result arrives.
+                let exec_language = match capability_id {
+                    "ccos.execute.python" | "ccos.execution.python" | "ccos.sandbox.python" => {
+                        Some("python")
+                    }
+                    "ccos.execute.javascript"
+                    | "ccos.execution.javascript"
+                    | "ccos.sandbox.javascript" => Some("javascript"),
+                    "ccos.execute.rtfs" | "ccos.execution.rtfs" => Some("rtfs"),
+                    _ => None,
+                };
+                if let (Some(language), Some(code)) = (
+                    exec_language,
+                    inputs.get("code").and_then(|v| v.as_str()),
+                ) {
+                    meta.insert("code".to_string(), Value::String(code.to_string()));
+                    meta.insert(
+                        "language".to_string(),
+                        Value::String(language.to_string()),
+                    );
+                }
                 chain
                     .log_capability_call_with_metadata(
                         session_id.as_deref(),
@@ -1014,10 +1165,22 @@ impl ChatGateway {
         };
 
         if let Some(action) = action {
+            let mut result_metadata = HashMap::new();
+            if !success {
+                if let Some(err) = result_json.get("error").and_then(|v| v.as_str()) {
+                    result_metadata.insert("error".to_string(), Value::String(err.to_string()));
+                }
+                if let Some(cap_id) = result_json.get("capability_id").and_then(|v| v.as_str()) {
+                    result_metadata.insert(
+                        "capability_id".to_string(),
+                        Value::String(cap_id.to_string()),
+                    );
+                }
+            }
             let exec_result = crate::types::ExecutionResult {
                 success,
                 value: rtfs_result.unwrap_or(Value::Nil),
-                metadata: HashMap::new(),
+                metadata: result_metadata,
             };
             if let Ok(mut chain) = self.state.chain.lock() {
                 let _ = chain.record_result(action, exec_result);
@@ -1338,6 +1501,19 @@ async fn execute_handler(
         redacted_inputs
     );
 
+    // Human-gated completion must not be callable by autonomous agents.
+    // Keep this path reserved for approved human/admin UX only.
+    if payload.capability_id == "ccos.approval.complete" {
+        return Ok(Json(ExecuteResponse {
+            success: false,
+            result: None,
+            error: Some(
+                "Capability ccos.approval.complete is restricted to human/admin approval flows"
+                    .to_string(),
+            ),
+        }));
+    }
+
     // Best-effort: if this execute is correlated to a known Run, enforce run state/budget and update its step counters.
     // (Runs are created via POST /chat/run and correlated via the run_id input.)
     let correlated_run_id = payload.inputs.get("run_id").and_then(|v| v.as_str());
@@ -1493,8 +1669,18 @@ async fn execute_handler(
     let gateway = ChatGateway {
         state: state.clone(),
     };
+    let mut effective_inputs = payload.inputs.clone();
+    if let Some(obj) = effective_inputs.as_object_mut() {
+        if !obj.contains_key("session_id") {
+            obj.insert(
+                "session_id".to_string(),
+                serde_json::Value::String(payload.session_id.clone()),
+            );
+        }
+    }
+
     match gateway
-        .execute_capability(&payload.capability_id, payload.inputs.clone())
+        .execute_capability(&payload.capability_id, effective_inputs)
         .await
     {
         Ok((result, success)) => {
@@ -1881,7 +2067,9 @@ async fn list_capabilities_handler(
     // Filter out transform capabilities - agent works with resolved content in transparent mode
     let infos: Vec<CapabilityInfo> = capabilities
         .into_iter()
-        .filter(|cap| !cap.id.starts_with("ccos.chat.transform."))
+        .filter(|cap| {
+            !cap.id.starts_with("ccos.chat.transform.") && cap.id != "ccos.approval.complete"
+        })
         .map(|cap| CapabilityInfo {
             id: cap.id,
             name: cap.name,
@@ -3058,6 +3246,14 @@ async fn agent_log_handler(
     // Add model if available
     if let Some(ref model) = payload.model {
         metadata.insert("model".to_string(), Value::String(model.clone()));
+    }
+
+    // Add prompt/response excerpts if available
+    if let Some(ref prompt) = payload.prompt {
+        metadata.insert("prompt".to_string(), Value::String(prompt.clone()));
+    }
+    if let Some(ref response) = payload.response {
+        metadata.insert("response".to_string(), Value::String(response.clone()));
     }
     
     // Create the action

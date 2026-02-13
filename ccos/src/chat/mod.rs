@@ -1358,6 +1358,7 @@ pub async fn register_chat_capabilities(
     // -----------------------------------------------------------------
     {
         let marketplace_for_skill_load = Arc::clone(&marketplace);
+        let approval_queue_for_skill = approval_queue.clone();
         register_native_chat_capability(
             &*marketplace,
             "ccos.skill.load",
@@ -1366,6 +1367,7 @@ pub async fn register_chat_capabilities(
             Arc::new(move |inputs: &Value| {
                 let inputs = inputs.clone();
                 let marketplace = Arc::clone(&marketplace_for_skill_load);
+                let approval_queue = approval_queue_for_skill.clone();
                 Box::pin(async move {
                     // Extract URL from inputs
                     let url = if let Value::Map(ref map) = inputs {
@@ -1376,6 +1378,98 @@ pub async fn register_chat_capabilities(
                     } else {
                         None
                     }.ok_or_else(|| RuntimeError::Generic("Missing url parameter".to_string()))?;
+
+                    // === PRE-FLIGHT CHECK: Verify host is in HTTP allowlist or approved ===
+                    // This provides a better UX by catching the issue early and creating
+                    // an approval request instead of failing with a hard error.
+                    if !url.starts_with("file://") {
+                        if let Ok(parsed_url) = url.parse::<reqwest::Url>() {
+                            let host = parsed_url.host_str().unwrap_or("").to_lowercase();
+                            let port = parsed_url.port();
+                            
+                            log::info!(
+                                "[ccos.skill.load] Pre-flight check for URL: {} (host={}, port={:?})",
+                                url, host, port
+                            );
+                            
+                            // Check if host is allowed via the capability registry
+                            let registry = marketplace.capability_registry.read().await;
+                            let host_allowed = registry.is_http_host_allowed(&host);
+                            let port_allowed = port.map_or(true, |p| registry.is_http_port_allowed(p));
+                            log::info!(
+                                "[ccos.skill.load] Registry check: host_allowed={}, port_allowed={}",
+                                host_allowed, port_allowed
+                            );
+                            drop(registry);
+                            
+                            // Also check if host has been explicitly approved
+                            let host_approved = if let Some(queue) = &approval_queue {
+                                let approved = queue.is_http_host_approved(&host, port).await.unwrap_or(false);
+                                log::info!(
+                                    "[ccos.skill.load] Host approval check: approved={}",
+                                    approved
+                                );
+                                approved
+                            } else {
+                                log::info!("[ccos.skill.load] No approval_queue available");
+                                false
+                            };
+                            
+                            log::info!(
+                                "[ccos.skill.load] Decision: need_approval={}",
+                                (!host_allowed || !port_allowed) && !host_approved
+                            );
+                            
+                            if (!host_allowed || !port_allowed) && !host_approved {
+                                log::info!("[ccos.skill.load] Entering approval branch");
+                                // Host/port not in allowlist and not approved - create approval request
+                                if let Some(queue) = &approval_queue {
+                                    log::info!("[ccos.skill.load] Approval queue is available, creating request");
+                                    // Clone host for use in multiple places
+                                    let host_for_message = host.clone();
+                                    
+                                    // Extract session_id from inputs if available
+                                    let session_id = if let Value::Map(ref map) = inputs {
+                                        map.get(&MapKey::String("session_id".to_string()))
+                                            .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                                            .and_then(|v| v.as_string())
+                                            .map(|s| s.to_string())
+                                    } else {
+                                        None
+                                    };
+                                    
+                                    let approval_id = queue.add_http_host_approval(
+                                        host,
+                                        port,
+                                        url.clone(),
+                                        "session".to_string(),
+                                        Some("ccos.skill.load".to_string()),
+                                        format!("Skill loading requested access to {}:{}", host_for_message, port.map_or("default".to_string(), |p| p.to_string())),
+                                        24, // 24 hour expiry
+                                        session_id,
+                                    ).await?;
+                                    
+                                    // Return an error to block plan execution until approval is resolved
+                                    // The error includes the approval_id so the user can approve and retry
+                                    return Err(RuntimeError::Generic(format!(
+                                        "HTTP host '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this host, then retry the skill loading.",
+                                        host_for_message, approval_id, approval_id
+                                    )));
+                                } else {
+                                    // No approval queue configured - return error with helpful message
+                                    return Err(RuntimeError::SecurityViolation {
+                                        operation: "ccos.skill.load".to_string(),
+                                        capability: "ccos.network.http-fetch".to_string(),
+                                        context: format!(
+                                            "Host '{}' not in HTTP allowlist and no approval queue configured. Add the host to the HTTP allowlist to proceed.",
+                                            host
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    // === END PRE-FLIGHT CHECK ===
 
                     // Optional safety valve: allow callers to override URL heuristics.
                     let force = if let Value::Map(ref map) = inputs {
@@ -1554,7 +1648,7 @@ pub async fn register_chat_capabilities(
                             .ok_or_else(|| RuntimeError::Generic("Missing operation parameter".to_string()))?;
 
                         // Extract parameters (everything except control keys),
-                        // and flatten a nested "params" map when present.
+                        // and flatten nested "params" / "parameters" maps when present.
                         let mut params_map = HashMap::new();
                         let mut nested_params: Option<HashMap<MapKey, Value>> = None;
 
@@ -1565,7 +1659,7 @@ pub async fn register_chat_capabilities(
                                 _ => continue,
                             };
 
-                            if key_str == "params" {
+                            if key_str == "params" || key_str == "parameters" {
                                 if let Value::Map(inner) = v {
                                     nested_params = Some(inner.clone());
                                 }
@@ -1573,6 +1667,7 @@ pub async fn register_chat_capabilities(
                             }
 
                             if key_str == "skill"
+                                || key_str == "skill_id"
                                 || key_str == "operation"
                                 || key_str == "session_id"
                                 || key_str == "run_id"
@@ -1599,7 +1694,11 @@ pub async fn register_chat_capabilities(
                     let normalized_skill = skill.to_lowercase().replace(" ", "-").replace("_", "-");
                     let normalized_op = operation.to_lowercase().replace(" ", "-").replace("_", "-");
                     
-                    let capability_id = format!("{}.{}", normalized_skill, normalized_op);
+                    let capability_id = if normalized_op.contains('.') {
+                        normalized_op.clone()
+                    } else {
+                        format!("{}.{}", normalized_skill, normalized_op)
+                    };
                     
                     log::info!("[Gateway] Forwarding ccos.skill.execute to {}", capability_id);
 
@@ -2595,12 +2694,25 @@ fn create_http_capability_manifest(
 ) -> RuntimeResult<CapabilityManifest> {
     use crate::capability_marketplace::types::HttpCapability;
     
+    // Extract skill_id from capability_id (e.g., "moltbook-agent-skill.register-agent" -> "moltbook-agent-skill")
+    let skill_id = id.split('.').next().unwrap_or("").to_string();
+    let op_name = id.split('.').nth(1).unwrap_or("");
+    
     let mut metadata = HashMap::new();
     metadata.insert("name".to_string(), name.to_string());
     metadata.insert("description".to_string(), description.to_string());
     metadata.insert("endpoint".to_string(), endpoint_url.to_string());
     metadata.insert("method".to_string(), method.to_string());
     metadata.insert("security_level".to_string(), "medium".to_string());
+    metadata.insert("skill_id".to_string(), skill_id.clone());
+    
+    // Check if this operation returns a secret (common patterns)
+    let returns_secret = op_name.contains("register") 
+        || op_name.contains("login") 
+        || op_name.contains("auth");
+    if returns_secret {
+        metadata.insert("returns_secret".to_string(), "true".to_string());
+    }
     
     // Create HTTP capability provider with available fields
     let http_cap = HttpCapability {
@@ -2626,7 +2738,7 @@ fn create_http_capability_manifest(
         domains: vec!["skill".to_string()],
         categories: vec!["http".to_string()],
         effect_type: EffectType::Effectful,
-        approval_status: crate::capability_marketplace::types::ApprovalStatus::Pending,
+        approval_status: crate::capability_marketplace::types::ApprovalStatus::Approved,
     })
 }
 
@@ -3045,5 +3157,4 @@ mod tests {
         assert_eq!(out.get(&MapKey::String("status".to_string())).unwrap().as_string().unwrap(), "scheduled");
     }
 }
-
 

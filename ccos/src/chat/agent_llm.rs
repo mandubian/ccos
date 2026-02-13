@@ -17,6 +17,7 @@ pub struct LlmConfig {
     pub model: String,
     pub base_url: Option<String>,
     pub max_tokens: u32,
+    pub timeout_secs: u64,
 }
 
 /// LLM client for the agent
@@ -45,7 +46,7 @@ impl AgentLlmClient {
     /// Create a new LLM client
     pub fn new(config: LlmConfig) -> anyhow::Result<Self> {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(config.timeout_secs.max(1)))
             .build()?;
 
         Ok(Self { config, client })
@@ -612,7 +613,11 @@ impl AgentLlmClient {
             action_history
                 .iter()
                 .map(|r| {
-                    let status = if r.success { "✓ success" } else { "✗ failed" };
+                    let status = if r.success {
+                        "✓ success"
+                    } else {
+                        "✗ failed"
+                    };
                     let result_str = r
                         .result
                         .as_ref()
@@ -660,6 +665,7 @@ IMPORTANT - Capability Input Formats:
 - ccos.execute.javascript: {{"code": "console.log(0.2 * 68918)"}}
 - ccos.execute.rtfs: {{"code": "(* 0.2 68918)"}}  <- RTFS uses Lisp-like syntax
 - ccos.chat.egress.send_outbound: {{"content": "message text", "content_class": "public"}}
+- ccos.approval.request_human_action: {{"action_type": "...", "title": "...", "instructions": "...", "skill_id": "...", "step_id": "..."}}
 
 Guidelines:
 - Be decisive: if the task is done, say so immediately
@@ -798,7 +804,10 @@ Respond in JSON format:
                 Ok(plan)
             }
             Err(e) => {
-                warn!("Failed to parse iterative LLM response: {}. Raw: {}", e, content);
+                warn!(
+                    "Failed to parse iterative LLM response: {}. Raw: {}",
+                    e, content
+                );
                 // Fallback: assume task is complete with raw response
                 Ok(IterativeAgentPlan {
                     understanding: "Parsing fallback".to_string(),
@@ -889,7 +898,10 @@ Respond in JSON format:
                 Ok(plan)
             }
             Err(e) => {
-                warn!("Failed to parse Anthropic iterative response: {}. Raw: {}", e, content);
+                warn!(
+                    "Failed to parse Anthropic iterative response: {}. Raw: {}",
+                    e, content
+                );
                 Ok(IterativeAgentPlan {
                     understanding: "Parsing fallback".to_string(),
                     task_complete: true,

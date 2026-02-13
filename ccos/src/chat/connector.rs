@@ -402,7 +402,12 @@ async fn inbound_handler(
         );
     }
 
-    let trigger = state.config.activation.match_trigger(&payload.text);
+    // Skip trigger check for slash commands (they are gateway commands, not agent messages)
+    let trigger = if payload.text.trim_start().starts_with('/') {
+        Some("slash_command".to_string())
+    } else {
+        state.config.activation.match_trigger(&payload.text)
+    };
     if trigger.is_none() {
         log::debug!(
             "[Connector] Message from {} in {} ignored (no mention or keyword match)",
