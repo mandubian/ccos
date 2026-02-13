@@ -61,13 +61,16 @@ pub async fn register_skill_capabilities(
     let skill_mapper_load = skill_mapper.clone();
     let load_handler = Arc::new(move |input: &Value| {
         let payload: SkillLoadInput = parse_payload("ccos.skill.load", input)?;
+        log::info!("[ccos.skill.load] Loading skill from URL: {}", payload.url);
         let sm = skill_mapper_load.clone();
         let rt_handle = tokio::runtime::Handle::current();
 
         let loaded = std::thread::spawn(move || {
             rt_handle.block_on(async {
                 let mut mapper = sm.lock().await;
-                mapper.load_and_register(&payload.url).await
+                let result = mapper.load_and_register(&payload.url).await;
+                log::info!("[ccos.skill.load] Skill registration result: {:?}", result.as_ref().map(|r| r.capabilities_to_register.len()));
+                result
             })
         })
         .join()

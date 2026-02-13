@@ -16,6 +16,7 @@ use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
 use crate::working_memory::facade::WorkingMemory;
 use crate::working_memory::types::{WorkingMemoryEntry, WorkingMemoryMeta};
+use rtfs::ast::{Keyword, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
@@ -100,6 +101,8 @@ struct RequestHumanActionInput {
     timeout_hours: i64,
     skill_id: String,
     step_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 fn default_timeout() -> i64 {
@@ -136,6 +139,27 @@ struct CompleteHumanActionOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     validation_errors: Vec<String>,
     message: String,
+}
+
+/// Input for ccos.approval.get_status
+#[derive(Debug, Deserialize)]
+struct GetApprovalStatusInput {
+    approval_id: String,
+}
+
+/// Output for ccos.approval.get_status
+#[derive(Debug, Serialize)]
+struct GetApprovalStatusOutput {
+    approval_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approved_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rejected_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rejection_reason: Option<String>,
 }
 
 /// Input for ccos.skill.get_onboarding_status
@@ -198,6 +222,37 @@ struct MarkOperationalInput {
 }
 
 // =============================================================================
+// Schema Helpers
+// =============================================================================
+
+/// Build a MapTypeEntry for a required or optional string field.
+fn string_field(name: &str, optional: bool) -> MapTypeEntry {
+    MapTypeEntry {
+        key: Keyword::new(name),
+        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+        optional,
+    }
+}
+
+/// Build a MapTypeEntry for a required or optional field of any type.
+fn any_field(name: &str, optional: bool) -> MapTypeEntry {
+    MapTypeEntry {
+        key: Keyword::new(name),
+        value_type: Box::new(TypeExpr::Any),
+        optional,
+    }
+}
+
+/// Build a MapTypeEntry for a required or optional integer field.
+fn int_field(name: &str, optional: bool) -> MapTypeEntry {
+    MapTypeEntry {
+        key: Keyword::new(name),
+        value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+        optional,
+    }
+}
+
+// =============================================================================
 // Capability Registration
 // =============================================================================
 
@@ -224,12 +279,26 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let secrets_set_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("key", false),
+            string_field("value", false),
+            string_field("scope", true),
+            string_field("skill_id", true),
+            string_field("description", true),
+            string_field("session_id", true),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.secrets.set".to_string(),
             "Onboarding / Secrets Set".to_string(),
             "Store a secret securely with governance approval".to_string(),
             secrets_set_handler,
+            Some(secrets_set_schema),
+            None,
         )
         .await?;
 
@@ -249,12 +318,24 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let memory_store_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("key", false),
+            any_field("value", false),
+            string_field("skill_id", true),
+            int_field("ttl", true),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.memory.store".to_string(),
             "Onboarding / Memory Store".to_string(),
             "Store key-value data in working memory".to_string(),
             memory_store_handler,
+            Some(memory_store_schema),
+            None,
         )
         .await?;
 
@@ -274,12 +355,23 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let memory_get_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("key", false),
+            string_field("skill_id", true),
+            any_field("default", true),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.memory.get".to_string(),
             "Onboarding / Memory Get".to_string(),
             "Retrieve value from working memory".to_string(),
             memory_get_handler,
+            Some(memory_get_schema),
+            None,
         )
         .await?;
 
@@ -304,12 +396,28 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let request_human_action_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("action_type", false),
+            string_field("title", false),
+            string_field("instructions", false),
+            any_field("required_response", true),
+            int_field("timeout_hours", true),
+            string_field("skill_id", false),
+            string_field("step_id", false),
+            string_field("session_id", true),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.approval.request_human_action".to_string(),
             "Onboarding / Request Human Action".to_string(),
             "Request human intervention for onboarding steps".to_string(),
             request_human_action_handler,
+            Some(request_human_action_schema),
+            None,
         )
         .await?;
 
@@ -333,12 +441,56 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let approval_complete_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("approval_id", false),
+            any_field("response", false),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.approval.complete".to_string(),
             "Onboarding / Complete Human Action".to_string(),
             "Complete a human action with response data".to_string(),
             complete_human_action_handler,
+            Some(approval_complete_schema),
+            None,
+        )
+        .await?;
+
+    // ccos.approval.get_status
+    let approval_queue_get_status = approval_queue.clone();
+    let get_approval_status_handler = Arc::new(move |input: &Value| {
+        let payload: GetApprovalStatusInput = parse_payload("ccos.approval.get_status", input)?;
+        let queue = approval_queue_get_status.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async { handle_get_approval_status(payload, queue).await })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("ccos.approval.get_status: thread join error".to_string())
+        })?;
+
+        result
+    });
+
+    let get_approval_status_schema = TypeExpr::Map {
+        entries: vec![string_field("approval_id", false)],
+        wildcard: None,
+    };
+
+    marketplace
+        .register_local_capability_with_schema(
+            "ccos.approval.get_status".to_string(),
+            "Onboarding / Get Approval Status".to_string(),
+            "Get the current status of an approval request".to_string(),
+            get_approval_status_handler,
+            Some(get_approval_status_schema),
+            None,
         )
         .await?;
 
@@ -361,12 +513,19 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let onboarding_status_schema = TypeExpr::Map {
+        entries: vec![string_field("skill_id", false)],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.skill.get_onboarding_status".to_string(),
             "Skill / Get Onboarding Status".to_string(),
             "Get the onboarding status for a skill".to_string(),
             get_onboarding_status_handler,
+            Some(onboarding_status_schema),
+            None,
         )
         .await?;
 
@@ -393,12 +552,19 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let onboarding_resume_schema = TypeExpr::Map {
+        entries: vec![string_field("skill_id", false)],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.skill.check_onboarding_resume".to_string(),
             "Skill / Check Onboarding Resume".to_string(),
             "Check if onboarding can be resumed after human action".to_string(),
             check_onboarding_resume_handler,
+            Some(onboarding_resume_schema),
+            None,
         )
         .await?;
 
@@ -436,12 +602,23 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let complete_step_schema = TypeExpr::Map {
+        entries: vec![
+            string_field("skill_id", false),
+            string_field("step_id", false),
+            any_field("data", true),
+        ],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.skill.onboarding.complete_step".to_string(),
             "Skill / Onboarding Complete Step".to_string(),
             "Mark an onboarding step as complete".to_string(),
             complete_step_handler,
+            Some(complete_step_schema),
+            None,
         )
         .await?;
 
@@ -508,12 +685,19 @@ pub async fn register_onboarding_capabilities<S: ApprovalStorage + 'static>(
         result
     });
 
+    let mark_operational_schema = TypeExpr::Map {
+        entries: vec![string_field("skill_id", false)],
+        wildcard: None,
+    };
+
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_schema(
             "ccos.skill.onboarding.mark_operational".to_string(),
             "Skill / Onboarding Mark Operational".to_string(),
             "Mark a skill as fully operational".to_string(),
             mark_operational_handler,
+            Some(mark_operational_schema),
+            None,
         )
         .await?;
 
@@ -720,7 +904,13 @@ async fn handle_request_human_action<S: ApprovalStorage>(
         reasons: vec!["Requires human intervention".to_string()],
     };
 
-    let request = ApprovalRequest::new(category, risk, payload.timeout_hours, None);
+    // Build metadata with session_id for callback notifications
+    let mut request = ApprovalRequest::new(category, risk, payload.timeout_hours, None);
+    if let Some(session_id) = payload.session_id {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("session_id".to_string(), session_id);
+        request = request.with_metadata(metadata);
+    }
     let approval_id = request.id.clone();
     let expires_at = request.expires_at.clone();
 
@@ -823,6 +1013,49 @@ async fn handle_complete_human_action<S: ApprovalStorage>(
     };
 
     produce_value("ccos.approval.complete", output)
+}
+
+/// Handle ccos.approval.get_status
+async fn handle_get_approval_status<S: ApprovalStorage>(
+    payload: GetApprovalStatusInput,
+    approval_queue: Arc<UnifiedApprovalQueue<S>>,
+) -> RuntimeResult<Value> {
+    let approval = approval_queue
+        .get(&payload.approval_id)
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to get approval: {}", e)))?
+        .ok_or_else(|| {
+            RuntimeError::Generic(format!("Approval not found: {}", payload.approval_id))
+        })?;
+
+    let (status, approved_at, rejected_at, rejection_reason) = match &approval.status {
+        crate::approval::types::ApprovalStatus::Pending => {
+            ("pending".to_string(), None, None, None)
+        }
+        crate::approval::types::ApprovalStatus::Approved { at, .. } => {
+            ("approved".to_string(), Some(at.to_rfc3339()), None, None)
+        }
+        crate::approval::types::ApprovalStatus::Rejected { at, reason, .. } => {
+            ("rejected".to_string(), None, Some(at.to_rfc3339()), Some(reason.clone()))
+        }
+        crate::approval::types::ApprovalStatus::Expired { at: _ } => {
+            ("expired".to_string(), None, None, None)
+        }
+        crate::approval::types::ApprovalStatus::Superseded { .. } => {
+            ("superseded".to_string(), None, None, None)
+        }
+    };
+
+    let output = GetApprovalStatusOutput {
+        approval_id: payload.approval_id.clone(),
+        status,
+        response: approval.response.clone(),
+        approved_at,
+        rejected_at,
+        rejection_reason,
+    };
+
+    produce_value("ccos.approval.get_status", output)
 }
 
 // =============================================================================
