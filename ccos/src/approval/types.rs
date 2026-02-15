@@ -148,6 +148,14 @@ pub enum ApprovalCategory {
         /// Human-readable reason for the request
         reason: String,
     },
+
+    /// Package approval - for sandbox execution of non-auto-approved dependencies
+    PackageApproval {
+        /// Package name (e.g., "mpmath")
+        package: String,
+        /// Runtime ("python" or "javascript")
+        runtime: String,
+    },
 }
 
 /// Health tracking for approved servers
@@ -217,6 +225,9 @@ impl fmt::Display for ApprovalCategory {
                 } else {
                     write!(f, "HttpHostApproval({})", host)
                 }
+            }
+            ApprovalCategory::PackageApproval { package, runtime } => {
+                write!(f, "PackageApproval({} for {})", package, runtime)
             }
         }
     }

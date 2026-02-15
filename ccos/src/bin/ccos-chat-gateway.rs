@@ -37,11 +37,15 @@ struct ServeArgs {
     #[arg(long)]
     outbound_url: Option<String>,
 
-    #[arg(long, default_value = "storage/approvals")]
-    approvals_dir: PathBuf,
+    /// Directory for approval storage.
+    /// If relative, resolved against the workspace root (same as ccos-mcp).
+    #[arg(long)]
+    approvals_dir: Option<PathBuf>,
 
-    #[arg(long, default_value = "storage/quarantine")]
-    quarantine_dir: PathBuf,
+    /// Directory for quarantine storage.
+    /// If relative, resolved against the workspace root.
+    #[arg(long)]
+    quarantine_dir: Option<PathBuf>,
 
     #[arg(long, default_value = "86400")]
     quarantine_ttl_seconds: i64,
@@ -95,8 +99,10 @@ struct ServeArgs {
 
 #[derive(Parser)]
 struct PurgeArgs {
-    #[arg(long, default_value = "storage/quarantine")]
-    quarantine_dir: PathBuf,
+    /// Directory for quarantine storage.
+    /// If relative, resolved against the workspace root.
+    #[arg(long)]
+    quarantine_dir: Option<PathBuf>,
 
     #[arg(long, default_value = "expired")]
     mode: String,
@@ -126,6 +132,27 @@ async fn main() {
 }
 
 async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
+    // Resolve approvals_dir using the same logic as ccos-mcp
+    // This ensures both processes use the same storage location
+    let approvals_dir = args.approvals_dir.unwrap_or_else(|| {
+        // Default to workspace-relative path, same as ccos-mcp
+        ccos::utils::fs::resolve_workspace_path("storage/approvals")
+    });
+    
+    // Resolve quarantine_dir similarly
+    let quarantine_dir = args.quarantine_dir.unwrap_or_else(|| {
+        ccos::utils::fs::resolve_workspace_path("storage/quarantine")
+    });
+    
+    println!(
+        "[Gateway] Using approvals directory: {}",
+        approvals_dir.display()
+    );
+    println!(
+        "[Gateway] Using quarantine directory: {}",
+        quarantine_dir.display()
+    );
+
     let activation = ActivationRules {
         allowed_senders: args.allow_senders,
         allowed_channels: args.allow_channels,
@@ -150,8 +177,8 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
 
     let config = ccos::chat::gateway::ChatGatewayConfig {
         bind_addr: args.bind_addr,
-        approvals_dir: args.approvals_dir,
-        quarantine_dir: args.quarantine_dir,
+        approvals_dir,
+        quarantine_dir,
         quarantine_default_ttl_seconds: args.quarantine_ttl_seconds,
         quarantine_key_env: args.quarantine_key_env,
         policy_pack_version: args.policy_pack_version,
@@ -168,13 +195,17 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
 }
 
 fn purge_quarantine(args: PurgeArgs) -> Result<(), String> {
+    let quarantine_dir = args.quarantine_dir.unwrap_or_else(|| {
+        ccos::utils::fs::resolve_workspace_path("storage/quarantine")
+    });
+    
     let removed = if args.mode == "all" {
-        FileQuarantineStore::purge_all_in_dir(&args.quarantine_dir).map_err(|e| format!("{}", e))?
+        FileQuarantineStore::purge_all_in_dir(&quarantine_dir).map_err(|e| format!("{}", e))?
     } else {
-        FileQuarantineStore::purge_expired_in_dir(&args.quarantine_dir)
+        FileQuarantineStore::purge_expired_in_dir(&quarantine_dir)
             .map_err(|e| format!("{}", e))?
     };
 
-    println!("Purged {} quarantine entries", removed);
+    println!("Purged {} quarantine entries from {}", removed, quarantine_dir.display());
     Ok(())
 }

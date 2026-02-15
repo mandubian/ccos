@@ -78,8 +78,13 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                             "ChatPublicDeclassification"
                         }
                         super::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
-                        super::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
-                        super::types::ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
+                        super::types::ApprovalCategory::HumanActionRequest { .. } => {
+                            "HumanActionRequest"
+                        }
+                        super::types::ApprovalCategory::HttpHostApproval { .. } => {
+                            "HttpHostApproval"
+                        }
+                        super::types::ApprovalCategory::PackageApproval { .. } => "PackageApproval",
                     };
                     if actual_type != cat_type {
                         return false;
