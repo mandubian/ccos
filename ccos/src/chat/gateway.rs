@@ -34,14 +34,15 @@ use crate::chat::{
     RealTimeTrackingSink, Scheduler, SessionRegistry, SpawnConfig, SpawnerFactory,
 };
 use crate::chat::{ResourceStore, SharedResourceStore};
+use crate::config::types::AgentConfig;
 use crate::utils::log_redaction::{redact_json_for_logs, redact_token_for_logs};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
-use crate::chat::agent_log::{AgentLogRequest, AgentLogResponse};
 use super::connector::{
     ChatConnector, ConnectionHandle, LoopbackConnectorConfig, LoopbackWebhookConnector,
     OutboundRequest,
 };
+use crate::chat::agent_log::{AgentLogRequest, AgentLogResponse};
 
 #[derive(Debug, Clone)]
 pub struct ChatGatewayConfig {
@@ -106,6 +107,8 @@ pub(crate) struct GatewayState {
     pub(crate) admin_tokens: Vec<String>,
     /// Base URL for the Approval UI
     pub(crate) approval_ui_url: String,
+    /// Optional LLM profile override applied to newly spawned agents.
+    pub(crate) spawn_llm_profile: Arc<RwLock<Option<String>>>,
 }
 
 #[async_trait]
@@ -201,51 +204,150 @@ impl ApprovalConsumer for GatewayState {
                             "[Gateway] No paused run for HTTP host approval {}, pushing retry hint to agent",
                             request.id
                         );
-                        
+
                         // Push a retry hint to the agent's inbox
                         let parts: Vec<&str> = session_id.split(':').collect();
                         if parts.len() >= 2 {
                             let channel_id = parts[1];
-                            let retry_hint = "🔄 Host approved. You can now retry the previous operation.";
-                            let _ = self.session_registry.push_message_to_session(
-                                session_id,
-                                channel_id.to_string(),
-                                retry_hint.to_string(),
-                                "system".to_string(),
-                            ).await;
+                            let retry_hint =
+                                "🔄 Host approved. You can now retry the previous operation.";
+                            let _ = self
+                                .session_registry
+                                .push_message_to_session(
+                                    session_id,
+                                    channel_id.to_string(),
+                                    retry_hint.to_string(),
+                                    "system".to_string(),
+                                    None,
+                                )
+                                .await;
                         }
                     }
-                    
+
+                    // Handle PackageApproval - resume paused run and push retry hint
+                    if let crate::approval::types::ApprovalCategory::PackageApproval {
+                        ref package,
+                        ..
+                    } = request.category
+                    {
+                        log::info!(
+                            "[Gateway] Package {} approved for session {}, checking for paused run",
+                            package,
+                            session_id
+                        );
+
+                        // First, try to find the specific run from the approval metadata
+                        let paused_run_id = if let Some(run_id) = request.metadata.get("run_id") {
+                            // Verify this run is still in PausedApproval state
+                            let store = self.run_store.lock().unwrap();
+                            if let Some(run) = store.get_run(run_id) {
+                                if matches!(run.state, RunState::PausedApproval { .. }) {
+                                    Some(run_id.clone())
+                                } else {
+                                    log::info!(
+                                        "[Gateway] Run {} from approval metadata is not in PausedApproval state (state: {:?}), falling back to session search",
+                                        run_id,
+                                        run.state
+                                    );
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            // Fall back to finding any paused run for this session
+                            let store = self.run_store.lock().unwrap();
+                            store.get_latest_paused_approval_run_id_for_session(session_id)
+                        };
+
+                        if let Some(run_id) = paused_run_id {
+                            // Resume the run
+                            {
+                                let mut store = self.run_store.lock().unwrap();
+                                store.update_run_state(&run_id, crate::chat::run::RunState::Active);
+                            }
+
+                            SheriffLogger::log_run(
+                                "AUTO-RESUME",
+                                &run_id,
+                                session_id,
+                                &format!("Resuming run after package approval {}", request.id),
+                            );
+
+                            // Record event
+                            let _ = record_run_event(
+                                self,
+                                session_id,
+                                &run_id,
+                                &format!("auto-resume-{}", request.id),
+                                "run.auto_resume",
+                                HashMap::new(),
+                            )
+                            .await;
+                        }
+
+                        // Push retry hint to agent
+                        let parts: Vec<&str> = session_id.split(':').collect();
+                        if parts.len() >= 2 {
+                            let channel_id = parts[1];
+                            let retry_hint = format!("📦 Package `{}` approved. You can now retry the previous operation.", package);
+                            let _ = self
+                                .session_registry
+                                .push_message_to_session(
+                                    session_id,
+                                    channel_id.to_string(),
+                                    retry_hint,
+                                    "system".to_string(),
+                                    None,
+                                )
+                                .await;
+                        }
+                    }
+
                     // Also handle EffectApproval - update capability status in marketplace
-                    if let crate::approval::types::ApprovalCategory::EffectApproval { 
-                        ref capability_id, 
-                        .. 
-                    } = request.category {
+                    if let crate::approval::types::ApprovalCategory::EffectApproval {
+                        ref capability_id,
+                        ..
+                    } = request.category
+                    {
                         if request.status.is_approved() {
                             log::info!(
                                 "[Gateway] Updating capability approval status for {}",
                                 capability_id
                             );
-                            let _ = self.marketplace.update_approval_status(
-                                capability_id.clone(),
-                                crate::capability_marketplace::types::ApprovalStatus::Approved,
-                            ).await;
+                            let _ = self
+                                .marketplace
+                                .update_approval_status(
+                                    capability_id.clone(),
+                                    crate::capability_marketplace::types::ApprovalStatus::Approved,
+                                )
+                                .await;
                         }
                     }
 
                     // Handle SecretWrite - persist secret to SecretStore when approved
-                    if let crate::approval::types::ApprovalCategory::SecretWrite { 
-                        ref key, 
-                        ref scope, 
-                        value, 
-                        .. 
-                    } = &request.category {
+                    if let crate::approval::types::ApprovalCategory::SecretWrite {
+                        ref key,
+                        ref scope,
+                        value,
+                        ..
+                    } = &request.category
+                    {
                         if request.status.is_approved() {
                             if let Some(secret_value) = value {
-                                log::info!("[Gateway] Persisting approved secret '{}' to SecretStore", key);
+                                log::info!(
+                                    "[Gateway] Persisting approved secret '{}' to SecretStore",
+                                    key
+                                );
                                 // Write to SecretStore
-                                if let Err(e) = crate::secrets::SecretStore::set(key, secret_value, scope) {
-                                    log::error!("[Gateway] Failed to persist secret '{}': {}", key, e);
+                                if let Err(e) =
+                                    crate::secrets::SecretStore::set(key, secret_value, scope)
+                                {
+                                    log::error!(
+                                        "[Gateway] Failed to persist secret '{}': {}",
+                                        key,
+                                        e
+                                    );
                                 } else {
                                     log::info!("[Gateway] Secret '{}' persisted successfully", key);
                                 }
@@ -283,6 +385,14 @@ impl GatewayState {
     }
     async fn nudge_user(&self, session_id: &str, approval_id: &str, category: &ApprovalCategory) {
         let approval_ui_url = &self.approval_ui_url;
+
+        log::info!(
+            "[Gateway] nudge_user: session_id={}, approval_id={}, category={:?}",
+            session_id,
+            approval_id,
+            category
+        );
+
         let message = match category {
             ApprovalCategory::SecretWrite {
                 key, description, ..
@@ -290,17 +400,37 @@ impl GatewayState {
                 format!("🔓 I need your approval to store a secret for **{}** ({}) .\n\nID: `{}`\n\nPlease visit the [Approval UI]({}/approvals) to complete this step.", key, description, approval_id, approval_ui_url)
             }
             ApprovalCategory::HumanActionRequest {
-                title, skill_id, ..
+                title,
+                skill_id,
+                instructions,
+                ..
             } => {
-                format!("👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nPlease visit the [Approval UI]({}/approvals) to proceed.", title, skill_id, approval_id, approval_ui_url)
+                let instructions_preview = if instructions.len() > 800 {
+                    format!("{}...", &instructions[..800])
+                } else {
+                    instructions.clone()
+                };
+                format!(
+                    "👋 Human intervention required for **{}** (Skill: {})\n\nID: `{}`\n\nInstructions:\n{}\n\nPlease visit the [Approval UI]({}/approvals) to proceed.",
+                    title, skill_id, approval_id, instructions_preview, approval_ui_url
+                )
             }
             ApprovalCategory::HttpHostApproval {
-                host, port, requesting_url, ..
+                host,
+                port,
+                requesting_url,
+                ..
             } => {
                 let port_str = port.map(|p| format!(":{}", p)).unwrap_or_default();
                 format!(
                     "🌐 HTTP host approval required for **{}{}**\n\nURL: {}\n\nID: `{}`\n\nUse: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
                     host, port_str, requesting_url, approval_id, approval_id, approval_ui_url
+                )
+            }
+            ApprovalCategory::PackageApproval { package, runtime } => {
+                format!(
+                    "📦 Package approval required for **{}** ({})\n\nID: `{}`\n\nUse: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
+                    package, runtime, approval_id, approval_id, approval_ui_url
                 )
             }
             _ => return,
@@ -350,7 +480,10 @@ impl GatewayState {
             SpawnConfig::default()
         };
 
-        let spawn_config = spawn_config.with_run_id(run_id);
+        let mut spawn_config = spawn_config.with_run_id(run_id);
+        if let Some(profile) = self.spawn_llm_profile.read().await.clone() {
+            spawn_config = spawn_config.with_llm_profile(profile);
+        }
         log::info!(
             "[Gateway] Spawning agent for run {} session {} (budget: steps={}, duration_secs={}, max_tokens={:?})",
             run_id,
@@ -548,7 +681,10 @@ impl ChatGateway {
 
         // Configure approval store for capability approval tracking
         let approval_store_path = config.approvals_dir.join("capability_approvals.json");
-        if let Err(e) = marketplace.configure_approval_store(&approval_store_path).await {
+        if let Err(e) = marketplace
+            .configure_approval_store(&approval_store_path)
+            .await
+        {
             log::warn!(
                 "[Gateway] Failed to configure approval store at {}: {}. 
                 Capability approvals will not be persisted.",
@@ -578,14 +714,20 @@ impl ChatGateway {
             }
         }
 
-        // Register minimal non-chat primitives needed by autonomy flows.
-        // We keep this intentionally small (no full marketplace bootstrap) to preserve
-        // the chat security contract while still enabling governed resource ingestion.
-        crate::capabilities::network::register_network_capabilities(&*marketplace, approvals.clone()).await?;
-
         // Generate internal secret for native capabilities
         let internal_api_secret = uuid::Uuid::new_v4().to_string();
 
+        // Register minimal non-chat primitives needed by autonomy flows.
+        // We keep this intentionally small (no full marketplace bootstrap) to preserve
+        // the chat security contract while still enabling governed resource ingestion.
+        crate::capabilities::network::register_network_capabilities(
+            &*marketplace,
+            approvals.clone(),
+            Some(internal_api_secret.clone()),
+        )
+        .await?;
+
+        // Generate internal secret for native capabilities
         register_chat_capabilities(
             marketplace.clone(),
             quarantine.clone(),
@@ -615,9 +757,38 @@ impl ChatGateway {
                     crate::secrets::SecretStore::empty()
                 }
             };
+            let wm_jsonl_path = std::env::var("CCOS_WORKING_MEMORY_PATH")
+                .ok()
+                .filter(|p| !p.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|cwd| cwd.join(".ccos").join("working_memory.jsonl"))
+                });
+            let wm_backend_path = wm_jsonl_path.and_then(|path| {
+                if let Some(parent) = path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        log::warn!(
+                            "[Gateway] Failed to create working memory directory {}: {}. Falling back to in-memory working memory.",
+                            parent.display(),
+                            e
+                        );
+                        return None;
+                    }
+                }
+                Some(path)
+            });
+
             let working_memory = crate::working_memory::WorkingMemory::new(Box::new(
-                crate::working_memory::InMemoryJsonlBackend::new(None, None, None),
+                crate::working_memory::InMemoryJsonlBackend::new(wm_backend_path.clone(), None, None),
             ));
+            if let Some(path) = wm_backend_path {
+                log::info!(
+                    "[Gateway] Working memory persistence enabled at {}",
+                    path.display()
+                );
+            }
 
             crate::skills::onboarding_capabilities::register_onboarding_capabilities(
                 marketplace.clone(),
@@ -671,6 +842,7 @@ impl ChatGateway {
             realtime_sink,
             admin_tokens: config.admin_tokens.clone(),
             approval_ui_url: config.approval_ui_url.clone(),
+            spawn_llm_profile: Arc::new(RwLock::new(resolve_default_spawn_llm_profile())),
         });
 
         // Register gateway as approval consumer
@@ -730,6 +902,10 @@ impl ChatGateway {
             .route("/chat/heartbeat/:session_id", post(heartbeat_handler))
             .route("/chat/session/:session_id", get(get_session_handler))
             .route("/chat/sessions", get(list_sessions_handler))
+            .route(
+                "/chat/admin/llm-profile",
+                get(get_spawn_llm_profile_handler).post(set_spawn_llm_profile_handler),
+            )
             .route("/chat/agent/log", post(agent_log_handler))
             .route("/chat/run", post(create_run_handler).get(list_runs_handler))
             .route("/chat/run/:run_id", get(get_run_handler))
@@ -788,7 +964,20 @@ impl ChatGateway {
                     chosen = Some(paused_approval_id);
                 }
             }
-            chosen.unwrap_or_else(|| format!("chat-run-{}", Utc::now().timestamp_millis()))
+            chosen.unwrap_or_else(|| {
+                let id = format!("chat-run-{}", Utc::now().timestamp_millis());
+                // Register ephemeral run in store so it's "gettable"
+                if let Ok(mut store) = self.state.run_store.lock() {
+                    let mut run = Run::new_ephemeral(
+                        session_id.clone(),
+                        "Chat interaction".to_string(),
+                        None,
+                    );
+                    run.id = id.clone();
+                    store.create_run(run);
+                }
+                id
+            })
         };
         let trigger = envelope
             .activation
@@ -909,14 +1098,15 @@ impl ChatGateway {
                 },
             );
 
+            let mut spawn_config = SpawnConfig::default();
+            if let Some(profile) = self.state.spawn_llm_profile.read().await.clone() {
+                spawn_config = spawn_config.with_llm_profile(profile);
+            }
+
             match self
                 .state
                 .spawner
-                .spawn(
-                    session.session_id.clone(),
-                    token.clone(),
-                    SpawnConfig::default(),
-                )
+                .spawn(session.session_id.clone(), token.clone(), spawn_config)
                 .await
             {
                 Ok(spawn_result) => {
@@ -1039,12 +1229,14 @@ impl ChatGateway {
                 envelope.channel_id.clone(),
                 content_to_push,
                 envelope.sender_id.clone(),
+                envelope.run_id.clone(),
             )
             .await
         {
             log::error!(
-                "[Gateway] Failed to push message to session {}: {}",
+                "[Gateway] Failed to push message to session {} for run {:?}: {}",
                 session_id,
+                envelope.run_id,
                 e
             );
             return Err(RuntimeError::Generic(e));
@@ -1114,15 +1306,11 @@ impl ChatGateway {
                     "ccos.execute.rtfs" | "ccos.execution.rtfs" => Some("rtfs"),
                     _ => None,
                 };
-                if let (Some(language), Some(code)) = (
-                    exec_language,
-                    inputs.get("code").and_then(|v| v.as_str()),
-                ) {
+                if let (Some(language), Some(code)) =
+                    (exec_language, inputs.get("code").and_then(|v| v.as_str()))
+                {
                     meta.insert("code".to_string(), Value::String(code.to_string()));
-                    meta.insert(
-                        "language".to_string(),
-                        Value::String(language.to_string()),
-                    );
+                    meta.insert("language".to_string(), Value::String(language.to_string()));
                 }
                 chain
                     .log_capability_call_with_metadata(
@@ -1193,6 +1381,55 @@ impl ChatGateway {
         }
 
         Ok((result_json, success))
+    }
+}
+
+fn resolve_default_spawn_llm_profile() -> Option<String> {
+    if let Ok(profile) = std::env::var("CCOS_LLM_PROFILE") {
+        let trimmed = profile.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let config_path = std::env::var("CCOS_AGENT_CONFIG_PATH")
+        .unwrap_or_else(|_| "config/agent_config.toml".to_string());
+
+    let path = std::path::Path::new(&config_path);
+    let resolved = if path.exists() {
+        path.to_path_buf()
+    } else {
+        std::path::Path::new("..").join(&config_path)
+    };
+
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(content) => content,
+        Err(e) => {
+            log::warn!(
+                "[Gateway] Failed to read agent config '{}': {}",
+                resolved.display(),
+                e
+            );
+            return None;
+        }
+    };
+
+    let normalized = if content.starts_with("# RTFS") {
+        content.lines().skip(1).collect::<Vec<_>>().join("\n")
+    } else {
+        content
+    };
+
+    match toml::from_str::<AgentConfig>(&normalized) {
+        Ok(cfg) => cfg.llm_profiles.and_then(|p| p.default),
+        Err(e) => {
+            log::warn!(
+                "[Gateway] Failed to parse agent config '{}': {}",
+                resolved.display(),
+                e
+            );
+            None
+        }
     }
 }
 
@@ -1366,44 +1603,100 @@ async fn evaluate_run_completion(
     };
 
     if should_eval {
-        if let Ok(mut store) = state.run_store.lock() {
-            if let Some(run) = store.get_run_mut(run_id) {
-                if let Some(predicate) = &run.completion_predicate {
-                    let actions_satisfied = {
-                        let guard = state.chain.lock().unwrap();
-                        let query = crate::causal_chain::CausalQuery {
-                            run_id: Some(run_id.to_string()),
-                            ..Default::default()
-                        };
-                        let actions = guard.query_actions(&query);
-                        predicate.evaluate(&actions)
-                    };
+        let predicate = if let Ok(store) = state.run_store.lock() {
+            store.get_run(run_id).and_then(|run| run.completion_predicate.clone())
+        } else {
+            None
+        };
+        let actions_satisfied = {
+            let guard = state.chain.lock().unwrap();
+            let query = crate::causal_chain::CausalQuery {
+                run_id: Some(run_id.to_string()),
+                ..Default::default()
+            };
+            let actions = guard.query_actions(&query);
+            if let Some(predicate) = predicate {
+                predicate.evaluate(&actions)
+            } else {
+                false
+            }
+        };
 
-                    if actions_satisfied {
-                        log::info!(
-                            "[Gateway] Run {} satisfies completion predicate for goal '{}'. Transitioning to Done.",
-                            run_id, goal
-                        );
-                        run.transition(crate::chat::run::RunState::Done);
+        if actions_satisfied {
+            log::info!(
+                "[Gateway] Run {} satisfies completion predicate for goal '{}'. Transitioning to Done.",
+                run_id, goal
+            );
 
-                        // Audit the auto-completion
-                        let mut meta = HashMap::new();
-                        meta.insert(
-                            "reason".to_string(),
-                            Value::String("Predicate satisfied".into()),
-                        );
-                        let _ = record_chat_audit_event(
-                            &state.chain,
-                            "chat",
-                            "chat",
-                            session_id,
-                            run_id,
-                            &format!("auto-complete-{}", uuid::Uuid::new_v4()),
-                            "run.complete",
-                            meta,
-                        );
-                    }
+            // Audit the auto-completion
+            let mut meta = HashMap::new();
+            meta.insert(
+                "reason".to_string(),
+                Value::String("Predicate satisfied".into()),
+            );
+            let _ = record_chat_audit_event(
+                &state.chain,
+                "chat",
+                "chat",
+                session_id,
+                run_id,
+                &format!("auto-complete-{}", uuid::Uuid::new_v4()),
+                "run.complete",
+                meta,
+            );
+
+            // Complete the run and schedule next if recurring.
+            let next_run_snapshot = {
+                if let Ok(mut store) = state.run_store.lock() {
+                    let next_run_id = store.complete_run_and_schedule_next(run_id, |sched| {
+                        Scheduler::calculate_next_run(sched)
+                    });
+                    next_run_id.and_then(|new_run_id| {
+                        store.get_run(&new_run_id).map(|next_run| {
+                            let max_runs = next_run
+                                .metadata
+                                .get("scheduler_max_runs")
+                                .and_then(|v| v.as_u64());
+                            let run_number = next_run
+                                .metadata
+                                .get("scheduler_run_number")
+                                .and_then(|v| v.as_u64());
+                            (new_run_id, max_runs, run_number)
+                        })
+                    })
+                } else {
+                    None
                 }
+            };
+
+            if let Some((new_run_id, max_runs, run_number)) = next_run_snapshot {
+                log::info!(
+                    "[Gateway] Created next recurring run {} after completing {}",
+                    new_run_id,
+                    run_id
+                );
+
+                let mut meta = HashMap::new();
+                meta.insert(
+                    "parent_run_id".to_string(),
+                    Value::String(run_id.to_string()),
+                );
+                if let Some(max_runs) = max_runs {
+                    meta.insert("max_run".to_string(), Value::Integer(max_runs as i64));
+                }
+                if let Some(run_number) = run_number {
+                    meta.insert("run_number".to_string(), Value::Integer(run_number as i64));
+                }
+                let _ = record_chat_audit_event(
+                    &state.chain,
+                    "chat",
+                    "chat",
+                    session_id,
+                    &new_run_id,
+                    &format!("scheduled-next-{}", uuid::Uuid::new_v4()),
+                    "run.create",
+                    meta,
+                );
             }
         }
     }
@@ -1700,6 +1993,55 @@ async fn execute_handler(
                     payload.capability_id,
                     err
                 );
+
+                // Check if this is an approval-required error and transition run to PausedApproval
+                if err.contains("requires approval") || err.contains("Approval ID:") {
+                    if let Some(run_id) = &correlated_run_id {
+                        // Extract approval ID if present
+                        let approval_id = err
+                            .split("Approval ID:")
+                            .nth(1)
+                            .and_then(|s| s.split_whitespace().next())
+                            .map(|s| s.trim_end_matches('.').to_string());
+
+                        let reason = if let Some(ref id) = approval_id {
+                            format!("Waiting for approval: {}", id)
+                        } else {
+                            "Waiting for approval".to_string()
+                        };
+
+                        log::info!(
+                            "[Gateway] Run {} requires approval, transitioning to PausedApproval",
+                            run_id
+                        );
+
+                        let mut store = state.run_store.lock().unwrap();
+                        store.update_run_state(run_id, RunState::PausedApproval { reason });
+
+                        // Record the transition
+                        let mut transition_meta = HashMap::new();
+                        transition_meta.insert(
+                            "reason".to_string(),
+                            Value::String("approval_required".to_string()),
+                        );
+                        if let Some(ref id) = approval_id {
+                            transition_meta
+                                .insert("approval_id".to_string(), Value::String(id.clone()));
+                        }
+                        transition_meta.insert(
+                            "rule_id".to_string(),
+                            Value::String("chat.run.approval_required".to_string()),
+                        );
+                        let _ = record_run_event(
+                            &state,
+                            &payload.session_id,
+                            run_id,
+                            "approval-required",
+                            "run.transition",
+                            transition_meta,
+                        );
+                    }
+                }
             }
             if let Some(run_id) = payload.inputs.get("run_id").and_then(|v| v.as_str()) {
                 if let Ok(mut store) = state.run_store.lock() {
@@ -2000,16 +2342,7 @@ async fn list_sessions_handler(
     State(state): State<Arc<GatewayState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<SessionInfoResponse>>, StatusCode> {
-    let provided_token = headers
-        .get("X-Admin-Token")
-        .or_else(|| headers.get("X-Agent-Token"))
-        .and_then(|v| v.to_str().ok());
-
-    let is_admin = provided_token
-        .map(|t| state.admin_tokens.contains(&t.to_string()))
-        .unwrap_or(false);
-
-    if !is_admin {
+    if !is_admin_request(&state, &headers) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -2033,6 +2366,72 @@ async fn list_sessions_handler(
         .collect();
 
     Ok(Json(response))
+}
+
+fn is_admin_request(state: &GatewayState, headers: &axum::http::HeaderMap) -> bool {
+    let provided_token = headers
+        .get("X-Admin-Token")
+        .or_else(|| headers.get("X-Agent-Token"))
+        .and_then(|v| v.to_str().ok());
+
+    provided_token
+        .map(|t| state.admin_tokens.contains(&t.to_string()))
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Serialize)]
+struct SpawnLlmProfileResponse {
+    profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetSpawnLlmProfileRequest {
+    profile: Option<String>,
+}
+
+async fn get_spawn_llm_profile_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<SpawnLlmProfileResponse>, StatusCode> {
+    if !is_admin_request(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let profile = state.spawn_llm_profile.read().await.clone();
+    Ok(Json(SpawnLlmProfileResponse { profile }))
+}
+
+async fn set_spawn_llm_profile_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<SetSpawnLlmProfileRequest>,
+) -> Result<Json<SpawnLlmProfileResponse>, StatusCode> {
+    if !is_admin_request(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let normalized = payload.profile.and_then(|p| {
+        let t = p.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    });
+
+    {
+        let mut guard = state.spawn_llm_profile.write().await;
+        *guard = normalized.clone();
+    }
+
+    log::info!(
+        "[Gateway] Updated spawn LLM profile override to {:?}",
+        normalized
+    );
+
+    Ok(Json(SpawnLlmProfileResponse {
+        profile: normalized,
+    }))
 }
 
 /// Capabilities list response
@@ -2098,6 +2497,10 @@ pub struct CreateRunRequest {
     pub completion_predicate: Option<serde_json::Value>,
     pub schedule: Option<String>,
     pub next_run_at: Option<DateTime<Utc>>,
+    pub max_run: Option<u32>,
+    pub run_id: Option<String>,
+    pub trigger_capability_id: Option<String>,
+    pub trigger_inputs: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2117,6 +2520,10 @@ struct CreateRunResponse {
     state: String,
     correlation_id: String,
     next_run_at: Option<DateTime<Utc>>,
+}
+
+fn is_scheduled_payload(payload: &CreateRunRequest) -> bool {
+    payload.schedule.is_some() || payload.next_run_at.is_some()
 }
 
 async fn create_run_handler(
@@ -2158,34 +2565,93 @@ async fn create_run_handler(
         max_network_ingress_bytes: b.max_network_ingress_bytes,
     });
 
-    // Create the run
-    // Create the run
-    let mut run = if payload.schedule.is_some() || payload.next_run_at.is_some() {
-        let schedule = payload
-            .schedule
-            .clone()
-            .unwrap_or_else(|| "one-off".to_string());
-        let next_run = payload.next_run_at.unwrap_or_else(|| {
-            // Simple delay-based schedule if next_run_at not specified
-            // In future, parse cron expression here
-            Utc::now() + chrono::Duration::seconds(5)
-        });
-        Run::new_scheduled(
-            payload.session_id.clone(),
-            payload.goal.clone(),
-            schedule,
-            next_run,
-            budget.clone(),
+    // Check for duplicate scheduled runs with similar goals
+    if payload.schedule.is_some() || payload.next_run_at.is_some() {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Some(existing_run_id) = store.find_similar_scheduled_run(
+            &payload.session_id,
+            &payload.goal,
+            payload.schedule.as_deref(),
+            payload.next_run_at,
+            payload.trigger_capability_id.as_deref(),
+            payload.trigger_inputs.as_ref(),
         )
-    } else {
-        Run::new(
-            payload.session_id.clone(),
-            payload.goal.clone(),
-            budget.clone(),
-        )
-    };
+        {
+            log::info!(
+                "[Gateway] Deduplicating scheduled run: existing run {} found with similar goal for session {}",
+                existing_run_id,
+                payload.session_id
+            );
+            SheriffLogger::log_run(
+                "DEDUP",
+                &existing_run_id,
+                &payload.session_id,
+                &format!(
+                    "Returning existing scheduled run instead of creating duplicate for goal: {}",
+                    payload.goal
+                ),
+            );
+            // Return the existing run's info
+            if let Some(existing_run) = store.get_run(&existing_run_id) {
+                return Ok(Json(CreateRunResponse {
+                    run_id: existing_run_id,
+                    session_id: payload.session_id.clone(),
+                    goal: existing_run.goal.clone(),
+                    state: format!("{:?}", existing_run.state),
+                    correlation_id: existing_run.correlation_id.clone(),
+                    next_run_at: existing_run.next_run_at,
+                }));
+            }
+        }
+    }
 
-    if let Some(pred_value) = payload.completion_predicate {
+    // Create the run
+    // Create the run
+    let mut run = if is_scheduled_payload(&payload) {
+        if let Some(next_at) = payload.next_run_at {
+            Run::new_scheduled(
+                payload.session_id.clone(),
+                payload.goal.clone(),
+                payload
+                    .schedule
+                    .clone()
+                    .unwrap_or_else(|| "one-off".to_string()),
+                next_at,
+                budget.clone(),
+                payload.trigger_capability_id.clone(),
+                payload.trigger_inputs.clone(),
+            )
+        } else if let Some(ref sched) = payload.schedule {
+            if let Some(next_at) = crate::chat::scheduler::Scheduler::calculate_next_run(sched) {
+                Run::new_scheduled(
+                    payload.session_id.clone(),
+                    payload.goal.clone(),
+                    sched.clone(),
+                    next_at,
+                    budget.clone(),
+                    payload.trigger_capability_id.clone(),
+                    payload.trigger_inputs.clone(),
+                )
+            } else {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        } else {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    } else {
+        let mut r = Run::new(
+            payload.session_id.clone(),
+            payload.goal.clone(),
+            budget.clone(),
+        );
+        r.trigger_capability_id = payload.trigger_capability_id.clone();
+        r.trigger_inputs = payload.trigger_inputs.clone();
+        r
+    };
+    if let Some(pred_value) = &payload.completion_predicate {
         let predicate: Option<crate::chat::Predicate> = if pred_value.is_string() {
             // Legacy/convenience migration
             let s = pred_value.as_str().unwrap();
@@ -2198,9 +2664,22 @@ async fn create_run_handler(
                 None
             }
         } else {
-            serde_json::from_value(pred_value).ok()
+            serde_json::from_value(pred_value.clone()).ok()
         };
         run.completion_predicate = predicate;
+    }
+
+    if is_scheduled_payload(&payload) {
+        run.metadata.insert(
+            "scheduler_run_number".to_string(),
+            serde_json::Value::from(1_u64),
+        );
+        if let Some(max_runs) = payload.max_run {
+            run.metadata.insert(
+                "scheduler_max_runs".to_string(),
+                serde_json::Value::from(max_runs as u64),
+            );
+        }
     }
 
     let run_id = run.id.clone();
@@ -2264,6 +2743,10 @@ async fn create_run_handler(
         if let Some(next) = next_run_at {
             meta.insert("next_run_at".to_string(), Value::String(next.to_rfc3339()));
         }
+        if let Some(max_runs) = payload.max_run {
+            meta.insert("max_run".to_string(), Value::Integer(max_runs as i64));
+            meta.insert("run_number".to_string(), Value::Integer(1));
+        }
 
         let _ = record_run_event(
             &state,
@@ -2309,6 +2792,7 @@ async fn create_run_handler(
                 channel_id,
                 kickoff,
                 "system".to_string(),
+                Some(run_id.clone()),
             )
             .await
         {
@@ -2345,10 +2829,36 @@ async fn resume_run_handler(
     axum::extract::Path(run_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     // 1. Auth check
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
+
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            let session_id = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+                run.session_id.clone()
+            };
+
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     let (session_id, budget, checkpoint_id) = {
         let store = state
@@ -2367,12 +2877,6 @@ async fn resume_run_handler(
             run.latest_checkpoint_id.clone(),
         )
     };
-
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     SheriffLogger::log_run(
         "RESUME",
@@ -2420,7 +2924,13 @@ async fn resume_run_handler(
     let resume_msg = format!("Resuming run {}. Checkpoint: {}", run_id, ckpt.id);
     let _ = state
         .session_registry
-        .push_message_to_session(&session_id, channel_id, resume_msg, "system".to_string())
+        .push_message_to_session(
+            &session_id,
+            channel_id,
+            resume_msg,
+            "system".to_string(),
+            Some(run_id),
+        )
         .await;
 
     Ok(StatusCode::OK)
@@ -2441,10 +2951,36 @@ async fn checkpoint_run_handler(
     Json(payload): Json<CheckpointRunRequest>,
 ) -> Result<Json<String>, StatusCode> {
     // 1. Auth check
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
+
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            let session_id = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+                run.session_id.clone()
+            };
+
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     let session_id = {
         let store = state
@@ -2456,12 +2992,6 @@ async fn checkpoint_run_handler(
             .map(|r| r.session_id.clone())
             .ok_or(StatusCode::NOT_FOUND)?
     };
-
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     // 2. Create checkpoint
     let ckpt = Checkpoint::new(run_id.clone(), payload.env, payload.ir_pos);
@@ -2521,30 +3051,41 @@ async fn get_run_handler(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
 ) -> Result<Json<GetRunResponse>, StatusCode> {
-    // Require X-Agent-Token header
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
 
-    // Resolve the owning session_id for authorization (drop lock before await).
-    let session_id = {
-        let store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .get_run(&run_id)
-            .map(|r| r.session_id.clone())
-            .ok_or(StatusCode::NOT_FOUND)?
-    };
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Resolve the owning session_id for authorization (drop lock before await).
+            let session_id = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                store
+                    .get_run(&run_id)
+                    .map(|r| r.session_id.clone())
+                    .ok_or(StatusCode::NOT_FOUND)?
+            };
 
-    // Validate token against the owning session
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+            // Validate token against the owning session
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     let store = state
         .run_store
@@ -2600,18 +3141,29 @@ async fn list_runs_handler(
     headers: axum::http::HeaderMap,
     Query(query): Query<ListRunsQuery>,
 ) -> Result<Json<ListRunsResponse>, StatusCode> {
-    // Require X-Agent-Token header
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
 
-    // Validate token against session
-    let _session = state
-        .session_registry
-        .validate_token(&query.session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Validate agent token against session
+            let _session = state
+                .session_registry
+                .validate_token(&query.session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     let store = state
         .run_store
@@ -2673,28 +3225,40 @@ async fn list_run_actions_handler(
     axum::extract::Path(run_id): axum::extract::Path<String>,
     Query(params): Query<ListRunActionsQuery>,
 ) -> Result<Json<ListRunActionsResponse>, StatusCode> {
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
 
-    // Resolve owning session for authorization.
-    let session_id = {
-        let store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store
-            .get_run(&run_id)
-            .map(|r| r.session_id.clone())
-            .ok_or(StatusCode::NOT_FOUND)?
-    };
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Resolve owning session for authorization.
+            let session_id = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                store
+                    .get_run(&run_id)
+                    .map(|r| r.session_id.clone())
+                    .ok_or(StatusCode::NOT_FOUND)?
+            };
 
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     let limit = params.limit.unwrap_or(200).min(2000);
     let guard = state
@@ -2747,29 +3311,39 @@ async fn cancel_run_handler(
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
 ) -> Result<Json<CancelRunResponse>, StatusCode> {
-    // Require X-Agent-Token header
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    // Get run info in a block scope to ensure guard is dropped
+    // Resolve run info (needed for auth and audit)
     let (previous_state, session_id) = {
         let store = state
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
         let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
         (format!("{:?}", run.state), run.session_id.clone())
-    }; // Guard dropped here
+    };
 
-    // Validate session ownership (async)
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
+
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Validate session ownership (async)
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     // Re-acquire lock and cancel
     let cancelled = {
@@ -2837,29 +3411,39 @@ async fn transition_run_handler(
     axum::extract::Path(run_id): axum::extract::Path<String>,
     Json(payload): Json<TransitionRunRequest>,
 ) -> Result<Json<TransitionRunResponse>, StatusCode> {
-    // Require X-Agent-Token header
-    let token = headers
-        .get("X-Agent-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    // Get run info in a block scope to ensure guard is dropped
+    // Resolve run info (needed for auth and audit)
     let (previous_state, session_id) = {
         let store = state
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
         let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
         (format!("{:?}", run.state), run.session_id.clone())
     };
 
-    // Validate session ownership (async)
-    let _session = state
-        .session_registry
-        .validate_token(&session_id, token)
-        .await
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    // Require X-Agent-Token header OR X-Internal-Secret
+    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+    let maybe_secret = headers
+        .get("X-Internal-Secret")
+        .and_then(|v| v.to_str().ok());
+
+    match (maybe_token, maybe_secret) {
+        (Some(token), _) => {
+            // Validate session ownership (async)
+            let _session = state
+                .session_registry
+                .validate_token(&session_id, token)
+                .await
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+        }
+        (_, Some(secret)) => {
+            // Validate internal secret
+            if secret != state.internal_api_secret {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
 
     // Parse requested state
     let new_state = match payload.new_state.as_str() {
@@ -2925,7 +3509,7 @@ async fn transition_run_handler(
     }
 
     // Re-acquire lock and transition (and optionally reset/update budget).
-    let transitioned = {
+    let (transitioned, next_run_id) = {
         SheriffLogger::log_run(
             "TRANSITION",
             &run_id,
@@ -2951,11 +3535,69 @@ async fn transition_run_handler(
             }
 
             run.transition(new_state.clone());
-            true
+
+            // If transitioning to Done, check if this is a recurring run and schedule next
+            let next_run_id = if matches!(new_state, crate::chat::run::RunState::Done) {
+                store.complete_run_and_schedule_next(&run_id, |sched| {
+                    Scheduler::calculate_next_run(sched)
+                })
+            } else {
+                None
+            };
+
+            (true, next_run_id)
         } else {
-            false
+            (false, None)
         }
     };
+
+    // Log and audit next run creation if this was a recurring task
+    if let Some(ref new_run_id) = next_run_id {
+        log::info!(
+            "[Gateway] Created next recurring run {} after completing {} via API transition",
+            new_run_id,
+            run_id
+        );
+
+        SheriffLogger::log_run(
+            "SCHEDULED-NEXT",
+            new_run_id,
+            &session_id,
+            &format!("Created after {} completed", run_id),
+        );
+
+        // Audit the next run creation
+        let mut meta = HashMap::new();
+        meta.insert("parent_run_id".to_string(), Value::String(run_id.clone()));
+        if let Ok(store) = state.run_store.lock() {
+            if let Some(next_run) = store.get_run(new_run_id) {
+                if let Some(max_runs) = next_run
+                    .metadata
+                    .get("scheduler_max_runs")
+                    .and_then(|v| v.as_u64())
+                {
+                    meta.insert("max_run".to_string(), Value::Integer(max_runs as i64));
+                }
+                if let Some(run_number) = next_run
+                    .metadata
+                    .get("scheduler_run_number")
+                    .and_then(|v| v.as_u64())
+                {
+                    meta.insert("run_number".to_string(), Value::Integer(run_number as i64));
+                }
+            }
+        }
+        let _ = record_chat_audit_event(
+            &state.chain,
+            "chat",
+            "chat",
+            &session_id,
+            new_run_id,
+            &format!("scheduled-next-{}", uuid::Uuid::new_v4()),
+            "run.create",
+            meta,
+        );
+    }
 
     // Persist transition to the causal chain (minimal audit trail).
     {
@@ -3205,25 +3847,50 @@ async fn agent_log_handler(
     // Log the agent LLM consultation to the Causal Chain
     let action_id = uuid::Uuid::new_v4().to_string();
     let plan_id = format!("agent-plan-{}", Utc::now().timestamp_millis());
-    
+
     // Build metadata from the request
     let mut metadata = HashMap::new();
-    metadata.insert("session_id".to_string(), Value::String(payload.session_id.clone()));
+    metadata.insert(
+        "session_id".to_string(),
+        Value::String(payload.session_id.clone()),
+    );
     metadata.insert("run_id".to_string(), Value::String(payload.run_id.clone()));
-    metadata.insert("step_id".to_string(), Value::String(payload.step_id.clone()));
-    metadata.insert("iteration".to_string(), Value::Integer(payload.iteration as i64));
+    metadata.insert(
+        "step_id".to_string(),
+        Value::String(payload.step_id.clone()),
+    );
+    metadata.insert(
+        "iteration".to_string(),
+        Value::Integer(payload.iteration as i64),
+    );
     metadata.insert("is_initial".to_string(), Value::Boolean(payload.is_initial));
-    metadata.insert("understanding".to_string(), Value::String(payload.understanding.clone()));
-    metadata.insert("reasoning".to_string(), Value::String(payload.reasoning.clone()));
-    metadata.insert("task_complete".to_string(), Value::Boolean(payload.task_complete));
-    
+    metadata.insert(
+        "understanding".to_string(),
+        Value::String(payload.understanding.clone()),
+    );
+    metadata.insert(
+        "reasoning".to_string(),
+        Value::String(payload.reasoning.clone()),
+    );
+    metadata.insert(
+        "task_complete".to_string(),
+        Value::Boolean(payload.task_complete),
+    );
+
     // Add planned capabilities
-    let caps: Vec<Value> = payload.planned_capabilities
+    let caps: Vec<Value> = payload
+        .planned_capabilities
         .iter()
         .map(|c| {
             let mut cap_map = HashMap::new();
-            cap_map.insert(MapKey::String("capability_id".to_string()), Value::String(c.capability_id.clone()));
-            cap_map.insert(MapKey::String("reasoning".to_string()), Value::String(c.reasoning.clone()));
+            cap_map.insert(
+                MapKey::String("capability_id".to_string()),
+                Value::String(c.capability_id.clone()),
+            );
+            cap_map.insert(
+                MapKey::String("reasoning".to_string()),
+                Value::String(c.reasoning.clone()),
+            );
             if let Some(ref inputs) = c.inputs {
                 if let Ok(rtfs_val) = json_to_rtfs_value(inputs) {
                     cap_map.insert(MapKey::String("inputs".to_string()), rtfs_val);
@@ -3233,16 +3900,25 @@ async fn agent_log_handler(
         })
         .collect();
     metadata.insert("planned_capabilities".to_string(), Value::Vector(caps));
-    
+
     // Add token usage if available
     if let Some(ref usage) = payload.token_usage {
         let mut usage_map = HashMap::new();
-        usage_map.insert(MapKey::String("prompt_tokens".to_string()), Value::Integer(usage.prompt_tokens as i64));
-        usage_map.insert(MapKey::String("completion_tokens".to_string()), Value::Integer(usage.completion_tokens as i64));
-        usage_map.insert(MapKey::String("total_tokens".to_string()), Value::Integer(usage.total_tokens as i64));
+        usage_map.insert(
+            MapKey::String("prompt_tokens".to_string()),
+            Value::Integer(usage.prompt_tokens as i64),
+        );
+        usage_map.insert(
+            MapKey::String("completion_tokens".to_string()),
+            Value::Integer(usage.completion_tokens as i64),
+        );
+        usage_map.insert(
+            MapKey::String("total_tokens".to_string()),
+            Value::Integer(usage.total_tokens as i64),
+        );
         metadata.insert("token_usage".to_string(), Value::Map(usage_map));
     }
-    
+
     // Add model if available
     if let Some(ref model) = payload.model {
         metadata.insert("model".to_string(), Value::String(model.clone()));
@@ -3255,7 +3931,7 @@ async fn agent_log_handler(
     if let Some(ref response) = payload.response {
         metadata.insert("response".to_string(), Value::String(response.clone()));
     }
-    
+
     // Create the action
     let action = crate::types::Action {
         action_id: action_id.clone(),
@@ -3266,7 +3942,11 @@ async fn agent_log_handler(
         action_type: crate::types::ActionType::AgentLlmConsultation,
         function_name: Some(format!(
             "agent.llm.{}",
-            if payload.is_initial { "initial" } else { "follow_up" }
+            if payload.is_initial {
+                "initial"
+            } else {
+                "follow_up"
+            }
         )),
         arguments: None,
         result: None,
@@ -3275,7 +3955,7 @@ async fn agent_log_handler(
         timestamp: Utc::now().timestamp_millis() as u64,
         metadata,
     };
-    
+
     // Append to Causal Chain
     match state.chain.lock() {
         Ok(mut chain) => {
@@ -3300,7 +3980,7 @@ async fn agent_log_handler(
             }));
         }
     }
-    
+
     log::debug!(
         "[Gateway] Logged agent LLM consultation: session={} run={} iteration={} complete={}",
         payload.session_id,
@@ -3308,7 +3988,7 @@ async fn agent_log_handler(
         payload.iteration,
         payload.task_complete
     );
-    
+
     Ok(Json(AgentLogResponse {
         success: true,
         action_id,
