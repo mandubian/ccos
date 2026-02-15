@@ -203,6 +203,10 @@ pub struct Run {
     pub latest_checkpoint_id: Option<String>,
     /// Metadata for extensibility
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Optional capability ID to trigger instead of goal-based LLM kickoff
+    pub trigger_capability_id: Option<String>,
+    /// Optional inputs for the trigger capability
+    pub trigger_inputs: Option<serde_json::Value>,
 }
 
 impl Run {
@@ -226,6 +230,8 @@ impl Run {
             next_run_at: None,
             latest_checkpoint_id: None,
             metadata: HashMap::new(),
+            trigger_capability_id: None,
+            trigger_inputs: None,
         }
     }
 
@@ -235,11 +241,22 @@ impl Run {
         schedule: String,
         next_run_at: DateTime<Utc>,
         budget: Option<BudgetContext>,
+        trigger_capability_id: Option<String>,
+        trigger_inputs: Option<serde_json::Value>,
     ) -> Self {
         let mut run = Self::new(session_id, goal, budget);
         run.state = RunState::Scheduled;
         run.schedule = Some(schedule);
         run.next_run_at = Some(next_run_at);
+        run.trigger_capability_id = trigger_capability_id;
+        run.trigger_inputs = trigger_inputs;
+        run
+    }
+
+    pub fn new_ephemeral(session_id: String, goal: String, budget: Option<BudgetContext>) -> Self {
+        let mut run = Self::new(session_id, goal, budget);
+        run.metadata
+            .insert("ephemeral".to_string(), serde_json::json!("true"));
         run
     }
 
@@ -342,6 +359,28 @@ impl Run {
         let created_at =
             DateTime::from_timestamp(action.timestamp as i64 / 1000, 0).unwrap_or_else(Utc::now);
 
+        let mut metadata = HashMap::new();
+        if let Some(max_runs) = meta
+            .get("max_run")
+            .or_else(|| meta.get("scheduler_max_runs"))
+            .and_then(|v| v.as_integer())
+        {
+            metadata.insert(
+                "scheduler_max_runs".to_string(),
+                serde_json::Value::from(max_runs),
+            );
+        }
+        if let Some(run_number) = meta
+            .get("run_number")
+            .or_else(|| meta.get("scheduler_run_number"))
+            .and_then(|v| v.as_integer())
+        {
+            metadata.insert(
+                "scheduler_run_number".to_string(),
+                serde_json::Value::from(run_number),
+            );
+        }
+
         Some(Self {
             id: run_id.to_string(),
             session_id: session_id.to_string(),
@@ -374,7 +413,14 @@ impl Run {
                 .get("latest_checkpoint_id")
                 .and_then(|v| v.as_string())
                 .map(|s| s.to_string()),
-            metadata: HashMap::new(),
+            metadata,
+            trigger_capability_id: meta
+                .get("trigger_capability_id")
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_string()),
+            trigger_inputs: meta
+                .get("trigger_inputs")
+                .and_then(|v| crate::utils::value_conversion::rtfs_value_to_json(v).ok()),
         })
     }
 }
@@ -477,6 +523,61 @@ impl RunStore {
         None
     }
 
+    /// Find a scheduled run that matches the request for deduplication.
+    /// Returns the run_id if a matching scheduled run exists.
+    pub fn find_similar_scheduled_run(
+        &self,
+        session_id: &str,
+        goal: &str,
+        schedule: Option<&str>,
+        next_run_at: Option<DateTime<Utc>>,
+        trigger_capability_id: Option<&str>,
+        trigger_inputs: Option<&serde_json::Value>,
+    ) -> Option<String> {
+        let normalized_goal = Self::normalize_goal(goal);
+        let normalized_schedule = schedule.unwrap_or("one-off");
+        let ids = self.runs_by_session.get(session_id)?;
+        for id in ids.iter().rev() {
+            if let Some(run) = self.runs.get(id) {
+                if matches!(run.state, RunState::Scheduled) {
+                    let normalized_existing = Self::normalize_goal(&run.goal);
+                    if normalized_goal != normalized_existing {
+                        continue;
+                    }
+
+                    let existing_schedule = run.schedule.as_deref().unwrap_or("one-off");
+                    if existing_schedule != normalized_schedule {
+                        continue;
+                    }
+
+                    // For one-off runs, dedup only if the exact scheduled instant also matches.
+                    if normalized_schedule == "one-off" && run.next_run_at != next_run_at {
+                        continue;
+                    }
+
+                    if run.trigger_capability_id.as_deref() != trigger_capability_id {
+                        continue;
+                    }
+
+                    if run.trigger_inputs.as_ref() != trigger_inputs {
+                        continue;
+                    }
+
+                    return Some(id.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Normalize a goal string for comparison (lowercase, trim, collapse whitespace)
+    fn normalize_goal(goal: &str) -> String {
+        goal.to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub fn update_run_state(&mut self, run_id: &str, new_state: RunState) -> bool {
         if let Some(run) = self.runs.get_mut(run_id) {
             match (&run.state, &new_state) {
@@ -495,6 +596,94 @@ impl RunStore {
 
     pub fn cancel_run(&mut self, run_id: &str) -> bool {
         self.update_run_state(run_id, RunState::Cancelled)
+    }
+
+    /// Complete a run and create the next recurring run if applicable.
+    /// Returns the ID of the newly created run if this was a recurring task.
+    pub fn complete_run_and_schedule_next(
+        &mut self,
+        run_id: &str,
+        calculate_next: impl Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<String> {
+        // Get the run's schedule before transitioning to Done
+        let (session_id, goal, schedule, budget, metadata) = {
+            let run = self.runs.get(run_id)?;
+            (
+                run.session_id.clone(),
+                run.goal.clone(),
+                run.schedule.clone(),
+                run.budget.clone(),
+                run.metadata.clone(),
+            )
+        };
+
+        let max_runs = metadata
+            .get("scheduler_max_runs")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let current_run_number = metadata
+            .get("scheduler_run_number")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(1);
+
+        // Transition to Done
+        self.update_run_state(run_id, RunState::Done);
+
+        // Check if this is a recurring task
+        if let Some(ref sched) = schedule {
+            if sched != "one-off" {
+                if let Some(max_runs) = max_runs {
+                    if current_run_number >= max_runs {
+                        log::info!(
+                            "[RunStore] Reached max runs ({}) for recurring schedule '{}'; not creating next run",
+                            max_runs,
+                            sched
+                        );
+                        return None;
+                    }
+                }
+
+                if let Some(next_time) = calculate_next(sched) {
+                    log::info!(
+                        "[RunStore] Creating next recurring run for schedule '{}' at {}",
+                        sched,
+                        next_time.to_rfc3339()
+                    );
+                    let mut new_run = Run::new_scheduled(
+                        session_id,
+                        goal,
+                        sched.clone(),
+                        next_time,
+                        Some(budget),
+                        None,
+                        None,
+                    );
+                    new_run.metadata = metadata;
+                    new_run.metadata.insert(
+                        "scheduler_run_number".to_string(),
+                        serde_json::Value::from((current_run_number + 1) as u64),
+                    );
+                    if let Some(max_runs) = max_runs {
+                        new_run.metadata.insert(
+                            "scheduler_max_runs".to_string(),
+                            serde_json::Value::from(max_runs as u64),
+                        );
+                    }
+                    let new_run_id = new_run.id.clone();
+                    new_run.trigger_capability_id = self
+                        .runs
+                        .get(run_id)
+                        .and_then(|r| r.trigger_capability_id.clone());
+                    new_run.trigger_inputs =
+                        self.runs.get(run_id).and_then(|r| r.trigger_inputs.clone());
+                    self.create_run(new_run);
+                    return Some(new_run_id);
+                }
+            }
+        }
+
+        None
     }
 
     pub fn rebuild_from_chain(actions: &[crate::types::Action]) -> Self {
@@ -674,6 +863,80 @@ mod tests {
 
         store.cancel_run(&run_id);
         assert!(store.get_active_run_for_session("session-1").is_none());
+    }
+
+    #[test]
+    fn test_scheduled_dedup_matches_schedule_and_trigger() {
+        let mut store = RunStore::new();
+        let session_id = "session-1".to_string();
+        let next_at = Utc::now();
+        let run = Run::new_scheduled(
+            session_id.clone(),
+            "Compute next fibonacci".to_string(),
+            "*/10 * * * * *".to_string(),
+            next_at,
+            None,
+            Some("ccos.execute.python".to_string()),
+            Some(serde_json::json!({"code":"print('ok')"})),
+        );
+        let run_id = store.create_run(run);
+
+        let found = store.find_similar_scheduled_run(
+            &session_id,
+            "compute   NEXT fibonacci",
+            Some("*/10 * * * * *"),
+            None,
+            Some("ccos.execute.python"),
+            Some(&serde_json::json!({"code":"print('ok')"})),
+        );
+        assert_eq!(found, Some(run_id));
+
+        let not_found = store.find_similar_scheduled_run(
+            &session_id,
+            "compute next fibonacci",
+            Some("*/5 * * * * *"),
+            None,
+            Some("ccos.execute.python"),
+            Some(&serde_json::json!({"code":"print('ok')"})),
+        );
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_scheduled_dedup_one_off_requires_same_time() {
+        let mut store = RunStore::new();
+        let session_id = "session-1".to_string();
+        let next_at = Utc::now();
+        let run = Run::new_scheduled(
+            session_id.clone(),
+            "do once".to_string(),
+            "one-off".to_string(),
+            next_at,
+            None,
+            None,
+            None,
+        );
+        let _ = store.create_run(run);
+
+        let found_same_time = store.find_similar_scheduled_run(
+            &session_id,
+            "do once",
+            None,
+            Some(next_at),
+            None,
+            None,
+        );
+        assert!(found_same_time.is_some());
+
+        let found_other_time = store.find_similar_scheduled_run(
+            &session_id,
+            "do once",
+            None,
+            Some(next_at + chrono::Duration::seconds(5)),
+            None,
+            None,
+        );
+        assert!(found_other_time.is_none());
     }
 
     #[test]
