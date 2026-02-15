@@ -58,6 +58,7 @@ pub struct ChatMessage {
     pub content: String,
     pub sender: String,
     pub timestamp: DateTime<Utc>,
+    pub run_id: Option<String>,
 }
 
 impl SessionState {
@@ -85,7 +86,13 @@ impl SessionState {
     }
 
     /// Add a message to the inbox
-    pub fn push_message(&mut self, channel_id: String, content: String, sender: String) {
+    pub fn push_message(
+        &mut self,
+        channel_id: String,
+        content: String,
+        sender: String,
+        run_id: Option<String>,
+    ) {
         let msg = ChatMessage {
             id: format!(
                 "msg_{}",
@@ -95,6 +102,7 @@ impl SessionState {
             content,
             sender,
             timestamp: Utc::now(),
+            run_id,
         };
         self.inbox.push(msg);
         self.touch();
@@ -226,10 +234,11 @@ impl SessionRegistry {
         channel_id: String,
         content: String,
         sender: String,
+        run_id: Option<String>,
     ) -> Result<(), String> {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            session.push_message(channel_id, content, sender);
+            session.push_message(channel_id, content, sender, run_id);
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -338,8 +347,18 @@ mod tests {
     async fn test_inbox_operations() {
         let mut session = SessionState::new("test".to_string());
 
-        session.push_message("chan1".to_string(), "Hello".to_string(), "user".to_string());
-        session.push_message("chan1".to_string(), "World".to_string(), "user".to_string());
+        session.push_message(
+            "chan1".to_string(),
+            "Hello".to_string(),
+            "user".to_string(),
+            None,
+        );
+        session.push_message(
+            "chan1".to_string(),
+            "World".to_string(),
+            "user".to_string(),
+            None,
+        );
 
         assert_eq!(session.inbox.len(), 2);
 

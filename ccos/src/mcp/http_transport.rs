@@ -771,6 +771,13 @@ async fn handle_api_approvals_list(
                         "reason": reason
                     }),
                 ),
+                ApprovalCategory::PackageApproval { package, runtime } => (
+                    "PackageApproval",
+                    json!({
+                        "package": package,
+                        "runtime": runtime,
+                    }),
+                ),
             };
 
             // Determine status string for UI filtering
@@ -826,6 +833,35 @@ async fn handle_api_approval_approve(
 
     if let Some(ref queue) = state.approval_queue {
         // Note: SecretRequired handling was removed as the feature was deprecated
+
+        log::info!(
+            "[http_transport] Attempting to approve approval with ID: {}",
+            id
+        );
+
+        // First, try to get the approval to see if it exists at all
+        let all_approvals = queue
+            .list(crate::approval::types::ApprovalFilter::default())
+            .await
+            .unwrap_or_default();
+        
+        let approval_exists = all_approvals.iter().any(|a| a.id == id);
+        if !approval_exists {
+            log::warn!(
+                "[http_transport] Approval {} not found in storage. Total approvals: {}",
+                id,
+                all_approvals.len()
+            );
+            // Log some existing approval IDs for debugging
+            for a in all_approvals.iter().take(5) {
+                log::debug!(
+                    "[http_transport] Existing approval: id={}, category={:?}, status={:?}",
+                    a.id,
+                    std::mem::discriminant(&a.category),
+                    a.status
+                );
+            }
+        }
 
         if let Some(req) = queue.get(&id).await.ok().flatten() {
             let secret_to_persist = match req.category {
@@ -1274,6 +1310,7 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
         <div class="main-pane">
             <div class="tabs">
                 <button class="tab active" data-status="pending" onclick="switchTab('pending')">⏳ Pending <span class="count" id="count-pending">0</span></button>
+                <button class="tab" data-status="approved" onclick="switchTab('approved')">✅ Approved <span class="count" id="count-approved">0</span></button>
                 <button class="tab" data-status="rejected" onclick="switchTab('rejected')">❌ Rejected <span class="count" id="count-rejected">0</span></button>
                 <button class="tab" data-status="expired" onclick="switchTab('expired')">⏰ Expired <span class="count" id="count-expired">0</span></button>
             </div>
@@ -1469,6 +1506,8 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 const actions = currentTab === 'pending' ? `
                     <button class="approve" onclick="approve('${a.id}')">✅ Approve</button>
                     <button class="reject" onclick="reject('${a.id}')">❌ Reject</button>
+                ` : currentTab === 'approved' ? `
+                    <button class="reject" onclick="reject('${a.id}')">❌ Revoke/Reject</button>
                 ` : `
                     <button class="reapprove" onclick="reapprove('${a.id}')">🔄 Re-approve</button>
                 `;
@@ -1534,9 +1573,11 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 
                 // Update counts
                 const pending = allApprovals.filter(a => a.status === 'pending').length;
+                const approved = allApprovals.filter(a => a.status === 'approved').length;
                 const rejected = allApprovals.filter(a => a.status === 'rejected').length;
                 const expired = allApprovals.filter(a => a.status === 'expired').length;
                 document.getElementById('count-pending').textContent = pending;
+                document.getElementById('count-approved').textContent = approved;
                 document.getElementById('count-rejected').textContent = rejected;
                 document.getElementById('count-expired').textContent = expired;
                 

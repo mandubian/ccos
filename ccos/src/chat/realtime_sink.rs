@@ -82,18 +82,6 @@ impl From<&Action> for ActionView {
             .as_ref()
             .map(|r| r.success);
 
-        // Create a human-readable summary
-        let summary = format!(
-            "{:?} - {} - {}",
-            action.action_type,
-            action.function_name.as_deref().unwrap_or("unknown"),
-            match success {
-                Some(true) => "success",
-                Some(false) => "failed",
-                None => "pending",
-            }
-        );
-
         // Convert metadata to JSON for streaming
         let mut json_map = serde_json::Map::new();
         for (key, value) in &action.metadata {
@@ -101,9 +89,35 @@ impl From<&Action> for ActionView {
             let json_val = rtfs_value_to_json(value);
             json_map.insert(key.clone(), json_val);
         }
+
+        let mut result_preview: Option<String> = None;
         
         // Also extract result value fields for code execution details
         if let Some(ref result) = action.result {
+            let result_json = rtfs_value_to_json(&result.value);
+            json_map.insert("result".to_string(), result_json.clone());
+
+            result_preview = Some(match &result_json {
+                serde_json::Value::Null => "null".to_string(),
+                serde_json::Value::Bool(b) => format!("{}", b),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => {
+                    if s.chars().count() > 140 {
+                        format!("{}...", s.chars().take(137).collect::<String>())
+                    } else {
+                        s.clone()
+                    }
+                }
+                other => {
+                    let serialized = serde_json::to_string(other).unwrap_or_else(|_| "<result>".to_string());
+                    if serialized.chars().count() > 140 {
+                        format!("{}...", serialized.chars().take(137).collect::<String>())
+                    } else {
+                        serialized
+                    }
+                }
+            });
+
             if let RtfsValue::Map(ref result_map) = result.value {
                 // Extract common execution result fields
                 for key in [
@@ -131,6 +145,21 @@ impl From<&Action> for ActionView {
                     }
                 }
             }
+        }
+
+        // Create a human-readable summary
+        let mut summary = format!(
+            "{:?} - {} - {}",
+            action.action_type,
+            action.function_name.as_deref().unwrap_or("unknown"),
+            match success {
+                Some(true) => "success",
+                Some(false) => "failed",
+                None => "pending",
+            }
+        );
+        if let Some(preview) = result_preview {
+            summary = format!("{} | result={}", summary, preview);
         }
 
         let metadata_json = if json_map.is_empty() {

@@ -346,6 +346,7 @@ struct ChatEvent {
     sender: String,
     #[allow(dead_code)]
     timestamp: String,
+    run_id: Option<String>,
 }
 
 /// Events response from /chat/events
@@ -400,7 +401,12 @@ struct PendingApproval {
 }
 
 impl PendingApproval {
-    fn new(approval_id: String, capability_id: String, inputs: serde_json::Value, event: ChatEvent) -> Self {
+    fn new(
+        approval_id: String,
+        capability_id: String,
+        inputs: serde_json::Value,
+        event: ChatEvent,
+    ) -> Self {
         Self {
             approval_id,
             capability_id,
@@ -419,6 +425,7 @@ struct AgentRuntime {
     capabilities: Vec<String>,
     last_loaded_skill_id: Option<String>,
     loaded_skill_urls: HashSet<String>,
+    loaded_skill_url_to_id: HashMap<String, String>,
     loaded_skill_ids: HashSet<String>,
     loaded_skill_capabilities: HashSet<String>,
     // Ephemeral per-skill bearer tokens (e.g. secrets returned by register-agent during onboarding).
@@ -442,6 +449,8 @@ struct AgentRuntime {
     // ── Approval Tracking ────────────────────────────────────────────────────
     /// Pending approvals waiting for resolution
     pending_approvals: HashMap<String, PendingApproval>,
+    /// Last time we polled pending approvals from the gateway
+    last_approval_poll: Instant,
 }
 
 impl AgentRuntime {
@@ -528,6 +537,7 @@ impl AgentRuntime {
             capabilities: Vec::new(),
             last_loaded_skill_id: None,
             loaded_skill_urls: HashSet::new(),
+            loaded_skill_url_to_id: HashMap::new(),
             loaded_skill_ids: HashSet::new(),
             loaded_skill_capabilities: HashSet::new(),
             skill_bearer_tokens: HashMap::new(),
@@ -543,6 +553,7 @@ impl AgentRuntime {
             budget_paused: false,
             // Approval tracking
             pending_approvals: HashMap::new(),
+            last_approval_poll: Instant::now(),
         }
     }
 
@@ -600,7 +611,9 @@ impl AgentRuntime {
                     &format!("⚠️ Budget exceeded: {}. Agent is stopping.", reason),
                 )
                 .await;
-            let _ = self.transition_run_state("Failed", Some(reason)).await;
+            let _ = self
+                .transition_run_state("Failed", Some(reason), event.run_id.as_deref())
+                .await;
             // Exit the process
             std::process::exit(0);
         } else {
@@ -615,7 +628,7 @@ impl AgentRuntime {
                 ),
             ).await;
             let _ = self
-                .transition_run_state("PausedApproval", Some(reason))
+                .transition_run_state("PausedApproval", Some(reason), event.run_id.as_deref())
                 .await;
             true // skip further actions
         }
@@ -650,9 +663,77 @@ impl AgentRuntime {
                 }
             }
 
+            // Periodically poll pending approvals so UI-only approvals resume
+            // automatically without requiring user to type "approved" in chat.
+            self.poll_pending_approvals_if_due().await?;
+
             // Wait before next poll
             sleep(Duration::from_millis(self.args.poll_interval_ms)).await;
         }
+    }
+
+    async fn poll_pending_approvals_if_due(&mut self) -> anyhow::Result<()> {
+        const APPROVAL_POLL_INTERVAL: Duration = Duration::from_secs(5);
+        if self.pending_approvals.is_empty() {
+            return Ok(());
+        }
+        if self.last_approval_poll.elapsed() < APPROVAL_POLL_INTERVAL {
+            return Ok(());
+        }
+        self.last_approval_poll = Instant::now();
+
+        let approval_ids: Vec<String> = self.pending_approvals.keys().cloned().collect();
+        let mut approved_ids = Vec::new();
+        let mut rejected_ids = Vec::new();
+
+        for approval_id in &approval_ids {
+            let status_check = self
+                .execute_capability(
+                    "ccos.approval.get_status",
+                    serde_json::json!({
+                        "approval_id": approval_id,
+                        "session_id": self.args.session_id,
+                    }),
+                )
+                .await;
+
+            let status = status_check.ok().and_then(|r| r.result).and_then(|v| {
+                v.get("status")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string())
+            });
+
+            match status.as_deref() {
+                Some("approved") => approved_ids.push(approval_id.clone()),
+                Some("rejected") => rejected_ids.push(approval_id.clone()),
+                _ => {}
+            }
+        }
+
+        for approval_id in rejected_ids {
+            if let Some(pending) = self.pending_approvals.remove(&approval_id) {
+                let msg = format!(
+                    "❌ Approval '{}' was rejected. Please review and retry the onboarding step if needed.",
+                    approval_id
+                );
+                let _ = self.send_response(&pending.event, &msg).await;
+                self.record_in_history("agent", msg, &pending.event.channel_id);
+            }
+        }
+
+        if let Some(first_approved_id) = approved_ids.into_iter().next() {
+            if let Some(pending) = self.pending_approvals.remove(&first_approved_id) {
+                let msg = format!(
+                    "✅ Approval '{}' detected as approved. Resuming onboarding automatically.",
+                    first_approved_id
+                );
+                let _ = self.send_response(&pending.event, &msg).await;
+                self.record_in_history("agent", msg, &pending.event.channel_id);
+                self.process_with_llm(pending.event).await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Verify connection to Gateway
@@ -734,7 +815,9 @@ impl AgentRuntime {
             self.args.gateway_url, self.args.session_id
         );
 
-        info!(
+        // Poll loop runs every interval and can flood logs at INFO level.
+        // Keep this at DEBUG for now to reduce noise in normal operation.
+        debug!(
             "[Agent→Gateway] Poll events session={} url={}",
             self.args.session_id, url
         );
@@ -747,7 +830,7 @@ impl AgentRuntime {
 
         if response.status().is_success() {
             let events_resp: EventsResponse = response.json().await?;
-            info!(
+            debug!(
                 "[Gateway→Agent] Events response session={} count={}",
                 self.args.session_id,
                 events_resp.messages.len()
@@ -776,25 +859,48 @@ impl AgentRuntime {
         // Store in history
         self.message_history.push(event.clone());
 
-        // Check for approval resolution messages
-        if event.sender == "system" && event.content.contains("Approval `") {
+        // Check for approval resolution messages (sender can vary by connector).
+        if event.content.contains("Approval `") {
             if let Some(approval_id) = self.extract_approval_id(&event.content) {
                 info!("[Agent] Detected approval resolution: {}", approval_id);
-                
+
                 // Check if this is one of our pending approvals
                 if let Some(pending) = self.pending_approvals.remove(&approval_id) {
                     let is_approved = event.content.contains("✅ Approved");
-                    
+
                     if is_approved {
-                        info!("[Agent] Approval {} approved, retrying capability: {}", 
-                            approval_id, pending.capability_id);
-                        
+                        info!(
+                            "[Agent] Approval {} approved, retrying capability: {}",
+                            approval_id, pending.capability_id
+                        );
+
+                        // For approval-producing capabilities, don't retry the same action
+                        // (that would recreate pending approvals). Resume planning instead.
+                        if pending.capability_id == "ccos.secrets.set"
+                            || pending.capability_id == "ccos.approval.request_human_action"
+                        {
+                            let msg = format!(
+                                "✅ Approval '{}' resolved. Resuming onboarding.",
+                                approval_id
+                            );
+                            self.send_response(&event, &msg).await?;
+                            self.record_in_history(
+                                "system",
+                                format!(
+                                    "[approval resume] {} resolved for {}",
+                                    approval_id, pending.capability_id
+                                ),
+                                &event.channel_id,
+                            );
+                            self.process_with_llm(pending.event).await?;
+                            return Ok(());
+                        }
+
                         // Retry the original capability with the same inputs
-                        let retry_result = self.execute_capability(
-                            &pending.capability_id, 
-                            pending.inputs.clone()
-                        ).await;
-                        
+                        let retry_result = self
+                            .execute_capability(&pending.capability_id, pending.inputs.clone())
+                            .await;
+
                         match retry_result {
                             Ok(ref resp) => {
                                 if resp.success {
@@ -805,8 +911,14 @@ impl AgentRuntime {
                                     );
                                     self.send_response(&event, &msg).await?;
                                 } else {
-                                    let error_msg = resp.error.clone().unwrap_or_else(|| "Unknown error".to_string());
-                                    warn!("[Agent] Retry failed for {}: {}", pending.capability_id, error_msg);
+                                    let error_msg = resp
+                                        .error
+                                        .clone()
+                                        .unwrap_or_else(|| "Unknown error".to_string());
+                                    warn!(
+                                        "[Agent] Retry failed for {}: {}",
+                                        pending.capability_id, error_msg
+                                    );
                                     let msg = format!(
                                         "⚠️ Approval was granted but the action still failed: {}",
                                         error_msg
@@ -816,23 +928,21 @@ impl AgentRuntime {
                             }
                             Err(ref e) => {
                                 error!("[Agent] Retry error for {}: {}", pending.capability_id, e);
-                                let msg = format!(
-                                    "⚠️ Error retrying after approval: {}",
-                                    e
-                                );
+                                let msg = format!("⚠️ Error retrying after approval: {}", e);
                                 self.send_response(&event, &msg).await?;
                             }
                         }
-                        
+
                         // Record in history
-                        let retry_success = retry_result.as_ref().map(|r| r.success).unwrap_or(false);
+                        let retry_success =
+                            retry_result.as_ref().map(|r| r.success).unwrap_or(false);
                         let result_summary = format!(
                             "[approval retry] {}: {}",
                             pending.capability_id,
                             if retry_success { "success" } else { "failed" }
                         );
                         self.record_in_history("system", result_summary, &event.channel_id);
-                        
+
                         // Add the approval resolution to context
                         self.message_history.push(event.clone());
                         return Ok(());
@@ -849,6 +959,59 @@ impl AgentRuntime {
             }
         }
 
+        // User says "approved"/"approve": proactively check tracked pending approvals
+        // and avoid creating duplicate approval requests when nothing has changed yet.
+        let content_lower = event.content.to_lowercase();
+        if !self.pending_approvals.is_empty()
+            && (content_lower.contains("approved") || content_lower.contains("approve"))
+        {
+            let approval_ids: Vec<String> = self.pending_approvals.keys().cloned().collect();
+            let mut approved_now = Vec::new();
+            let mut still_pending = Vec::new();
+
+            for approval_id in &approval_ids {
+                let status_check = self
+                    .execute_capability(
+                        "ccos.approval.get_status",
+                        serde_json::json!({
+                            "approval_id": approval_id,
+                            "session_id": self.args.session_id,
+                        }),
+                    )
+                    .await;
+
+                let status = status_check.ok().and_then(|r| r.result).and_then(|v| {
+                    v.get("status")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string())
+                });
+
+                match status.as_deref() {
+                    Some("approved") => approved_now.push(approval_id.clone()),
+                    _ => still_pending.push(approval_id.clone()),
+                }
+            }
+
+            if !approved_now.is_empty() {
+                let msg = format!(
+                    "✅ Detected approved request(s): {}. Resuming onboarding.",
+                    approved_now.join(", ")
+                );
+                self.send_response(&event, &msg).await?;
+                self.record_in_history("agent", msg, &event.channel_id);
+                self.process_with_llm(event).await?;
+                return Ok(());
+            }
+
+            let msg = format!(
+                "I still see pending approval(s): {}.\n\nPlease approve the exact ID(s) in the Approval UI or with /approve <id>.",
+                still_pending.join(", ")
+            );
+            self.send_response(&event, &msg).await?;
+            self.record_in_history("agent", msg, &event.channel_id);
+            return Ok(());
+        }
+
         // Check if the agent is paused and the user sent "continue"
         if self.budget_paused {
             let content_lower = event.content.to_lowercase();
@@ -862,7 +1025,11 @@ impl AgentRuntime {
                     .send_response(&event, "▶️ Resuming! Budget has been reset.")
                     .await;
                 let _ = self
-                    .transition_run_state("Active", Some("resumed by user"))
+                    .transition_run_state(
+                        "Active",
+                        Some("resumed by user"),
+                        event.run_id.as_deref(),
+                    )
                     .await;
                 return Ok(());
             } else {
@@ -903,6 +1070,7 @@ impl AgentRuntime {
                 .args
                 .run_id
                 .clone()
+                .or(event.run_id.clone())
                 .unwrap_or_else(|| format!("resp-{}", event.id))),
         );
         inputs.insert(
@@ -933,6 +1101,7 @@ impl AgentRuntime {
             content,
             sender: sender.to_string(),
             timestamp: Utc::now().to_rfc3339(),
+            run_id: None,
         });
     }
 
@@ -963,23 +1132,52 @@ impl AgentRuntime {
     /// - "HTTP host 'xxx' requires approval. Approval ID: 12345-abc"
     /// - "Capability requires approval. Approval ID: 12345-abc"
     fn extract_approval_id_from_error(&self, error_msg: &str) -> Option<String> {
-        if error_msg.contains("requires approval") {
-            if let Some(id_start) = error_msg.find("Approval ID: ") {
-                let remaining = &error_msg[id_start + 14..];
-                // Extract until newline or end
-                let id_end = remaining.find('\n').unwrap_or(remaining.len());
-                return Some(remaining[..id_end].trim().to_string());
-            }
+        extract_approval_id_from_error_text(error_msg)
+    }
+
+    /// Extract a pending approval ID from a successful capability response.
+    /// Expected shape:
+    /// { "approval_id": "...", "status": "pending", ... }
+    fn extract_pending_approval_id_from_result(result: &ExecuteResponse) -> Option<String> {
+        if !result.success {
+            return None;
         }
-        None
+        let res = result.result.as_ref()?;
+        let status = res.get("status").and_then(|v| v.as_str())?;
+        if !status.eq_ignore_ascii_case("pending") {
+            return None;
+        }
+        res.get("approval_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    fn normalize_memory_key(key: &str) -> String {
+        let mut normalized = key.to_string();
+        while let Some(stripped) = normalized.strip_prefix("global:") {
+            normalized = stripped.to_string();
+        }
+
+        match normalized.as_str() {
+            "fibonacci_last" | "last_fibonacci" => "fib_last".to_string(),
+            "fibonacci_prev" | "prev_fibonacci" => "fib_prev".to_string(),
+            _ => normalized,
+        }
     }
 
     async fn transition_run_state(
         &self,
         new_state: &str,
         reason: Option<&str>,
+        event_run_id: Option<&str>,
     ) -> anyhow::Result<()> {
-        let Some(run_id) = &self.args.run_id else {
+        let run_id = self
+            .args
+            .run_id
+            .as_deref()
+            .or(event_run_id)
+            .map(|s| s.to_string());
+        let Some(run_id) = run_id else {
             return Ok(());
         };
 
@@ -1073,12 +1271,15 @@ impl AgentRuntime {
         let mut action_history: Vec<ActionResult> = Vec::new();
         let mut consecutive_failures = 0;
         let mut final_response_sent = false;
+        let mut reached_iteration_limit = false;
+        let is_scheduled_run_kickoff =
+            event.sender == "system" && event.content.starts_with("Scheduled run started (");
 
         loop {
             iteration += 1;
 
             // Safety limit check
-            if iteration > config.max_iterations {
+            if !is_scheduled_run_kickoff && iteration > config.max_iterations {
                 warn!("Max iterations ({}) reached", config.max_iterations);
                 let summary = self.format_action_summary(&action_history);
                 let msg = format!(
@@ -1087,6 +1288,7 @@ impl AgentRuntime {
                 );
                 self.send_response(&event, &msg).await?;
                 self.record_in_history("agent", msg, &event.channel_id);
+                reached_iteration_limit = true;
                 break;
             }
 
@@ -1098,7 +1300,13 @@ impl AgentRuntime {
                     .llm_client
                     .as_ref()
                     .unwrap()
-                    .process_message(&event.content, &context, &self.capabilities, &agent_context)
+                    .process_message(
+                        &event.content,
+                        &context,
+                        &self.capabilities,
+                        &agent_context,
+                        is_scheduled_run_kickoff,
+                    )
                     .await
                 {
                     Ok(initial_plan) => {
@@ -1256,6 +1464,17 @@ impl AgentRuntime {
             // Prepare action inputs
             let mut inputs = action.inputs.clone();
             if let Some(obj) = inputs.as_object_mut() {
+                if action.capability_id == "ccos.memory.get"
+                    || action.capability_id == "ccos.memory.store"
+                {
+                    if let Some(key) = obj.get("key").and_then(|v| v.as_str()) {
+                        let normalized_key = Self::normalize_memory_key(key);
+                        if normalized_key != key {
+                            obj.insert("key".to_string(), serde_json::json!(normalized_key));
+                        }
+                    }
+                }
+
                 obj.insert(
                     "session_id".to_string(),
                     serde_json::json!(self.args.session_id),
@@ -1264,6 +1483,7 @@ impl AgentRuntime {
                     .args
                     .run_id
                     .clone()
+                    .or(event.run_id.clone())
                     .unwrap_or_else(|| format!("run-{}-{}", event.id, iteration));
                 obj.insert("run_id".to_string(), serde_json::json!(run_id.clone()));
                 obj.insert(
@@ -1282,32 +1502,103 @@ impl AgentRuntime {
                 if action.capability_id == "ccos.skill.load" {
                     self.maybe_inject_wrapper_skill_auth(obj);
                 }
-                if action.capability_id == "ccos.skill.execute" {
-                    // Convert obj to Value for the function call
-                    let mut params_value = serde_json::Value::Object(obj.clone());
-                    Self::maybe_inject_direct_skill_auth(
-                        &self.skill_bearer_tokens,
-                        &action.capability_id,
-                        &mut params_value,
-                    );
-                    // Update obj from the modified params_value
-                    if let Some(new_obj) = params_value.as_object() {
-                        *obj = new_obj.clone();
-                    }
+                // For direct skill capabilities (<skill>.<op>), inject bearer token
+                // from in-memory cache or SecretStore.
+                let mut params_value = serde_json::Value::Object(obj.clone());
+                Self::maybe_inject_direct_skill_auth(
+                    &self.skill_bearer_tokens,
+                    &action.capability_id,
+                    &mut params_value,
+                );
+                // Update obj from the modified params_value
+                if let Some(new_obj) = params_value.as_object() {
+                    *obj = new_obj.clone();
                 }
             }
 
-            // Execute the action with enriched context inputs
-            let result = match self
-                .execute_capability(&action.capability_id, inputs.clone())
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => ExecuteResponse {
-                    success: false,
-                    result: None,
-                    error: Some(e.to_string()),
-                },
+            // Execute the action with enriched context inputs.
+            // Idempotency guard: if this skill URL was already loaded in this session,
+            // short-circuit instead of reloading/restarting onboarding flows.
+            let result = if action.capability_id == "ccos.skill.load" {
+                if let Some(url) = inputs.get("url").and_then(|v| v.as_str()) {
+                    if self.loaded_skill_urls.contains(url) {
+                        let skill_id = self
+                            .loaded_skill_url_to_id
+                            .get(url)
+                            .cloned()
+                            .or_else(|| self.last_loaded_skill_id.clone())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let registered_caps: Vec<serde_json::Value> = self
+                            .loaded_skill_capabilities
+                            .iter()
+                            .filter(|cap| cap.starts_with(&format!("{}.", skill_id)))
+                            .cloned()
+                            .map(serde_json::Value::String)
+                            .collect();
+                        let onboarding_status = match self
+                            .execute_capability(
+                                "ccos.skill.get_onboarding_status",
+                                serde_json::json!({ "skill_id": skill_id }),
+                            )
+                            .await
+                        {
+                            Ok(resp) if resp.success => resp.result,
+                            _ => None,
+                        };
+
+                        info!(
+                            "[Agent] Skipping duplicate ccos.skill.load for already loaded URL: {}",
+                            url
+                        );
+                        ExecuteResponse {
+                            success: true,
+                            result: Some(serde_json::json!({
+                                "skill_id": skill_id,
+                                "status": "already_loaded",
+                                "url": url,
+                                "registered_capabilities": registered_caps,
+                                "onboarding_status": onboarding_status,
+                            })),
+                            error: None,
+                        }
+                    } else {
+                        match self
+                            .execute_capability(&action.capability_id, inputs.clone())
+                            .await
+                        {
+                            Ok(resp) => resp,
+                            Err(e) => ExecuteResponse {
+                                success: false,
+                                result: None,
+                                error: Some(e.to_string()),
+                            },
+                        }
+                    }
+                } else {
+                    match self
+                        .execute_capability(&action.capability_id, inputs.clone())
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(e) => ExecuteResponse {
+                            success: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            } else {
+                match self
+                    .execute_capability(&action.capability_id, inputs.clone())
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => ExecuteResponse {
+                        success: false,
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
             };
 
             // Check if this action requires approval and track it
@@ -1318,7 +1609,7 @@ impl AgentRuntime {
                             "[Agent] Action requires approval: {} for capability '{}'",
                             approval_id, action.capability_id
                         );
-                        
+
                         // Track this pending approval so we can retry after it's resolved
                         self.pending_approvals.insert(
                             approval_id.clone(),
@@ -1329,7 +1620,7 @@ impl AgentRuntime {
                                 event.clone(),
                             ),
                         );
-                        
+
                         // Notify user about pending approval
                         let msg = format!(
                             "⏳ I've requested approval for '{}'. I'll automatically retry once approved. \
@@ -1337,7 +1628,7 @@ impl AgentRuntime {
                             action.capability_id
                         );
                         self.send_response(&event, &msg).await?;
-                        
+
                         // Add to history and return - wait for approval
                         let approval_summary = format!(
                             "[step {}] {}: awaiting approval (ID: {})",
@@ -1348,6 +1639,40 @@ impl AgentRuntime {
                         self.record_in_history("system", approval_summary, &event.channel_id);
                         return Ok(());
                     }
+                }
+            }
+
+            // If an approval-producing action succeeds with status=pending,
+            // stop the autonomous loop and wait for human input/approval.
+            if (action.capability_id == "ccos.secrets.set"
+                || action.capability_id == "ccos.approval.request_human_action")
+                && result.success
+            {
+                if let Some(approval_id) = Self::extract_pending_approval_id_from_result(&result) {
+                    self.pending_approvals.insert(
+                        approval_id.clone(),
+                        PendingApproval::new(
+                            approval_id.clone(),
+                            action.capability_id.clone(),
+                            inputs.clone(),
+                            event.clone(),
+                        ),
+                    );
+                    let wait_msg = format!(
+                        "⏳ Waiting for approval `{}` before continuing. \
+Approve it in the UI or with /approve {}.",
+                        approval_id, approval_id
+                    );
+                    self.send_response(&event, &wait_msg).await?;
+                    self.record_in_history(
+                        "system",
+                        format!(
+                            "[step {}] {}: pending approval ({})",
+                            iteration, action.capability_id, approval_id
+                        ),
+                        &event.channel_id,
+                    );
+                    return Ok(());
                 }
             }
 
@@ -1418,6 +1743,19 @@ impl AgentRuntime {
                     .unwrap_or_else(|| "Unknown error".to_string());
                 warn!("Action failed: {}", error_msg);
 
+                // Ask explicitly for missing required runtime keys instead of generic retry text.
+                let missing_required = Self::extract_missing_required_keys(&error_msg);
+                if !missing_required.is_empty() {
+                    let fields = missing_required.join(", ");
+                    let msg = format!(
+                        "I need additional input to continue with '{}'. Missing required field(s): {}.\n\nPlease provide those value(s), and I'll continue.",
+                        action.capability_id, fields
+                    );
+                    self.send_response(&event, &msg).await?;
+                    self.record_in_history("agent", msg, &event.channel_id);
+                    return Ok(());
+                }
+
                 // Check if we should ask user or abort
                 if config.failure_handling == "ask_user"
                     || consecutive_failures >= config.max_consecutive_failures
@@ -1448,6 +1786,13 @@ impl AgentRuntime {
 
                         if let Some(url) = res.get("url").and_then(|v| v.as_str()) {
                             self.loaded_skill_urls.insert(url.to_string());
+                            self.loaded_skill_url_to_id
+                                .insert(url.to_string(), skill_id.to_string());
+                        }
+
+                        if let Some(def) = res.get("skill_definition").and_then(|v| v.as_str()) {
+                            self.loaded_skill_definitions
+                                .insert(skill_id.to_string(), def.to_string());
                         }
 
                         if let Some(caps) = res
@@ -1470,16 +1815,27 @@ impl AgentRuntime {
         }
 
         // Transition run state if applicable
-        if let Some(ref _run_id) = self.args.run_id {
-            if !final_response_sent {
+        if self.args.run_id.is_some() || event.run_id.is_some() {
+            if reached_iteration_limit {
+                let reason = format!("Reached max iterations ({})", config.max_iterations);
+                let _ = self
+                    .transition_run_state("Done", Some(&reason), event.run_id.as_deref())
+                    .await;
+            } else if !final_response_sent {
                 // Task didn't complete successfully
                 let summary = self.format_action_summary(&action_history);
                 let _ = self
-                    .transition_run_state("PausedExternalEvent", Some(&summary))
+                    .transition_run_state(
+                        "PausedExternalEvent",
+                        Some(&summary),
+                        event.run_id.as_deref(),
+                    )
                     .await;
             } else if action_history.iter().all(|a| a.success) {
                 // All actions succeeded
-                let _ = self.transition_run_state("Done", None).await;
+                let _ = self
+                    .transition_run_state("Done", None, event.run_id.as_deref())
+                    .await;
             }
         }
 
@@ -1590,6 +1946,28 @@ impl AgentRuntime {
                 break;
             }
         }
+        fields
+    }
+
+    /// Extract fields from runtime validation errors like:
+    /// "Input validation failed: Missing required key :human_x_username at ..."
+    fn extract_missing_required_keys(error_msg: &str) -> Vec<String> {
+        let mut fields = Vec::new();
+        let mut rest = error_msg;
+        let needle = "Missing required key :";
+
+        while let Some(start) = rest.find(needle) {
+            let after = &rest[start + needle.len()..];
+            let field: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if !field.is_empty() && !fields.contains(&field) {
+                fields.push(field);
+            }
+            rest = after;
+        }
+
         fields
     }
 
@@ -2124,6 +2502,57 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_uuid_like(candidate: &str) -> bool {
+    if candidate.len() != 36 {
+        return false;
+    }
+
+    for (idx, ch) in candidate.chars().enumerate() {
+        if matches!(idx, 8 | 13 | 18 | 23) {
+            if ch != '-' {
+                return false;
+            }
+        } else if !ch.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn clean_approval_token(token: &str) -> String {
+    token
+        .trim()
+        .trim_matches(|c: char| !c.is_ascii_hexdigit() && c != '-')
+        .to_string()
+}
+
+fn extract_approval_id_from_error_text(error_msg: &str) -> Option<String> {
+    if let Some(id_start) = error_msg.find("Approval ID:") {
+        let remaining = &error_msg[id_start + "Approval ID:".len()..];
+        for token in remaining.split_whitespace() {
+            let candidate = clean_approval_token(token);
+            if is_uuid_like(&candidate) {
+                return Some(candidate);
+            }
+            if !candidate.is_empty() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if error_msg.contains("requires approval") {
+        for token in error_msg.split_whitespace() {
+            let candidate = clean_approval_token(token);
+            if is_uuid_like(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2145,5 +2574,26 @@ mod tests {
         assert_eq!(args.gateway_url, "http://localhost:8080");
         assert!(!args.enable_llm);
         assert!(args.llm_provider.is_none());
+    }
+
+    #[test]
+    fn test_extract_approval_id_from_error_text_exact_uuid() {
+        let msg = "Runtime error: Package 'mpmath' requires approval. Approval ID: eb076a1c-b606-4a87-9d25-791236d786f2\nUse: /approve eb076a1c-b606-4a87-9d25-791236d786f2";
+        let id = extract_approval_id_from_error_text(msg);
+        assert_eq!(id.as_deref(), Some("eb076a1c-b606-4a87-9d25-791236d786f2"));
+    }
+
+    #[test]
+    fn test_extract_approval_id_from_error_text_trailing_punctuation() {
+        let msg =
+            "Capability requires approval. Approval ID: 6bc77db4-6917-4dd6-8e86-2a219dc5c5fd.";
+        let id = extract_approval_id_from_error_text(msg);
+        assert_eq!(id.as_deref(), Some("6bc77db4-6917-4dd6-8e86-2a219dc5c5fd"));
+    }
+
+    #[test]
+    fn test_extract_approval_id_from_error_text_none() {
+        let msg = "Runtime error: Get run failed: 404";
+        assert!(extract_approval_id_from_error_text(msg).is_none());
     }
 }

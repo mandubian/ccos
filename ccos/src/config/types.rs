@@ -184,7 +184,7 @@ fn default_context_strategy() -> String {
 }
 
 fn default_send_intermediate() -> bool {
-    false
+    true
 }
 
 fn default_failure_handling() -> String {

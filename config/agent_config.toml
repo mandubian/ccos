@@ -254,7 +254,7 @@ expiry_hours = 168
 risk_default = "medium"
 
 [llm_profiles]
-default = "openrouter:qwen3_coder_next"
+default = "openrouter:minimax_25"
 
 # Google Gemini profile
 # [[llm_profiles.model_sets]]
@@ -284,7 +284,7 @@ name = "openrouter"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "balanced_gfl"
+default = "balanced_ds_32"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"
@@ -346,12 +346,22 @@ default = "balanced_gfl"
   quality = "quality"
   notes = "Qwen3 Coder Next."
 
+  
+  [[llm_profiles.model_sets.models]]
+  name = "minimax_25"
+  model = "minimax/minimax-m2.5"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "quality"
+  notes = "Minimax 2.5."
+
+
 # Existing explicit profiles still work
-[[llm_profiles.profiles]]
-name = "fast"
-provider = "openrouter"
-model = "meta-llama/llama-3-8b-instruct"
-api_key_env = "OPENROUTER_API_KEY"
+# [[llm_profiles.profiles]]
+# name = "fast"
+# provider = "openrouter"
+# model = "meta-llama/llama-3-8b-instruct"
+# api_key_env = "OPENROUTER_API_KEY"
 
 # =============================================================================
 # SANDBOX CONFIGURATION (Phase 2)
