@@ -128,7 +128,7 @@ pub async fn register_default_capabilities(
     crate::capabilities::data_processing::register_data_capabilities(marketplace).await?;
 
     // Register network capabilities (http-fetch, etc.)
-    crate::capabilities::network::register_network_capabilities(marketplace, None).await?;
+    crate::capabilities::network::register_network_capabilities(marketplace, None, None).await?;
 
     // This function is extracted from the stdlib to keep stdlib focused on
     // language-level functions. Implementation preserved from original file.

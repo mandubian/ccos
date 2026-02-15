@@ -31,6 +31,7 @@ fn get_map_value<'a>(map: &'a HashMap<MapKey, Value>, key: &str) -> Option<&'a V
 pub async fn register_network_capabilities(
     marketplace: &CapabilityMarketplace,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    internal_secret: Option<String>,
 ) -> RuntimeResult<()> {
     // Input schema for http-fetch: {:url String :method? String :headers? Map :body? String :timeout_ms? Int}
     let input_schema = TypeExpr::Map {
@@ -119,6 +120,7 @@ pub async fn register_network_capabilities(
             let input = input.clone();
             let capability_registry = Arc::clone(&capability_registry);
             let approval_queue = approval_queue.clone();
+            let internal_secret = internal_secret.clone();
             Box::pin(async move {
                 // Extract parameters from input
                 let (url, method, headers_map, body, timeout_ms) = match &input {
@@ -177,26 +179,63 @@ pub async fn register_network_capabilities(
                     .port_or_known_default()
                     .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
 
+                log::debug!("[http-fetch] Checking access for {}:{} (url={})", host, port, url);
+
                 {
                     let reg = capability_registry.read().await;
                     let host_allowed = reg.is_http_host_allowed(&host);
                     let port_allowed = reg.is_http_port_allowed(port);
                     
+                    log::debug!("[http-fetch] Registry check: host_allowed={}, port_allowed={}", host_allowed, port_allowed);
+
                     // Also check if host has been explicitly approved via the approval system
                     let host_approved = if let Some(queue) = &approval_queue {
-                        queue.is_http_host_approved(&host, Some(port)).await.unwrap_or(false)
+                        queue
+                            .is_http_host_approved(&host, Some(port))
+                            .await
+                            .unwrap_or(false)
                     } else {
                         false
                     };
-                    
-                    if !host_allowed && !host_approved {
+
+                    // Check for internal secret bypass
+                    let mut internal_bypass = false;
+                    if let Some(secret) = &internal_secret {
+                        log::debug!("[http-fetch] Checking internal bypass for {}:{}, internal_secret present", host, port);
+                        if let Some(Value::Map(hdrs)) = headers_map.as_ref() {
+                            log::debug!("[http-fetch] Headers map present with {} entries", hdrs.len());
+                            for (k, v) in hdrs.iter() {
+                                log::debug!("[http-fetch] Header: {:?} = {:?}", k, v);
+                            }
+                            let provided_secret = get_map_string(hdrs, "X-Internal-Secret");
+                            log::debug!("[http-fetch] Provided secret: {:?}", provided_secret);
+                            if let Some(ps) = provided_secret {
+                                if ps == *secret {
+                                    log::info!(
+                                        "[http-fetch] Internal secret bypass granted for {}:{}",
+                                        host,
+                                        port
+                                    );
+                                    internal_bypass = true;
+                                } else {
+                                    log::warn!("[http-fetch] Secret mismatch: expected len={}, got len={}", secret.len(), ps.len());
+                                }
+                            }
+                        } else {
+                            log::debug!("[http-fetch] No headers map found");
+                        }
+                    } else {
+                        log::debug!("[http-fetch] No internal_secret configured");
+                    }
+
+                    if !host_allowed && !host_approved && !internal_bypass {
                         return Err(RuntimeError::SecurityViolation {
                             operation: "ccos.network.http-fetch".to_string(),
                             capability: "ccos.network.http-fetch".to_string(),
                             context: format!("Host '{}' not in HTTP allowlist", host),
                         });
                     }
-                    if !port_allowed {
+                    if !port_allowed && !internal_bypass {
                         return Err(RuntimeError::SecurityViolation {
                             operation: "ccos.network.http-fetch".to_string(),
                             capability: "ccos.network.http-fetch".to_string(),
@@ -209,7 +248,9 @@ pub async fn register_network_capabilities(
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
+                    .map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to create HTTP client: {}", e))
+                    })?;
 
                 let method_enum =
                     reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
@@ -293,14 +334,8 @@ pub async fn register_network_capabilities(
 
                 // Build response map
                 let mut result_map: HashMap<MapKey, Value> = HashMap::new();
-                result_map.insert(
-                    MapKey::String("status".to_string()),
-                    Value::Integer(status),
-                );
-                result_map.insert(
-                    MapKey::String("body".to_string()),
-                    Value::String(body_text),
-                );
+                result_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
+                result_map.insert(MapKey::String("body".to_string()), Value::String(body_text));
 
                 // Convert headers to RTFS map
                 let mut headers_result: HashMap<MapKey, Value> = HashMap::new();
@@ -324,10 +359,7 @@ pub async fn register_network_capabilities(
                     MapKey::String("network_ingress_bytes".to_string()),
                     Value::Integer(network_ingress_bytes as i64),
                 );
-                result_map.insert(
-                    MapKey::String("usage".to_string()),
-                    Value::Map(usage),
-                );
+                result_map.insert(MapKey::String("usage".to_string()), Value::Map(usage));
 
                 Ok(Value::Map(result_map))
             })

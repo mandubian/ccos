@@ -3354,6 +3354,9 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::HttpHostApproval { host, port, requesting_url, scope, .. } => {
                             json!({ "type": "HttpHostApproval", "host": host, "port": port, "requesting_url": requesting_url, "scope": scope })
                         }
+                        ccos::approval::types::ApprovalCategory::PackageApproval { package, runtime } => {
+                            json!({ "type": "PackageApproval", "package": package, "runtime": runtime })
+                        }
                     };
 
                     json!({
@@ -3426,6 +3429,7 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
                     ccos::approval::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                     ccos::approval::types::ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
+                    ccos::approval::types::ApprovalCategory::PackageApproval { .. } => "PackageApproval",
                 };
 
                 Ok(json!({

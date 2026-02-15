@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use ccos::approval::queue::ApprovalAuthority;
 use ccos::approval::storage_file::FileApprovalStorage;
 use ccos::approval::types::{ApprovalFilter, ApprovalStatus as GeneralApprovalStatus};
-use ccos::approval::queue::ApprovalAuthority;
 use ccos::approval::unified_queue::UnifiedApprovalQueue;
 use ccos::capabilities::registry::CapabilityRegistry;
 use ccos::capability_marketplace::types::ApprovalStatus as CapabilityApprovalStatus;
@@ -45,7 +45,7 @@ enum Commands {
     /// remove specific approvals regardless of status.
     Clean {
         /// Type of pending approval to clean
-        /// 
+        ///
         /// Available types:
         /// - all                          : All pending approvals (default)
         /// - HumanActionRequest           : Human intervention requests
@@ -258,7 +258,10 @@ async fn handle_capability_commands(
             let caps = marketplace.list_capabilities().await;
             let mut pending_count = 0;
 
-            println!("{:<50} | {:<15} | {}", "Capability ID", "Status", "Description");
+            println!(
+                "{:<50} | {:<15} | {}",
+                "Capability ID", "Status", "Description"
+            );
             println!("{:-<50}-+-{:-<15}-+-{:-<50}", "", "", "");
 
             for cap in caps {
@@ -304,7 +307,10 @@ async fn handle_capability_commands(
         CapabilityCommands::ListAll => {
             let caps = marketplace.list_capabilities().await;
 
-            println!("{:<50} | {:<15} | {}", "Capability ID", "Status", "Description");
+            println!(
+                "{:<50} | {:<15} | {}",
+                "Capability ID", "Status", "Description"
+            );
             println!("{:-<50}-+-{:-<15}-+-{:-<50}", "", "", "");
 
             for cap in &caps {
@@ -396,8 +402,7 @@ async fn handle_approval_commands<S: ApprovalStorage>(
                 approvals
                     .into_iter()
                     .filter(|a| {
-                        std::mem::discriminant(&a.status)
-                            == std::mem::discriminant(&target_status)
+                        std::mem::discriminant(&a.status) == std::mem::discriminant(&target_status)
                     })
                     .collect()
             } else {
@@ -428,30 +433,27 @@ async fn handle_approval_commands<S: ApprovalStorage>(
         }
         ApprovalCommands::Reject { id, reason } => {
             match queue
-                .reject(
-                    &id,
-                    ApprovalAuthority::User("admin".to_string()),
-                    reason,
-                )
+                .reject(&id, ApprovalAuthority::User("admin".to_string()), reason)
                 .await
             {
                 Ok(_) => println!("✅ Rejected approval '{}'", id),
                 Err(e) => eprintln!("❌ Failed to reject '{}': {}", id, e),
             }
         }
-        ApprovalCommands::Show { id } => {
-            match queue.get(&id).await? {
-                Some(app) => {
-                    println!("\n📄 Approval Details:\n");
-                    print_approval_summary(&app);
-                    print_approval_details(&app);
-                }
-                None => eprintln!("❌ Approval '{}' not found.", id),
+        ApprovalCommands::Show { id } => match queue.get(&id).await? {
+            Some(app) => {
+                println!("\n📄 Approval Details:\n");
+                print_approval_summary(&app);
+                print_approval_details(&app);
             }
-        }
+            None => eprintln!("❌ Approval '{}' not found.", id),
+        },
         ApprovalCommands::Delete { id, force } => {
             if !force {
-                print!("⚠️  Are you sure you want to delete approval '{}'? [y/N]: ", id);
+                print!(
+                    "⚠️  Are you sure you want to delete approval '{}'? [y/N]: ",
+                    id
+                );
                 use std::io::{self, Write};
                 io::stdout().flush()?;
                 let mut input = String::new();
@@ -580,7 +582,11 @@ fn print_approval_summary(app: &ccos::approval::types::ApprovalRequest) {
 
 fn print_approval_details(app: &ccos::approval::types::ApprovalRequest) {
     let age = chrono::Utc::now().signed_duration_since(app.requested_at);
-    println!("    Requested: {} ({} ago)", app.requested_at, format_duration(age));
+    println!(
+        "    Requested: {} ({} ago)",
+        app.requested_at,
+        format_duration(age)
+    );
     println!("    Expires: {}", app.expires_at);
 
     match &app.status {
@@ -600,7 +606,9 @@ fn print_approval_details(app: &ccos::approval::types::ApprovalRequest) {
     // Print category-specific details
     use ccos::approval::types::ApprovalCategory;
     match &app.category {
-        ApprovalCategory::HumanActionRequest { title, skill_id, .. } => {
+        ApprovalCategory::HumanActionRequest {
+            title, skill_id, ..
+        } => {
             println!("    Title: {}", title);
             println!("    Skill: {}", skill_id);
         }
@@ -608,9 +616,15 @@ fn print_approval_details(app: &ccos::approval::types::ApprovalRequest) {
             println!("    Server: {}", server_info.name);
             println!("    Endpoint: {}", server_info.endpoint);
         }
-        ApprovalCategory::SecretWrite { key, description, .. } => {
+        ApprovalCategory::SecretWrite {
+            key, description, ..
+        } => {
             println!("    Secret Key: {}", key);
             println!("    Description: {}", description);
+        }
+        ApprovalCategory::PackageApproval { package, runtime } => {
+            println!("    Package: {}", package);
+            println!("    Runtime: {}", runtime);
         }
         _ => {}
     }
@@ -632,8 +646,11 @@ fn format_category(cat: &ccos::approval::types::ApprovalCategory) -> String {
         ApprovalCategory::BudgetExtension { .. } => "BudgetExtension".to_string(),
         ApprovalCategory::SecretRequired { .. } => "SecretRequired".to_string(),
         ApprovalCategory::ChatPolicyException { .. } => "ChatPolicyException".to_string(),
-        ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification".to_string(),
+        ApprovalCategory::ChatPublicDeclassification { .. } => {
+            "ChatPublicDeclassification".to_string()
+        }
         ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval".to_string(),
+        ApprovalCategory::PackageApproval { .. } => "PackageApproval".to_string(),
     }
 }
 

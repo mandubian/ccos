@@ -1648,7 +1648,7 @@ pub async fn register_chat_capabilities(
                             .ok_or_else(|| RuntimeError::Generic("Missing operation parameter".to_string()))?;
 
                         // Extract parameters (everything except control keys),
-                        // and flatten nested "params" / "parameters" maps when present.
+                        // and flatten nested "params" / "parameters" / "inputs" maps when present.
                         let mut params_map = HashMap::new();
                         let mut nested_params: Option<HashMap<MapKey, Value>> = None;
 
@@ -1659,7 +1659,10 @@ pub async fn register_chat_capabilities(
                                 _ => continue,
                             };
 
-                            if key_str == "params" || key_str == "parameters" {
+                            if key_str == "params"
+                                || key_str == "parameters"
+                                || key_str == "inputs"
+                            {
                                 if let Value::Map(inner) = v {
                                     nested_params = Some(inner.clone());
                                 }
@@ -1718,118 +1721,386 @@ pub async fn register_chat_capabilities(
     // -----------------------------------------------------------------
     if let Some(url_string) = gateway_url {
         let marketplace_for_run = Arc::clone(&marketplace);
-        register_native_chat_capability(
-            &*marketplace,
-            "ccos.run.create",
-            "Create/Schedule Run",
-            "Create a new run (immediate or scheduled). Inputs: {goal, schedule? (cron), next_run_at? (ISO8601), budget?}. Returns {run_id, status}. Use next_run_at for specific times.",
-            Arc::new(move |inputs: &Value| {
-                let inputs = inputs.clone();
-                let marketplace = Arc::clone(&marketplace_for_run);
-                let gateway_base = url_string.clone();
-                let internal_secret = internal_secret.clone();
-                Box::pin(async move {
-                    // 1. Extract inputs
-                    let Value::Map(ref map) = inputs else {
-                        return Err(RuntimeError::Generic("Expected map inputs".to_string()));
-                    };
 
-                    let get_str = |k: &str| {
-                        map.get(&MapKey::String(k.to_string()))
-                            .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+        // ccos.run.create
+        {
+            let url = url_string.clone();
+            let secret = internal_secret.clone();
+            let marketplace_for_run = Arc::clone(&marketplace_for_run);
+            register_native_chat_capability(
+                &*marketplace,
+                "ccos.run.create",
+                "Create/Schedule Run",
+                "Create a new run (immediate or scheduled). Inputs: {goal, schedule? (cron), next_run_at? (ISO8601), max_run? (u32), budget?}. Returns {run_id, status}. Use next_run_at for specific times.",
+                Arc::new(move |inputs: &Value| {
+                    let inputs = inputs.clone();
+                    let marketplace = Arc::clone(&marketplace_for_run);
+                    let gateway_base = url.clone();
+                    let internal_secret = secret.clone();
+                    Box::pin(async move {
+                        // 1. Extract inputs
+                        let Value::Map(ref map) = inputs else {
+                            return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                        };
+
+                        let get_str = |k: &str| {
+                            map.get(&MapKey::String(k.to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string())
+                        };
+                            let get_int = |k: &str| {
+                                map.get(&MapKey::String(k.to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword(k.to_string()))))
+                                .and_then(|v| v.as_integer())
+                            };
+
+                        let goal = get_str("goal")
+                            .ok_or_else(|| RuntimeError::Generic("Missing goal parameter".to_string()))?;
+                        let schedule = get_str("schedule");
+                        let next_run_at = get_str("next_run_at");
+                        let max_run = get_int("max_run");
+
+                        // 2. Prepare payload for POST /chat/run
+                        let session_id = get_str("session_id")
+                             .ok_or_else(|| RuntimeError::Generic("Missing session_id (agent should provide its own)".to_string()))?;
+
+                        let mut body_map = HashMap::new();
+                        body_map.insert("session_id".to_string(), Value::String(session_id));
+                        body_map.insert("goal".to_string(), Value::String(goal));
+                        if let Some(s) = schedule {
+                            body_map.insert("schedule".to_string(), Value::String(s));
+                        }
+                        if let Some(t) = next_run_at {
+                            body_map.insert("next_run_at".to_string(), Value::String(t));
+                        }
+                        if let Some(max) = max_run {
+                            body_map.insert("max_run".to_string(), Value::Integer(max));
+                        }
+                        if let Some(b) = map.get(&MapKey::String("budget".to_string())) {
+                             let json_structure = rtfs_value_to_json(b)?;
+                             body_map.insert("budget".to_string(), json_to_rtfs_value(&json_structure)?);
+                        }
+
+                        let body_json = rtfs_value_to_json(&Value::Map(body_map.into_iter().map(|(k,v)| (MapKey::String(k), v)).collect()))?;
+                        let body_str = body_json.to_string();
+
+                        let target_url = format!("{}/chat/run", gateway_base.trim_end_matches('/'));
+
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
+                        fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("POST".to_string()));
+                        fetch_inputs.insert(MapKey::String("body".to_string()), Value::String(body_str));
+                        let mut headers_map = HashMap::from([
+                            (MapKey::String("Content-Type".to_string()), Value::String("application/json".to_string())),
+                        ]);
+                        
+                        if let Some(secret) = &internal_secret {
+                            headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
+                        }
+
+                        fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+
+                        let fetched = marketplace
+                            .execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs))
+                            .await?;
+
+                        let Value::Map(out) = fetched else {
+                             return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
+                        };
+
+                        let status = out.get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
+                            .unwrap_or(0);
+
+                        let body = out.get(&MapKey::String("body".to_string()))
                             .and_then(|v| v.as_string())
-                            .map(|s| s.to_string())
-                    };
+                            .ok_or_else(|| RuntimeError::Generic("Failed to get response body".to_string()))?;
+                        
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!("Create run failed: {} - {}", status, body)));
+                        }
 
-                    let goal = get_str("goal")
-                        .ok_or_else(|| RuntimeError::Generic("Missing goal parameter".to_string()))?;
-                    let schedule = get_str("schedule");
-                    let next_run_at = get_str("next_run_at");
+                        let json_val: serde_json::Value = serde_json::from_str(body)
+                            .map_err(|e| RuntimeError::Generic(format!("Invalid JSON response: {}", e)))?;
+                        
+                        let run_id = json_val.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let run_status = json_val.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
 
-                    // 2. Prepare payload for POST /chat/run
-                    // Note: We need the current session_id. The agent calling this is in a session.
-                    // We can either require session_id in inputs, or let the caller infer it.
-                    // For now, require it in inputs as the agent usually knows its session.
-                    let session_id = get_str("session_id")
-                         .ok_or_else(|| RuntimeError::Generic("Missing session_id (agent should provide its own)".to_string()))?;
+                        Ok(Value::Map(HashMap::from([
+                            (MapKey::String("run_id".to_string()), Value::String(run_id.to_string())),
+                            (MapKey::String("status".to_string()), Value::String(run_status.to_string())),
+                        ])))
+                    })
+                }),
+                "medium",
+                vec!["network".to_string()],
+                EffectType::Effectful,
+            )
+            .await?;
+        }
 
-                    // Construct body manually
-                    let mut body_map = HashMap::new();
-                    body_map.insert("session_id".to_string(), Value::String(session_id));
-                    body_map.insert("goal".to_string(), Value::String(goal));
-                    if let Some(s) = schedule {
-                        body_map.insert("schedule".to_string(), Value::String(s));
-                    }
-                    if let Some(t) = next_run_at {
-                        body_map.insert("next_run_at".to_string(), Value::String(t));
-                    }
-                    // Pass through budget if provided
-                    if let Some(b) = map.get(&MapKey::String("budget".to_string())) {
-                        // Pass as JSON string to preserve structure in minimal MVP
-                         let json_structure = rtfs_value_to_json(b)?;
-                         body_map.insert("budget".to_string(), json_to_rtfs_value(&json_structure)?);
-                    }
+        // ccos.run.get
+        {
+            let url = url_string.clone();
+            let secret = internal_secret.clone();
+            let marketplace_for_run = Arc::clone(&marketplace_for_run);
+            register_native_chat_capability(
+                &*marketplace,
+                "ccos.run.get",
+                "Get Run Details",
+                "Retrieve status and details of a specific run. Inputs: {run_id}. Returns {run_id, session_id, goal, state, steps_taken, elapsed_secs, budget_max_steps, ...}.",
+                Arc::new(move |inputs: &Value| {
+                    let inputs = inputs.clone();
+                    let marketplace = Arc::clone(&marketplace_for_run);
+                    let gateway_base = url.clone();
+                    let internal_secret = secret.clone();
+                    Box::pin(async move {
+                        let Value::Map(ref map) = inputs else {
+                            return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                        };
 
-                    let body_json = rtfs_value_to_json(&Value::Map(body_map.into_iter().map(|(k,v)| (MapKey::String(k), v)).collect()))?;
-                    let body_str = body_json.to_string();
+                        let run_id = map.get(&MapKey::String("run_id".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
 
-                    // 3. Execute via http-fetch (loopback to gateway)
-                    let target_url = format!("{}/chat/run", gateway_base.trim_end_matches('/'));
+                        let target_url = format!("{}/chat/run/{}", gateway_base.trim_end_matches('/'), run_id);
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
+                        fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("GET".to_string()));
+                        
+                        let mut headers_map = HashMap::new();
+                        if let Some(secret) = &internal_secret {
+                            headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
+                        }
+                        fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
 
-                    let mut fetch_inputs = HashMap::new();
-                    fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
-                    fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("POST".to_string()));
-                    fetch_inputs.insert(MapKey::String("body".to_string()), Value::String(body_str));
-                    let mut headers_map = HashMap::from([
-                        (MapKey::String("Content-Type".to_string()), Value::String("application/json".to_string())),
-                    ]);
-                    
-                    if let Some(secret) = &internal_secret {
-                        headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
-                    }
+                        let fetched = marketplace.execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs)).await?;
+                        let Value::Map(out) = fetched else {
+                            return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
+                        };
 
-                    fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+                        let status = out.get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
+                            .unwrap_or(0);
 
-                    let fetched = marketplace
-                        .execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs))
-                        .await?;
+                        let body = out.get(&MapKey::String("body".to_string()))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Failed to get response body".to_string()))?;
 
-                    let Value::Map(out) = fetched else {
-                         return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
-                    };
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!("Get run failed: {} - {}", status, body)));
+                        }
 
-                    let status = out.get(&MapKey::String("status".to_string()))
-                        .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
-                        .unwrap_or(0);
+                        let json_val: serde_json::Value = serde_json::from_str(body)
+                            .map_err(|e| RuntimeError::Generic(format!("Invalid response: {}", e)))?;
+                        
+                        Ok(json_to_rtfs_value(&json_val)?)
+                    })
+                }),
+                "medium",
+                vec!["network".to_string()],
+                EffectType::Effectful,
+            )
+            .await?;
+        }
 
-                    let body = out.get(&MapKey::String("body".to_string()))
-                        .and_then(|v| v.as_string())
-                        .unwrap_or("");
-                    
-                    if status >= 400 {
-                        return Err(RuntimeError::Generic(format!("Create run failed: {} - {}", status, body)));
-                    }
+        // ccos.run.list
+        {
+            let url = url_string.clone();
+            let secret = internal_secret.clone();
+            let marketplace_for_run = Arc::clone(&marketplace_for_run);
+            register_native_chat_capability(
+                &*marketplace,
+                "ccos.run.list",
+                "List Runs",
+                "List all runs for a given session. Inputs: {session_id}. Returns {session_id, runs: [...]}.",
+                Arc::new(move |inputs: &Value| {
+                    let inputs = inputs.clone();
+                    let marketplace = Arc::clone(&marketplace_for_run);
+                    let gateway_base = url.clone();
+                    let internal_secret = secret.clone();
+                    Box::pin(async move {
+                        let Value::Map(ref map) = inputs else {
+                            return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                        };
 
-                    // Parse response (expected JSON: {run_id: ..., status: ...})
-                    let json_val: serde_json::Value = serde_json::from_str(body)
-                        .map_err(|e| RuntimeError::Generic(format!("Invalid JSON response: {}", e)))?;
-                    
-                    let run_id = json_val.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let run_status = json_val.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let session_id = map.get(&MapKey::String("session_id".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing session_id".to_string()))?;
 
-                    Ok(Value::Map(HashMap::from([
-                        (MapKey::String("run_id".to_string()), Value::String(run_id.to_string())),
-                        (MapKey::String("status".to_string()), Value::String(run_status.to_string())),
-                    ])))
-                })
-            }),
-            "medium",
-            vec!["network".to_string()],
-            EffectType::Effectful,
-        )
-        .await?;
+                        let target_url = format!("{}/chat/run?session_id={}", gateway_base.trim_end_matches('/'), session_id);
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
+                        fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("GET".to_string()));
+                        
+                        let mut headers_map = HashMap::new();
+                        if let Some(secret) = &internal_secret {
+                            headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
+                        }
+                        fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+
+                        let fetched = marketplace.execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs)).await?;
+                        let Value::Map(out) = fetched else {
+                             return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
+                        };
+
+                        let status = out.get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
+                            .unwrap_or(0);
+
+                        let body = out.get(&MapKey::String("body".to_string()))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Failed to get response body".to_string()))?;
+
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!("List runs failed: {} - {}", status, body)));
+                        }
+
+                        let json_val: serde_json::Value = serde_json::from_str(body)
+                            .map_err(|e| RuntimeError::Generic(format!("Invalid response: {}", e)))?;
+                        
+                        Ok(json_to_rtfs_value(&json_val)?)
+                    })
+                }),
+                "medium",
+                vec!["network".to_string()],
+                EffectType::Effectful,
+            )
+            .await?;
+        }
+
+        // ccos.run.cancel
+        {
+            let url = url_string.clone();
+            let secret = internal_secret.clone();
+            let marketplace_for_run = Arc::clone(&marketplace_for_run);
+            register_native_chat_capability(
+                &*marketplace,
+                "ccos.run.cancel",
+                "Cancel Run",
+                "Cancel an active or paused run. Inputs: {run_id}. Returns {run_id, cancelled, previous_state}.",
+                Arc::new(move |inputs: &Value| {
+                    let inputs = inputs.clone();
+                    let marketplace = Arc::clone(&marketplace_for_run);
+                    let gateway_base = url.clone();
+                    let internal_secret = secret.clone();
+                    Box::pin(async move {
+                        let Value::Map(ref map) = inputs else {
+                            return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                        };
+
+                        let run_id = map.get(&MapKey::String("run_id".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
+
+                        let target_url = format!("{}/chat/run/{}/cancel", gateway_base.trim_end_matches('/'), run_id);
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
+                        fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("POST".to_string()));
+                        
+                        let mut headers_map = HashMap::new();
+                        if let Some(secret) = &internal_secret {
+                            headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
+                        }
+                        fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+
+                        let fetched = marketplace.execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs)).await?;
+                        let Value::Map(out) = fetched else {
+                             return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
+                        };
+
+                        let status = out.get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
+                            .unwrap_or(0);
+
+                        let body = out.get(&MapKey::String("body".to_string()))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Failed to get response body".to_string()))?;
+
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!("Cancel run failed: {} - {}", status, body)));
+                        }
+
+                        let json_val: serde_json::Value = serde_json::from_str(body)
+                            .map_err(|e| RuntimeError::Generic(format!("Invalid response: {}", e)))?;
+                        
+                        Ok(json_to_rtfs_value(&json_val)?)
+                    })
+                }),
+                "medium",
+                vec!["network".to_string()],
+                EffectType::Effectful,
+            )
+            .await?;
+        }
+
+        // ccos.run.resume
+        {
+            let url = url_string.clone();
+            let secret = internal_secret.clone();
+            let marketplace_for_run = Arc::clone(&marketplace_for_run);
+            register_native_chat_capability(
+                &*marketplace,
+                "ccos.run.resume",
+                "Resume Run",
+                "Resume a run paused at a checkpoint. Inputs: {run_id}. Returns status 200 on success.",
+                Arc::new(move |inputs: &Value| {
+                    let inputs = inputs.clone();
+                    let marketplace = Arc::clone(&marketplace_for_run);
+                    let gateway_base = url.clone();
+                    let internal_secret = secret.clone();
+                    Box::pin(async move {
+                        let Value::Map(ref map) = inputs else {
+                            return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                        };
+
+                        let run_id = map.get(&MapKey::String("run_id".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
+
+                        let target_url = format!("{}/chat/run/{}/resume", gateway_base.trim_end_matches('/'), run_id);
+                        let mut fetch_inputs = HashMap::new();
+                        fetch_inputs.insert(MapKey::String("url".to_string()), Value::String(target_url));
+                        fetch_inputs.insert(MapKey::String("method".to_string()), Value::String("POST".to_string()));
+                        
+                        let mut headers_map = HashMap::new();
+                        if let Some(secret) = &internal_secret {
+                            headers_map.insert(MapKey::String("X-Internal-Secret".to_string()), Value::String(secret.clone()));
+                        }
+                        fetch_inputs.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
+
+                        let fetched = marketplace.execute_capability("ccos.network.http-fetch", &Value::Map(fetch_inputs)).await?;
+                        let Value::Map(out) = fetched else {
+                             return Err(RuntimeError::Generic("http-fetch returned non-map".to_string()));
+                        };
+
+                        let body = out.get(&MapKey::String("body".to_string()))
+                            .and_then(|v| v.as_string())
+                            .unwrap_or("");
+                        
+                        let status = out.get(&MapKey::String("status".to_string()))
+                            .and_then(|v| match v { Value::Integer(i) => Some(*i), _ => None })
+                            .unwrap_or(0);
+
+                        if status >= 400 {
+                            return Err(RuntimeError::Generic(format!("Resume failed: {} - {}", status, body)));
+                        }
+
+                        Ok(Value::Integer(status))
+                    })
+                }),
+                "medium",
+                vec!["network".to_string()],
+                EffectType::Effectful,
+            )
+            .await?;
+        }
     }
-
     // -----------------------------------------------------------------
     // Python Code Execution Capability
     // -----------------------------------------------------------------
@@ -1841,6 +2112,7 @@ pub async fn register_chat_capabilities(
 
         // Clone config for capture in closure
         let sandbox_cfg = sandbox_config.clone();
+        let approval_queue = approval_queue.clone();
 
         register_native_chat_capability(
             &*marketplace,
@@ -1850,6 +2122,7 @@ pub async fn register_chat_capabilities(
             Arc::new(move |inputs: &Value| {
                 let inputs = inputs.clone();
                 let sandbox_cfg = sandbox_cfg.clone();
+                let approval_queue = approval_queue.clone();
                 Box::pin(async move {
                     // Check if bubblewrap is available
                     let bwrap_available = std::process::Command::new("which")
@@ -1963,17 +2236,129 @@ pub async fn register_chat_capabilities(
                     };
 
                     // Create dependency manager using captured config
-                    let dep_manager = DependencyManager::new(sandbox_cfg.clone());
+                    let mut effective_sandbox_cfg = sandbox_cfg.clone();
+                    
+                    // Pre-check for approved packages and add them to temporary auto_approved list
+                    if let Some(queue) = &approval_queue {
+                        for dep in &dependencies {
+                            if queue.is_package_approved(dep, "python").await.unwrap_or(false) {
+                                log::debug!("[ccos.execute.python] Package {} is already approved, adding to temporary allowlist", dep);
+                                effective_sandbox_cfg.package_allowlist.auto_approved.push(dep.clone());
+                            }
+                        }
+                    }
+
+                    let dep_manager = DependencyManager::new(effective_sandbox_cfg);
 
                     // Execute with optional dependencies
-                    let result = sandbox.execute_python(
+                    let result_future = sandbox.execute_python(
                         &code, 
                         &input_files, 
                         &exec_sandbox_config,
                         if dependencies.is_empty() { None } else { Some(&dependencies) },
                         Some(&dep_manager)
-                    ).await
-                        .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
+                    );
+
+                    let result = match result_future.await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            // Check if this is a "requires approval" error
+                            if err_msg.contains("requires approval") {
+                                // Extract package name: "Package 'mpmath' requires approval..."
+                                if let Some(pkg) = err_msg.split('\'').nth(1) {
+                                    if let Some(queue) = &approval_queue {
+                                        // Extract session_id and run_id from inputs if available
+                                        let session_id = map.get(&MapKey::String("session_id".to_string()))
+                                            .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                                            .and_then(|v| v.as_string())
+                                            .map(|s| s.to_string());
+
+                                        let run_id = map.get(&MapKey::String("run_id".to_string()))
+                                            .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                                            .and_then(|v| v.as_string())
+                                            .map(|s| s.to_string());
+
+                                        match queue.add_package_approval(
+                                            pkg.to_string(), 
+                                            "python".to_string(), 
+                                            session_id,
+                                            run_id,  // Pass run_id for approval resolution
+                                        ).await {
+                                            Ok(approval_id) => {
+                                                return Err(RuntimeError::Generic(format!(
+                                                    "Package '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this package, then retry your request.",
+                                                    pkg, approval_id, approval_id
+                                                )));
+                                            }
+                                            Err(ae) => {
+                                                log::error!("[ccos.execute.python] Failed to create package approval: {}", ae);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return Err(RuntimeError::Generic(format!("Execution failed: {}", e)));
+                        }
+                    };
+
+                    // Check for ModuleNotFoundError in stderr (missing dependency detection)
+                    // This handles cases where the code runs but imports a missing module
+                    if !result.success {
+                        let stderr = &result.stderr;
+                        // Pattern: "ModuleNotFoundError: No module named 'X'" or "ImportError: No module named X"
+                        if stderr.contains("ModuleNotFoundError") || stderr.contains("ImportError") {
+                            // Try to extract the module name
+                            let module_name = if let Some(rest) = stderr.split("No module named '").nth(1) {
+                                rest.split('\'').next().map(|s| s.to_string())
+                            } else if let Some(rest) = stderr.split("No module named \"").nth(1) {
+                                rest.split('"').next().map(|s| s.to_string())
+                            } else if let Some(rest) = stderr.split("No module named ").nth(1) {
+                                // Handle unquoted module names
+                                rest.split_whitespace().next()
+                                    .map(|s| s.trim_end_matches(',').trim_end_matches('.').to_string())
+                            } else {
+                                None
+                            };
+
+                            if let Some(module) = module_name {
+                                log::info!(
+                                    "[ccos.execute.python] Detected missing module '{}' in stderr, creating package approval",
+                                    module
+                                );
+
+                                if let Some(queue) = &approval_queue {
+                                    // Extract session_id and run_id from inputs if available
+                                    let session_id = map.get(&MapKey::String("session_id".to_string()))
+                                        .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                                        .and_then(|v| v.as_string())
+                                        .map(|s| s.to_string());
+
+                                    let run_id = map.get(&MapKey::String("run_id".to_string()))
+                                        .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                                        .and_then(|v| v.as_string())
+                                        .map(|s| s.to_string());
+
+                                    match queue.add_package_approval(
+                                        module.clone(),
+                                        "python".to_string(),
+                                        session_id,
+                                        run_id,
+                                    ).await {
+                                        Ok(approval_id) => {
+                                            return Err(RuntimeError::Generic(format!(
+                                                "Package '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this package, then retry your request.",
+                                                module, approval_id, approval_id
+                                            )));
+                                        }
+                                        Err(ae) => {
+                                            log::error!("[ccos.execute.python] Failed to create package approval for missing module: {}", ae);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Build output
                     let mut output_map = HashMap::new();
@@ -3156,5 +3541,191 @@ mod tests {
         assert_eq!(out.get(&MapKey::String("run_id".to_string())).unwrap().as_string().unwrap(), "run-123");
         assert_eq!(out.get(&MapKey::String("status".to_string())).unwrap().as_string().unwrap(), "scheduled");
     }
-}
 
+    #[tokio::test]
+    async fn test_python_package_approval() {
+        use crate::approval::storage_file::FileApprovalStorage;
+        use crate::approval::unified_queue::UnifiedApprovalQueue;
+        use crate::capability_marketplace::CapabilityMarketplace;
+        use crate::chat::register_chat_capabilities;
+        use crate::capabilities::registry::CapabilityRegistry;
+        use crate::causal_chain::CausalChain;
+        use crate::chat::quarantine::InMemoryQuarantineStore;
+        use crate::chat::resource::new_shared_resource_store;
+        use tempfile::tempdir;
+        
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry.clone()));
+        let quarantine = Arc::new(InMemoryQuarantineStore::new());
+        let causal_chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+        let resource_store = new_shared_resource_store();
+        
+        let temp_dir = tempdir().unwrap();
+        let storage = Arc::new(FileApprovalStorage::new(temp_dir.path().to_path_buf()).unwrap());
+        let approval_queue = UnifiedApprovalQueue::new(storage);
+
+        register_chat_capabilities(
+            marketplace.clone(),
+            quarantine,
+            causal_chain,
+            Some(approval_queue.clone()),
+            resource_store,
+            None,
+            None,
+            None,
+            None,
+            crate::config::types::SandboxConfig::default(),
+            crate::config::types::CodingAgentsConfig::default(),
+        ).await.unwrap();
+
+        // ccos.execute.python with unapproved package 'mpmath'
+        let inputs = Value::Map(HashMap::from([
+            (MapKey::String("code".to_string()), Value::String("import mpmath; print(mpmath.pi)".to_string())),
+            (MapKey::String("dependencies".to_string()), Value::Vector(vec![Value::String("mpmath".to_string())])),
+        ]));
+
+        let result = marketplace.execute_capability("ccos.execute.python", &inputs).await;
+        
+        // It should return an error with a retry hint or containing "requires approval"
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(err_msg.contains("requires approval") || err_msg.contains("hint"));
+        
+        // Verify that a package approval request was created in the queue
+        let pending = approval_queue.list_pending_packages().await.unwrap();
+        assert!(!pending.is_empty());
+        
+        if let crate::approval::types::ApprovalCategory::PackageApproval { package, .. } = &pending[0].category {
+            assert_eq!(package, "mpmath");
+        } else {
+            panic!("Expected PackageApproval category");
+        }
+    }
+    #[tokio::test]
+    async fn test_ccos_run_management_capabilities() {
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        let quarantine = Arc::new(InMemoryQuarantineStore::new());
+        let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+        let resource_store = new_shared_resource_store();
+        
+        // Mock ccos.network.http-fetch to handle various run management calls
+        {
+            let marketplace_clone = marketplace.clone();
+            let mut manifest = CapabilityManifest::new(
+                "ccos.network.http-fetch".to_string(),
+                "HTTP Fetch".to_string(),
+                "Mock HTTP fetch".to_string(),
+                ProviderType::Native(NativeCapability {
+                    handler: Arc::new(|inputs: &Value| {
+                         let inputs = inputs.clone();
+                         Box::pin(async move {
+                             let Value::Map(map) = inputs else { panic!("Invalid inputs") };
+                             let url = map.get(&MapKey::String("url".to_string())).unwrap().as_string().unwrap();
+                             let method = map.get(&MapKey::String("method".to_string())).unwrap().as_string().unwrap();
+
+                             let headers = map.get(&MapKey::String("headers".to_string())).unwrap();
+                             let Value::Map(h_map) = headers else { panic!("Headers not a map") };
+                             let secret = h_map.get(&MapKey::String("X-Internal-Secret".to_string())).unwrap().as_string().unwrap();
+                             assert_eq!(secret, "mock-secret");
+
+                             let (response_body, status) = if url.contains("/chat/run/run-unauthorized") {
+                                 ("".to_string(), 401)
+                             } else if url.contains("/chat/run/run-456/cancel") {
+                                 assert_eq!(method, "POST");
+                                 (serde_json::json!({ "run_id": "run-456", "cancelled": true, "previous_state": "running" }).to_string(), 200)
+                             } else if url.contains("/chat/run/run-456/resume") {
+                                 assert_eq!(method, "POST");
+                                 ("".to_string(), 200)
+                             } else if url.contains("/chat/run/run-456") {
+                                 assert_eq!(method, "GET");
+                                 (serde_json::json!({ "run_id": "run-456", "status": "running", "goal": "test goal" }).to_string(), 200)
+                             } else if url.contains("/chat/run?session_id=session-1") {
+                                 assert_eq!(method, "GET");
+                                 (serde_json::json!({ "session_id": "session-1", "runs": [{"run_id": "run-456"}] }).to_string(), 200)
+                             } else if url.contains("/chat/run/chat-run-123") {
+                                 assert_eq!(method, "GET");
+                                 (serde_json::json!({ "run_id": "chat-run-123", "status": "running", "goal": "test goal" }).to_string(), 200)
+                             } else {
+                                 panic!("Unexpected URL: {}", url);
+                             };
+                             
+                             Ok(Value::Map(HashMap::from([
+                                 (MapKey::String("status".to_string()), Value::Integer(status)),
+                                 (MapKey::String("body".to_string()), Value::String(response_body)),
+                             ])))
+                         })
+                    }),
+                    security_level: "low".to_string(),
+                    metadata: HashMap::new(),
+                }),
+                "1.0.0".to_string(),
+            );
+            manifest.approval_status = crate::capability_marketplace::types::ApprovalStatus::AutoApproved;
+            marketplace_clone.register_capability_manifest(manifest).await.unwrap();
+        }
+
+        register_chat_capabilities(
+            marketplace.clone(),
+            quarantine,
+            chain,
+            None,
+            resource_store,
+            None,
+            None,
+            Some("http://localhost:9999".to_string()),
+            Some("mock-secret".to_string()),
+            crate::config::types::SandboxConfig::default(),
+            crate::config::types::CodingAgentsConfig::default(),
+        ).await.unwrap();
+
+        // 1. Test ccos.run.get
+        let get_inputs = Value::Map(HashMap::from([
+            (MapKey::String("run_id".to_string()), Value::String("run-456".to_string())),
+        ]));
+        let get_res = marketplace.execute_capability("ccos.run.get", &get_inputs).await.unwrap();
+        let Value::Map(get_map) = get_res else { panic!("Expected map") };
+        assert_eq!(get_map.get(&MapKey::String("run_id".to_string())).unwrap().as_string().unwrap(), "run-456");
+
+        // 2. Test ccos.run.list
+        let list_inputs = Value::Map(HashMap::from([
+            (MapKey::String("session_id".to_string()), Value::String("session-1".to_string())),
+        ]));
+        let list_res = marketplace.execute_capability("ccos.run.list", &list_inputs).await.unwrap();
+        let Value::Map(list_map) = list_res else { panic!("Expected map") };
+        assert_eq!(list_map.get(&MapKey::String("session_id".to_string())).unwrap().as_string().unwrap(), "session-1");
+
+        // 3. Test ccos.run.cancel
+        let cancel_inputs = Value::Map(HashMap::from([
+            (MapKey::String("run_id".to_string()), Value::String("run-456".to_string())),
+        ]));
+        let cancel_res = marketplace.execute_capability("ccos.run.cancel", &cancel_inputs).await.unwrap();
+        let Value::Map(cancel_map) = cancel_res else { panic!("Expected map") };
+        assert_eq!(cancel_map.get(&MapKey::String("cancelled".to_string())).unwrap().as_bool().unwrap(), true);
+
+        // 4. Test ccos.run.resume
+        let resume_inputs = Value::Map(HashMap::from([
+            (MapKey::String("run_id".to_string()), Value::String("run-456".to_string())),
+        ]));
+        let resume_res = marketplace.execute_capability("ccos.run.resume", &resume_inputs).await.unwrap();
+        assert_eq!(resume_res.as_number().unwrap(), 200.0);
+
+        // 5. Test error case: 401 Unauthorized with empty body (reported EOF error)
+        let get_inputs_err = Value::Map(HashMap::from([
+            (MapKey::String("run_id".to_string()), Value::String("run-unauthorized".to_string())),
+        ]));
+        let err_res = marketplace.execute_capability("ccos.run.get", &get_inputs_err).await;
+        assert!(err_res.is_err());
+        let err_msg = format!("{:?}", err_res.err().unwrap());
+        assert!(err_msg.contains("failed: 401"));
+        assert!(!err_msg.contains("EOF"));
+
+        // 6. Test ephemeral run retrieval (verifying 404 fix)
+        let get_inputs_eph = Value::Map(HashMap::from([
+            (MapKey::String("run_id".to_string()), Value::String("chat-run-123".to_string())),
+        ]));
+        let eph_res = marketplace.execute_capability("ccos.run.get", &get_inputs_eph).await.unwrap();
+        let Value::Map(eph_map) = eph_res else { panic!("Expected map") };
+        assert_eq!(eph_map.get(&MapKey::String("run_id".to_string())).unwrap().as_string().unwrap(), "chat-run-123");
+    }
+}

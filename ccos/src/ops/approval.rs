@@ -88,9 +88,7 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             None,
         ),
         ApprovalCategory::BudgetExtension {
-            plan_id,
-            dimension,
-            ..
+            plan_id, dimension, ..
         } => (
             ApprovalType::Budget,
             format!("Budget Extension: {}", dimension),
@@ -132,19 +130,54 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "onboarding".to_string(),
             None,
         ),
-        ApprovalCategory::HumanActionRequest { action_type, title, instructions, skill_id, step_id, .. } => (
+        ApprovalCategory::HumanActionRequest {
+            action_type,
+            title,
+            instructions,
+            skill_id,
+            step_id,
+            ..
+        } => (
             ApprovalType::Effect, // reuse Effect type for human actions
             format!("Human Action: {}", title),
-            format!("{} for skill {} step {}: {}", action_type, skill_id, step_id, 
-                if instructions.len() > 100 { format!("{}...", &instructions[..100]) } else { instructions.clone() }),
+            format!(
+                "{} for skill {} step {}: {}",
+                action_type,
+                skill_id,
+                step_id,
+                if instructions.len() > 100 {
+                    format!("{}...", &instructions[..100])
+                } else {
+                    instructions.clone()
+                }
+            ),
             "onboarding".to_string(),
             None,
         ),
-        ApprovalCategory::HttpHostApproval { host, port, requesting_url, reason, .. } => (
+        ApprovalCategory::HttpHostApproval {
+            host,
+            port,
+            requesting_url,
+            reason,
+            ..
+        } => (
             ApprovalType::Effect, // reuse Effect type for HTTP host approvals
             format!("HTTP Host Approval: {}", host),
-            format!("{}:{} for {} - {}", host, port.map_or("default".to_string(), |p| p.to_string()), requesting_url, reason),
+            format!(
+                "{}:{} for {} - {}",
+                host,
+                port.map_or("default".to_string(), |p| p.to_string()),
+                requesting_url,
+                reason
+            ),
             "network".to_string(),
+            None,
+        ),
+        ApprovalCategory::PackageApproval { package, runtime } => (
+            ApprovalType::Effect, // reuse Effect type for package approvals
+            format!("Package Approval: {}", package),
+            format!("{}: {}", runtime, package),
+            "sandbox".to_string(),
             None,
         ),
     };

@@ -35,6 +35,8 @@ pub struct SpawnConfig {
     pub run_id: Option<String>,
     /// Optional LLM max tokens
     pub llm_max_tokens: Option<u32>,
+    /// Optional LLM profile name (resolved by ccos-agent from agent_config.toml)
+    pub llm_profile: Option<String>,
 }
 
 impl SpawnConfig {
@@ -64,6 +66,11 @@ impl SpawnConfig {
 
     pub fn with_llm_max_tokens(mut self, max_tokens: u32) -> Self {
         self.llm_max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn with_llm_profile(mut self, profile: impl Into<String>) -> Self {
+        self.llm_profile = Some(profile.into());
         self
     }
 }
@@ -198,6 +205,9 @@ impl AgentSpawner for ProcessSpawner {
             }
             if let Some(max_tokens) = config.llm_max_tokens {
                 cmd.arg("--llm-max-tokens").arg(max_tokens.to_string());
+            }
+            if let Some(profile) = &config.llm_profile {
+                cmd.arg("--llm-profile").arg(profile);
             }
 
             // Add environment variables
@@ -342,6 +352,9 @@ impl AgentSpawner for JailedProcessSpawner {
             }
             if let Some(max_tokens) = config.llm_max_tokens {
                 cmd.arg("--llm-max-tokens").arg(max_tokens.to_string());
+            }
+            if let Some(profile) = &config.llm_profile {
+                cmd.arg("--llm-profile").arg(profile);
             }
 
             for (key, value) in env_vars {
