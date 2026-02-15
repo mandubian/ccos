@@ -29,6 +29,11 @@ pub struct FileApprovalStorage {
 impl FileApprovalStorage {
     /// Create a new FileApprovalStorage with the given base path.
     pub fn new(base_path: PathBuf) -> RuntimeResult<Self> {
+        log::info!(
+            "[FileApprovalStorage] Initializing with base_path: {:?}",
+            base_path
+        );
+        
         // Ensure base directory exists
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| {
@@ -137,9 +142,16 @@ impl FileApprovalStorage {
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
         })?;
+        
+        // Clear cache before reloading to ensure fresh data
+        cache.clear();
 
         for status in &["pending", "approved", "rejected", "expired"] {
             let status_dir = self.base_path.join(status);
+            if !status_dir.exists() {
+                continue;
+            }
+            
             if let Ok(entries) = std::fs::read_dir(&status_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -148,6 +160,11 @@ impl FileApprovalStorage {
                     if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
                         match self.load_request_from_json(&path) {
                             Ok(request) => {
+                                log::debug!(
+                                    "[FileApprovalStorage] Loaded approval {} from {:?}",
+                                    request.id,
+                                    path
+                                );
                                 cache.insert(request.id.clone(), request);
                             }
                             Err(e) => {
@@ -184,6 +201,12 @@ impl FileApprovalStorage {
                 }
             }
         }
+
+        log::info!(
+            "[FileApprovalStorage] Loaded {} approvals from disk at base_path {:?}",
+            cache.len(),
+            self.base_path
+        );
 
         Ok(())
     }
@@ -492,6 +515,7 @@ impl FileApprovalStorage {
                 ApprovalCategory::SecretWrite { .. } => "SecretWrite",
                 ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                 ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
+                ApprovalCategory::PackageApproval { .. } => "PackageApproval",
             };
             if request_type != category_type {
                 return false;
@@ -512,8 +536,21 @@ impl FileApprovalStorage {
 #[async_trait]
 impl ApprovalStorage for FileApprovalStorage {
     async fn add(&self, request: ApprovalRequest) -> RuntimeResult<()> {
+        log::info!(
+            "[FileApprovalStorage] Adding approval {} with category {:?}",
+            request.id,
+            std::mem::discriminant(&request.category)
+        );
+        
         // Save to disk first
         self.save_request(&request)?;
+        
+        log::info!(
+            "[FileApprovalStorage] Saved approval {} to disk at {:?}",
+            request.id,
+            self.get_request_path_for_status(&request.id, &request.status)
+        );
+        
         // Then add to cache
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
@@ -566,13 +603,43 @@ impl ApprovalStorage for FileApprovalStorage {
     }
 
     async fn get(&self, id: &str) -> RuntimeResult<Option<ApprovalRequest>> {
+        log::info!(
+            "[FileApprovalStorage] Getting approval {} from base_path: {:?}",
+            id,
+            self.base_path
+        );
+        
         // Reload from disk to pick up any changes made by other processes
         self.load_all()?;
 
         let cache = self.cache.read().map_err(|_| {
             RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
         })?;
-        Ok(cache.get(id).cloned())
+        
+        let result = cache.get(id).cloned();
+        if result.is_some() {
+            log::info!(
+                "[FileApprovalStorage] Found approval {} in cache",
+                id
+            );
+        } else {
+            log::warn!(
+                "[FileApprovalStorage] Approval {} NOT found in cache. Cache has {} entries",
+                id,
+                cache.len()
+            );
+            // Log some IDs from the cache for debugging
+            for (cached_id, req) in cache.iter().take(5) {
+                log::debug!(
+                    "[FileApprovalStorage] Cache entry: id={}, category={:?}, status={:?}",
+                    cached_id,
+                    std::mem::discriminant(&req.category),
+                    req.status
+                );
+            }
+        }
+        
+        Ok(result)
     }
 
     async fn list(&self, filter: ApprovalFilter) -> RuntimeResult<Vec<ApprovalRequest>> {

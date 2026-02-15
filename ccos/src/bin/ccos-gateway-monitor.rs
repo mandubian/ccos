@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseButton, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -20,7 +20,7 @@ use ratatui::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -41,6 +41,10 @@ struct Args {
     /// Refresh interval for metrics (seconds)
     #[arg(long, default_value = "5")]
     refresh_interval: u64,
+
+    /// Path to agent configuration file used for available LLM profile choices
+    #[arg(long, default_value = "config/agent_config.toml")]
+    config_path: String,
 }
 
 /// Session information from the gateway
@@ -97,6 +101,7 @@ struct CodeExecutionDetails {
 /// System event
 #[derive(Debug, Clone)]
 struct SystemEvent {
+    id: u64,
     timestamp: Instant,
     event_type: String,
     session_id: String,
@@ -168,16 +173,26 @@ struct MonitorState {
     selected_agent_index: usize,
     /// Selected event index in Events tab
     selected_event_index: usize,
+    /// Stable selected event ID (prevents selection drift when new events arrive)
+    selected_event_id: Option<u64>,
+    /// Monotonic event ID counter
+    next_event_id: u64,
     /// Whether event detail popup is shown
     show_event_detail: bool,
+    /// Show noisy internal-step events in Events tab
+    show_internal_steps: bool,
     #[allow(dead_code)]
     last_refresh: Instant,
+    show_profile_selector: bool,
+    selected_profile_index: usize,
+    available_llm_profiles: Vec<String>,
+    active_spawn_llm_profile: Option<String>,
     should_quit: bool,
     status_message: String,
 }
 
 impl MonitorState {
-    fn new() -> Self {
+    fn new(available_llm_profiles: Vec<String>, active_spawn_llm_profile: Option<String>) -> Self {
         Self {
             sessions: HashMap::new(),
             agents: HashMap::new(),
@@ -187,10 +202,47 @@ impl MonitorState {
             selected_tab: 0,
             selected_agent_index: 0,
             selected_event_index: 0,
+            selected_event_id: None,
+            next_event_id: 1,
             show_event_detail: false,
+            show_internal_steps: false,
             last_refresh: Instant::now(),
+            show_profile_selector: false,
+            selected_profile_index: 0,
+            available_llm_profiles,
+            active_spawn_llm_profile,
             should_quit: false,
             status_message: "Connected to gateway".to_string(),
+        }
+    }
+
+    fn profile_options_len(&self) -> usize {
+        1 + self.available_llm_profiles.len()
+    }
+
+    fn selected_profile_option(&self) -> Option<String> {
+        if self.selected_profile_index == 0 {
+            None
+        } else {
+            self.available_llm_profiles
+                .get(self.selected_profile_index - 1)
+                .cloned()
+        }
+    }
+
+    fn open_profile_selector(&mut self) {
+        self.show_profile_selector = true;
+        self.selected_profile_index = 0;
+
+        if let Some(active) = &self.active_spawn_llm_profile {
+            if let Some((idx, _)) = self
+                .available_llm_profiles
+                .iter()
+                .enumerate()
+                .find(|(_, p)| *p == active)
+            {
+                self.selected_profile_index = idx + 1;
+            }
         }
     }
 
@@ -213,15 +265,24 @@ impl MonitorState {
 
     /// Get filtered event indices for selection navigation
     fn get_filtered_event_indices(&self) -> Vec<usize> {
+        let event_visible = |event: &SystemEvent| {
+            self.show_internal_steps || !is_internal_step_event(event)
+        };
+
         if let Some(selected_id) = self.get_selected_session_id() {
             self.events
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| e.session_id == selected_id)
+                .filter(|(_, e)| e.session_id == selected_id && event_visible(e))
                 .map(|(i, _)| i)
                 .collect()
         } else {
-            self.events.iter().enumerate().map(|(i, _)| i).collect()
+            self.events
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| event_visible(e))
+                .map(|(i, _)| i)
+                .collect()
         }
     }
 
@@ -238,7 +299,11 @@ impl MonitorState {
         code_execution: Option<CodeExecutionDetails>,
         metadata: Option<serde_json::Value>,
     ) {
+        let event_id = self.next_event_id;
+        self.next_event_id = self.next_event_id.saturating_add(1);
+
         self.events.push(SystemEvent {
+            id: event_id,
             timestamp: Instant::now(),
             event_type: event_type.to_string(),
             session_id: session_id.to_string(),
@@ -258,12 +323,130 @@ impl MonitorState {
         }
     }
 
+    fn add_action_event(
+        &mut self,
+        session_id: &str,
+        details: &str,
+        full_details: Option<String>,
+        code_execution: Option<CodeExecutionDetails>,
+        metadata: Option<serde_json::Value>,
+    ) {
+        let heartbeat_key = metadata
+            .as_ref()
+            .and_then(|m| m.get("_heartbeat_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        if let Some(ref hb_key) = heartbeat_key {
+            if let Some(last) = self.events.last_mut() {
+                let last_hb_key = last
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("_heartbeat_key"))
+                    .and_then(|v| v.as_str());
+
+                if last.event_type == "ACTION"
+                    && last.session_id == session_id
+                    && last_hb_key == Some(hb_key.as_str())
+                {
+                    let mut count = last
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("_heartbeat_count"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(1);
+                    count += 1;
+
+                    let base_details = last
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("_heartbeat_base_details"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(details)
+                        .to_string();
+
+                    last.details = format!("{} ×{}", base_details, count);
+                    last.timestamp = Instant::now();
+
+                    if let Some(serde_json::Value::Object(map)) = last.metadata.as_mut() {
+                        map.insert(
+                            "_heartbeat_count".to_string(),
+                            serde_json::Value::from(count),
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+
+        self.add_event_full(
+            "ACTION",
+            session_id,
+            details,
+            full_details,
+            code_execution,
+            metadata,
+        );
+    }
+
     /// Get the currently selected event (if any)
     fn get_selected_event(&self) -> Option<&SystemEvent> {
+        if let Some(selected_id) = self.selected_event_id {
+            return self.events.iter().find(|e| e.id == selected_id);
+        }
+
         let filtered_indices = self.get_filtered_event_indices();
         filtered_indices
-            .get(self.selected_event_index)
+            .iter()
+            .rev()
+            .nth(self.selected_event_index)
             .and_then(|&idx| self.events.get(idx))
+    }
+
+    fn event_id_for_display_index(&self, display_idx: usize) -> Option<u64> {
+        let filtered_indices = self.get_filtered_event_indices();
+        filtered_indices
+            .iter()
+            .rev()
+            .nth(display_idx)
+            .and_then(|&idx| self.events.get(idx))
+            .map(|event| event.id)
+    }
+
+    fn sync_event_selection(&mut self) {
+        let filtered_indices = self.get_filtered_event_indices();
+        if filtered_indices.is_empty() {
+            self.selected_event_index = 0;
+            self.selected_event_id = None;
+            self.show_event_detail = false;
+            return;
+        }
+
+        // Keep popup content stable across incoming events by anchoring on event ID
+        // only while detail popup is open.
+        if self.show_event_detail {
+            if let Some(selected_id) = self.selected_event_id {
+                if let Some((display_idx, _)) = filtered_indices
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .find(|(_, &idx)| self.events.get(idx).map(|e| e.id) == Some(selected_id))
+                {
+                    self.selected_event_index = display_idx;
+                    return;
+                }
+
+                // Selected event disappeared (rotation/filter change) - drop popup anchor.
+                self.selected_event_id = None;
+                self.show_event_detail = false;
+            }
+        }
+
+        // Index-driven selection mode (keyboard/mouse hover without popup).
+        if self.selected_event_index >= filtered_indices.len() {
+            self.selected_event_index = filtered_indices.len() - 1;
+        }
+        self.selected_event_id = self.event_id_for_display_index(self.selected_event_index);
     }
 
     fn add_llm_consultation(&mut self, session_id: String, consultation: LlmConsultation) {
@@ -366,6 +549,11 @@ impl MonitorState {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct SpawnLlmProfileResponse {
+    profile: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing to write to a log file instead of stdout/stderr
@@ -386,6 +574,20 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting CCOS Gateway Monitor...");
     info!("Gateway URL: {}", args.gateway_url);
 
+    let available_profiles = load_available_llm_profiles(&args.config_path);
+    let client = Client::new();
+    let active_spawn_llm_profile =
+        match fetch_gateway_llm_profile(&client, &args.gateway_url, &args.token).await {
+            Ok(profile) => profile,
+            Err(e) => {
+                warn!(
+                    "Failed to fetch current gateway spawn profile (continuing): {}",
+                    e
+                );
+                None
+            }
+        };
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -401,14 +603,13 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             if event::poll(Duration::from_millis(100)).expect("poll failed") {
-                if let Event::Key(key) = event::read().expect("read failed") {
-                    if tx_input
-                        .send(MonitorEvent::Input(Event::Key(key)))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
+                let input_event = event::read().expect("read failed");
+                if tx_input
+                    .send(MonitorEvent::Input(input_event))
+                    .await
+                    .is_err()
+                {
+                    break;
                 }
             }
         }
@@ -484,87 +685,270 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Main loop
-    let mut state = MonitorState::new();
+    let mut state = MonitorState::new(available_profiles, active_spawn_llm_profile);
 
     loop {
+        state.sync_event_selection();
+
         // Draw UI
         terminal.draw(|f| draw_ui(f, &state))?;
 
         // Handle events
         if let Some(event) = rx.recv().await {
             match event {
-                MonitorEvent::Input(event) => {
-                    if let Event::Key(key) = event {
-                        // Handle Escape to close detail popup first
-                        if state.show_event_detail {
-                            if key.code == KeyCode::Esc {
-                                state.show_event_detail = false;
-                            }
-                            // Consume all other keys while popup is open
-                            continue;
-                        }
-
-                        match key.code {
-                            KeyCode::Char('q') => state.should_quit = true,
-                            KeyCode::Tab => {
-                                state.selected_tab = (state.selected_tab + 1) % 4;
-                            }
-                            KeyCode::BackTab => {
-                                state.selected_tab = if state.selected_tab == 0 {
-                                    3
-                                } else {
-                                    state.selected_tab - 1
-                                };
-                            }
-                            KeyCode::Up => {
-                                // Navigate agents in Agents tab or events in Events tab
-                                if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
-                                    if state.selected_agent_index > 0 {
-                                        state.selected_agent_index -= 1;
-                                    } else {
-                                        state.selected_agent_index =
-                                            state.agent_session_ids.len() - 1;
+                MonitorEvent::Input(input_event) => {
+                    match input_event {
+                        Event::Key(key) => {
+                            if state.show_profile_selector {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        state.show_profile_selector = false;
                                     }
-                                } else if state.selected_tab == 2 {
-                                    // Navigate events in Events tab - Inverted because latest is at top
-                                    let filtered_count = state.get_filtered_event_indices().len();
-                                    if filtered_count > 0 {
-                                        if state.selected_event_index < filtered_count - 1 {
-                                            state.selected_event_index += 1;
-                                        } else {
-                                            state.selected_event_index = 0;
+                                    KeyCode::Up => {
+                                        let len = state.profile_options_len();
+                                        if len > 0 {
+                                            if state.selected_profile_index > 0 {
+                                                state.selected_profile_index -= 1;
+                                            } else {
+                                                state.selected_profile_index = len - 1;
+                                            }
                                         }
                                     }
+                                    KeyCode::Down => {
+                                        let len = state.profile_options_len();
+                                        if len > 0 {
+                                            state.selected_profile_index =
+                                                (state.selected_profile_index + 1) % len;
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        let selected = state.selected_profile_option();
+                                        match set_gateway_llm_profile(
+                                            &client,
+                                            &args.gateway_url,
+                                            &args.token,
+                                            selected.as_deref(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(applied) => {
+                                                state.active_spawn_llm_profile = applied.clone();
+                                                state.status_message = match applied {
+                                                    Some(profile) => format!(
+                                                        "Spawn LLM profile set to '{}'",
+                                                        profile
+                                                    ),
+                                                    None => "Spawn LLM profile override cleared"
+                                                        .to_string(),
+                                                };
+                                            }
+                                            Err(e) => {
+                                                state.status_message = format!(
+                                                    "Failed to set spawn profile: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        state.show_profile_selector = false;
+                                    }
+                                    _ => {}
                                 }
+                                continue;
                             }
-                            KeyCode::Down => {
-                                // Navigate agents in Agents tab or events in Events tab
-                                if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
-                                    state.selected_agent_index = (state.selected_agent_index + 1)
-                                        % state.agent_session_ids.len();
-                                } else if state.selected_tab == 2 {
-                                    // Navigate events in Events tab - Inverted because latest is at top
-                                    let filtered_count = state.get_filtered_event_indices().len();
-                                    if filtered_count > 0 {
-                                        if state.selected_event_index > 0 {
-                                            state.selected_event_index -= 1;
-                                        } else {
+
+                            // Handle Escape to close detail popup first
+                            if state.show_event_detail {
+                                if key.code == KeyCode::Esc {
+                                    state.show_event_detail = false;
+                                }
+                                // Consume all other keys while popup is open
+                                continue;
+                            }
+
+                            match key.code {
+                                KeyCode::Char('q') => state.should_quit = true,
+                                KeyCode::Char('p') => {
+                                    state.open_profile_selector();
+                                }
+                                KeyCode::Char('i') => {
+                                    if state.selected_tab == 2 {
+                                        state.show_internal_steps = !state.show_internal_steps;
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count == 0 {
+                                            state.selected_event_index = 0;
+                                        } else if state.selected_event_index >= filtered_count {
                                             state.selected_event_index = filtered_count - 1;
                                         }
                                     }
                                 }
+                                KeyCode::Tab => {
+                                    state.selected_tab = (state.selected_tab + 1) % 4;
+                                }
+                                KeyCode::BackTab => {
+                                    state.selected_tab = if state.selected_tab == 0 {
+                                        3
+                                    } else {
+                                        state.selected_tab - 1
+                                    };
+                                }
+                                KeyCode::Up => {
+                                    // Navigate agents in Agents tab or events in Events tab
+                                    if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
+                                        if state.selected_agent_index > 0 {
+                                            state.selected_agent_index -= 1;
+                                        } else {
+                                            state.selected_agent_index =
+                                                state.agent_session_ids.len() - 1;
+                                        }
+                                    } else if state.selected_tab == 2 {
+                                        // Navigate events in display order (top to bottom)
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count > 0 {
+                                            if state.selected_event_index > 0 {
+                                                state.selected_event_index -= 1;
+                                            } else {
+                                                state.selected_event_index = filtered_count - 1;
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    // Navigate agents in Agents tab or events in Events tab
+                                    if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
+                                        state.selected_agent_index = (state.selected_agent_index + 1)
+                                            % state.agent_session_ids.len();
+                                    } else if state.selected_tab == 2 {
+                                        // Navigate events in display order (top to bottom)
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count > 0 {
+                                            if state.selected_event_index < filtered_count - 1 {
+                                                state.selected_event_index += 1;
+                                            } else {
+                                                state.selected_event_index = 0;
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::PageUp => {
+                                    if state.selected_tab == 2 {
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count > 0 {
+                                            let events_area = get_events_tab_area(terminal.size()?);
+                                            let page_size = events_area.height.saturating_sub(2).max(1) as usize;
+                                            state.selected_event_index =
+                                                state.selected_event_index.saturating_sub(page_size);
+                                        }
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    if state.selected_tab == 2 {
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count > 0 {
+                                            let events_area = get_events_tab_area(terminal.size()?);
+                                            let page_size = events_area.height.saturating_sub(2).max(1) as usize;
+                                            state.selected_event_index = (state.selected_event_index + page_size)
+                                                .min(filtered_count - 1);
+                                        }
+                                    }
+                                }
+                                KeyCode::Home => {
+                                    if state.selected_tab == 2 {
+                                        if !state.get_filtered_event_indices().is_empty() {
+                                            state.selected_event_index = 0;
+                                        }
+                                    }
+                                }
+                                KeyCode::End => {
+                                    if state.selected_tab == 2 {
+                                        let filtered_count = state.get_filtered_event_indices().len();
+                                        if filtered_count > 0 {
+                                            state.selected_event_index = filtered_count - 1;
+                                        }
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    // Show event detail in Events tab
+                                    if state.selected_tab == 2 {
+                                        let filtered_indices = state.get_filtered_event_indices();
+                                        if !filtered_indices.is_empty() {
+                                            state.selected_event_id =
+                                                state.event_id_for_display_index(state.selected_event_index);
+                                            state.show_event_detail = true;
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
-                            KeyCode::Enter => {
-                                // Show event detail in Events tab
-                                if state.selected_tab == 2 {
-                                    let filtered_indices = state.get_filtered_event_indices();
-                                    if !filtered_indices.is_empty() {
-                                        state.show_event_detail = true;
+                        }
+                        Event::Mouse(mouse) => {
+                            // Allow right-click to close popup
+                            if state.show_event_detail {
+                                if let MouseEventKind::Down(MouseButton::Right) = mouse.kind {
+                                    state.show_event_detail = false;
+                                }
+                                continue;
+                            }
+
+                            if state.selected_tab == 2 {
+                                let events_area = get_events_tab_area(terminal.size()?);
+                                let in_events_area = mouse.column >= events_area.x
+                                    && mouse.column < events_area.x + events_area.width
+                                    && mouse.row >= events_area.y
+                                    && mouse.row < events_area.y + events_area.height;
+
+                                if in_events_area {
+                                    let filtered_count = state.get_filtered_event_indices().len();
+
+                                    if filtered_count > 0 {
+                                        match mouse.kind {
+                                            MouseEventKind::ScrollUp => {
+                                                if state.selected_event_index > 0 {
+                                                    state.selected_event_index -= 1;
+                                                }
+                                            }
+                                            MouseEventKind::ScrollDown => {
+                                                if state.selected_event_index < filtered_count - 1 {
+                                                    state.selected_event_index += 1;
+                                                }
+                                            }
+                                            MouseEventKind::Down(MouseButton::Left) => {
+                                                // Select clicked row inside the list viewport (inside block borders)
+                                                if events_area.height > 2 && mouse.row > events_area.y {
+                                                    let viewport_height = events_area.height.saturating_sub(2) as usize;
+                                                    let inner_row = mouse.row.saturating_sub(events_area.y + 1) as usize;
+
+                                                    if inner_row < viewport_height {
+                                                        let (_, scroll_offset) = compute_events_viewport(
+                                                            filtered_count,
+                                                            state.selected_event_index,
+                                                            viewport_height,
+                                                        );
+                                                        let clicked_display_idx = scroll_offset + inner_row;
+                                                        if clicked_display_idx < filtered_count {
+                                                            let clicked_event_id =
+                                                                state.event_id_for_display_index(clicked_display_idx);
+                                                            if state.show_event_detail
+                                                                && state.selected_event_id == clicked_event_id
+                                                                && clicked_event_id.is_some()
+                                                                && state.show_event_detail
+                                                            {
+                                                                state.show_event_detail = false;
+                                                            } else {
+                                                                state.selected_event_index = clicked_display_idx;
+                                                                state.selected_event_id = clicked_event_id;
+                                                                state.show_event_detail = true;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
                 }
                 MonitorEvent::SessionUpdate(sessions) => {
@@ -623,6 +1007,14 @@ async fn main() -> anyhow::Result<()> {
                         };
                     }
 
+                    // Ensure selected_event_index remains valid for current Events filter
+                    let filtered_count = state.get_filtered_event_indices().len();
+                    if filtered_count == 0 {
+                        state.selected_event_index = 0;
+                    } else if state.selected_event_index >= filtered_count {
+                        state.selected_event_index = filtered_count - 1;
+                    }
+
                     state.status_message = format!("Updated {} sessions", state.sessions.len());
                 }
 
@@ -641,32 +1033,49 @@ async fn main() -> anyhow::Result<()> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    // Build summary string for the event list
-                    let mut details = action_details.action_type.clone();
-                    if !action_details.function_name.is_empty() {
-                        details = format!("{}: {}", details, action_details.function_name);
-                    }
-                    if let Some(ms) = action_details.duration_ms {
-                        details = format!("{} ({}ms)", details, ms);
-                    }
-                    if let Some(s) = action_details.success {
-                        let status = if s { "✓" } else { "✗" };
-                        details = format!("{} {}", details, status);
-                    }
-                    if !action_details.summary.is_empty()
+                    let is_internal_step = is_internal_step_action(&action_details);
+                    let is_heartbeat = is_get_status_heartbeat(&action_details);
+
+                    let call_name = if !action_details.function_name.is_empty() {
+                        action_details.function_name.clone()
+                    } else {
+                        action_details.action_type.clone()
+                    };
+
+                    let duration_suffix = action_details
+                        .duration_ms
+                        .map(|ms| format!(" ({}ms)", ms))
+                        .unwrap_or_default();
+
+                    let status_label = match action_details.success {
+                        Some(true) => "ok",
+                        Some(false) => "error",
+                        None => "done",
+                    };
+
+                    let mut result_summary = if let Some(err) = &error_text {
+                        format!("error: {}", single_line(err, 120))
+                    } else if !action_details.summary.trim().is_empty()
                         && action_details.summary != action_details.action_type
                     {
-                        details = format!("{} - {}", details, action_details.summary);
+                        single_line(&action_details.summary, 120)
+                    } else {
+                        String::new()
+                    };
+
+                    if result_summary == status_label {
+                        result_summary.clear();
                     }
-                    if let Some(err) = &error_text {
-                        let short_err = if err.chars().count() > 140 {
-                            let truncated: String = err.chars().take(137).collect();
-                            format!("{}...", truncated)
-                        } else {
-                            err.clone()
-                        };
-                        details = format!("{} | error: {}", details, short_err);
-                    }
+
+                    // Build summary string for the event list (single-line call → result)
+                    let details = if result_summary.is_empty() {
+                        format!("{} -> {}{}", call_name, status_label, duration_suffix)
+                    } else {
+                        format!(
+                            "{} -> {}{} | {}",
+                            call_name, status_label, duration_suffix, result_summary
+                        )
+                    };
 
                     // Build full details for detail view
                     let mut full_lines = vec![format!("Action: {}", action_details.action_type)];
@@ -693,13 +1102,37 @@ async fn main() -> anyhow::Result<()> {
                     }
                     let full_details = full_lines.join("\n");
 
-                    state.add_event_full(
-                        "ACTION",
+                    let mut event_metadata = action_details.metadata.clone();
+                    if !matches!(event_metadata, Some(serde_json::Value::Object(_))) {
+                        event_metadata = Some(serde_json::Value::Object(serde_json::Map::new()));
+                    }
+                    if let Some(serde_json::Value::Object(map)) = event_metadata.as_mut() {
+                        map.insert(
+                            "_is_internal_step".to_string(),
+                            serde_json::Value::from(is_internal_step),
+                        );
+                        if is_heartbeat {
+                            map.insert(
+                                "_heartbeat_key".to_string(),
+                                serde_json::Value::String(format!("{}:{}", session_id, call_name)),
+                            );
+                            map.insert(
+                                "_heartbeat_count".to_string(),
+                                serde_json::Value::from(1_u64),
+                            );
+                            map.insert(
+                                "_heartbeat_base_details".to_string(),
+                                serde_json::Value::String(details.clone()),
+                            );
+                        }
+                    }
+
+                    state.add_action_event(
                         &session_id,
                         &details,
                         Some(full_details),
                         action_details.code_execution.clone(),
-                        action_details.metadata.clone(),
+                        event_metadata,
                     );
                 }
                 MonitorEvent::LlmConsultation(session_id, consultation) => {
@@ -708,6 +1141,8 @@ async fn main() -> anyhow::Result<()> {
                 MonitorEvent::Tick => {}
             }
         }
+
+        state.sync_event_selection();
 
         if state.should_quit {
             break;
@@ -724,6 +1159,114 @@ async fn main() -> anyhow::Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+fn load_available_llm_profiles(config_path: &str) -> Vec<String> {
+    let mut profiles = Vec::new();
+    let mut seen = HashSet::new();
+
+    let path = std::path::Path::new(config_path);
+    let resolved_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        std::path::Path::new("..").join(config_path)
+    };
+
+    let content = match std::fs::read_to_string(&resolved_path) {
+        Ok(content) => content,
+        Err(e) => {
+            warn!(
+                "Failed to read agent config '{}': {}",
+                resolved_path.display(),
+                e
+            );
+            return profiles;
+        }
+    };
+
+    let normalized = if content.starts_with("# RTFS") {
+        content.lines().skip(1).collect::<Vec<_>>().join("\n")
+    } else {
+        content
+    };
+
+    let config = match toml::from_str::<ccos::config::types::AgentConfig>(&normalized) {
+        Ok(config) => config,
+        Err(e) => {
+            warn!(
+                "Failed to parse agent config '{}': {}",
+                resolved_path.display(),
+                e
+            );
+            return profiles;
+        }
+    };
+
+    if let Some(llm_profiles) = config.llm_profiles {
+        for profile in llm_profiles.profiles {
+            if seen.insert(profile.name.clone()) {
+                profiles.push(profile.name);
+            }
+        }
+
+        if let Some(model_sets) = llm_profiles.model_sets {
+            for set in model_sets {
+                for model in set.models {
+                    let synthetic = format!("{}:{}", set.name, model.name);
+                    if seen.insert(synthetic.clone()) {
+                        profiles.push(synthetic);
+                    }
+                }
+            }
+        }
+    }
+
+    profiles.sort();
+    profiles
+}
+
+async fn fetch_gateway_llm_profile(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+) -> anyhow::Result<Option<String>> {
+    let url = format!("{}/chat/admin/llm-profile", gateway_url);
+    let resp = client.get(&url).header("X-Admin-Token", token).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to get spawn profile: HTTP {}",
+            resp.status()
+        ));
+    }
+
+    let body = resp.json::<SpawnLlmProfileResponse>().await?;
+    Ok(body.profile)
+}
+
+async fn set_gateway_llm_profile(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+    profile: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let url = format!("{}/chat/admin/llm-profile", gateway_url);
+    let resp = client
+        .post(&url)
+        .header("X-Admin-Token", token)
+        .json(&serde_json::json!({ "profile": profile }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to set spawn profile: HTTP {}",
+            resp.status()
+        ));
+    }
+
+    let body = resp.json::<SpawnLlmProfileResponse>().await?;
+    Ok(body.profile)
 }
 
 async fn fetch_sessions(
@@ -1014,6 +1557,96 @@ async fn connect_to_session_stream(
     }
 }
 
+fn get_events_tab_area(screen: Rect) -> Rect {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
+        ])
+        .split(screen);
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(10)])
+        .split(chunks[1]);
+
+    main_chunks[1]
+}
+
+fn compute_events_viewport(
+    filtered_count: usize,
+    selected_event_index: usize,
+    viewport_height: usize,
+) -> (usize, usize) {
+    let selected_display_idx = if filtered_count == 0 {
+        0
+    } else {
+        selected_event_index.min(filtered_count - 1)
+    };
+
+    let scroll_offset = if viewport_height == 0 {
+        0
+    } else {
+        selected_display_idx.saturating_sub(viewport_height.saturating_sub(1))
+    };
+
+    (selected_display_idx, scroll_offset)
+}
+
+fn single_line(text: &str, max_chars: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() > max_chars {
+        let truncated: String = normalized.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    } else {
+        normalized
+    }
+}
+
+fn is_internal_step_action(action: &ActionEventDetails) -> bool {
+    let action_type = action.action_type.to_ascii_lowercase();
+    let function_name = action.function_name.to_ascii_lowercase();
+    let summary = action.summary.to_ascii_lowercase();
+
+    action_type.contains("internalstep")
+        || action_type.contains("internal_step")
+        || function_name.contains("internalstep")
+        || function_name.contains("internal_step")
+        || summary.contains("internalstep")
+        || summary.contains("internal_step")
+}
+
+fn is_get_status_heartbeat(action: &ActionEventDetails) -> bool {
+    let function_name = action.function_name.to_ascii_lowercase();
+    let normalized_function = function_name.replace('_', ".");
+    let metadata_capability = action
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("capability_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .replace('_', ".");
+
+    normalized_function == "get.status"
+        || normalized_function.ends_with(".get.status")
+        || normalized_function.contains("get.status")
+        || metadata_capability.ends_with(".get.status")
+        || metadata_capability.contains("get.status")
+}
+
+fn is_internal_step_event(event: &SystemEvent) -> bool {
+    event
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("_is_internal_step"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn draw_ui(f: &mut Frame, state: &MonitorState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1068,17 +1701,84 @@ fn draw_ui(f: &mut Frame, state: &MonitorState) {
         _ => {}
     }
 
+    if state.show_profile_selector {
+        draw_profile_selector_popup(f, main_chunks[1], state);
+    }
+
+    let profile_label = state
+        .active_spawn_llm_profile
+        .as_deref()
+        .unwrap_or("<unset>");
+
     // Status bar
     let status = Paragraph::new(format!(
-        " [{}] Sessions: {} | Agents: {} | {}",
+        " [{}] Sessions: {} | Agents: {} | Spawn Profile: {} | [p] profile | {}",
         chrono::Local::now().format("%H:%M:%S"),
         state.sessions.len(),
         state.agents.len(),
+        profile_label,
         state.status_message
     ))
     .style(Style::default().fg(Color::Yellow))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(status, chunks[2]);
+}
+
+fn draw_profile_selector_popup(f: &mut Frame, area: Rect, state: &MonitorState) {
+    let popup_area = centered_rect(70, 70, area);
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![Span::styled(
+        "Select Gateway Spawn LLM Profile",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(vec![Span::styled(
+        "Enter=apply  Esc=cancel  Up/Down=navigate",
+        Style::default().fg(Color::DarkGray),
+    )]));
+    lines.push(Line::from(""));
+
+    let active = state
+        .active_spawn_llm_profile
+        .as_deref()
+        .unwrap_or("<unset>")
+        .to_string();
+    lines.push(Line::from(vec![
+        Span::styled("Current: ", Style::default().fg(Color::Yellow)),
+        Span::styled(active, Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(""));
+
+    let options = std::iter::once("<unset>")
+        .chain(state.available_llm_profiles.iter().map(|p| p.as_str()));
+    for (idx, option) in options.enumerate() {
+        let is_selected = idx == state.selected_profile_index;
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(if is_selected { "▶ " } else { "  " }, style),
+            Span::styled(option.to_string(), style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" LLM Profile ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, popup_area);
 }
 
 fn draw_sessions_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
@@ -1223,6 +1923,9 @@ fn draw_agents_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
     let filtered_indices = state.get_filtered_event_indices();
     let filtered_count = filtered_indices.len();
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let (selected_display_idx, scroll_offset) =
+        compute_events_viewport(filtered_count, state.selected_event_index, viewport_height);
 
     let text: Vec<Line> = filtered_indices
         .iter()
@@ -1246,7 +1949,7 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
             };
 
             // Calculate the actual selected index in reversed list
-            let is_selected = display_idx == (filtered_count - 1 - state.selected_event_index);
+            let is_selected = display_idx == selected_display_idx;
 
             let base_style = if is_selected {
                 Style::default()
@@ -1256,6 +1959,13 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
             } else {
                 Style::default()
             };
+
+            let prefix = format!("[{}] [{}] ", time_str, event.event_type);
+            let max_detail_chars = area.width.saturating_sub(prefix.len() as u16 + 4) as usize;
+            let detail_text = single_line(
+                &format!("{}: {}", event.session_id, event.details),
+                max_detail_chars.max(20),
+            );
 
             Line::from(vec![
                 Span::styled(
@@ -1274,29 +1984,36 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                         Style::default().fg(color)
                     },
                 ),
-                Span::styled(
-                    format!("{}: {}", event.session_id, event.details),
-                    base_style,
-                ),
+                Span::styled(detail_text, base_style),
             ])
         })
         .collect();
 
     let title = if state.get_selected_session_id().is_some() {
         format!(
-            "Recent Events (filtered: {}) - ↑↓ to select, Enter for details",
-            filtered_count
+            "Recent Events (filtered: {}) - ↑↓ PgUp/PgDn Home/End Enter | i: {}",
+            filtered_count,
+            if state.show_internal_steps {
+                "hide internal"
+            } else {
+                "show internal"
+            }
         )
     } else {
         format!(
-            "Recent Events ({}) - ↑↓ to select, Enter for details",
-            filtered_count
+            "Recent Events ({}) - ↑↓ PgUp/PgDn Home/End Enter | i: {}",
+            filtered_count,
+            if state.show_internal_steps {
+                "hide internal"
+            } else {
+                "show internal"
+            }
         )
     };
 
     let paragraph = Paragraph::new(text)
         .block(Block::default().title(title).borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
+        .scroll((scroll_offset as u16, 0));
 
     f.render_widget(paragraph, area);
 
@@ -1472,6 +2189,38 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
 
     // Metadata if available
     if let Some(ref metadata) = event.metadata {
+        // Result payload (if available) - show this first for quick inspection
+        if let Some(result) = metadata.get("result") {
+            lines.push(Line::from(vec![Span::styled(
+                "━━━ Result ━━━",
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            if let Ok(result_str) = serde_json::to_string_pretty(result) {
+                let result_lines: Vec<&str> = result_str.lines().take(20).collect();
+                let total_lines = result_str.lines().count();
+                for line in result_lines {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(line.to_string(), Style::default().fg(Color::LightGreen)),
+                    ]));
+                }
+                if total_lines > 20 {
+                    lines.push(Line::from(vec![Span::styled(
+                        "  ... (truncated)",
+                        Style::default().fg(Color::DarkGray),
+                    )]));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled("<unrenderable result>", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
         lines.push(Line::from(vec![Span::styled(
             "━━━ Metadata ━━━",
             Style::default()

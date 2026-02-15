@@ -1027,9 +1027,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         let pending = self.list_pending_http_hosts().await?;
         for req in pending {
             if let ApprovalCategory::HttpHostApproval {
-                host: h,
-                port: p,
-                ..
+                host: h, port: p, ..
             } = &req.category
             {
                 if h == &host && p == &port {
@@ -1054,12 +1052,12 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             expires_in_hours,
             None,
         );
-        
+
         // Store session_id in metadata so on_approval_resolved can notify the user
         if let Some(sid) = session_id {
             request.metadata.insert("session_id".to_string(), sid);
         }
-        
+
         self.add(request).await
     }
 
@@ -1070,7 +1068,11 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
 
     /// Check if an HTTP host has been approved
     /// Returns true if there's an approved HttpHostApproval for this host (and optionally port)
-    pub async fn is_http_host_approved(&self, host: &str, port: Option<u16>) -> RuntimeResult<bool> {
+    pub async fn is_http_host_approved(
+        &self,
+        host: &str,
+        port: Option<u16>,
+    ) -> RuntimeResult<bool> {
         let approved = self
             .storage
             .list(ApprovalFilter {
@@ -1085,9 +1087,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                 continue;
             }
             if let ApprovalCategory::HttpHostApproval {
-                host: h,
-                port: p,
-                ..
+                host: h, port: p, ..
             } = &req.category
             {
                 // Match host (case-insensitive)
@@ -1110,6 +1110,147 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                             continue;
                         }
                     }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    // ========================================================================
+    // Package Approval Specific Operations
+    // ========================================================================
+
+    /// Add a package approval request
+    pub async fn add_package_approval(
+        &self,
+        package: String,
+        runtime: String,
+        session_id: Option<String>,
+        run_id: Option<String>,
+    ) -> RuntimeResult<String> {
+        // Check if a pending request already exists for this package/runtime
+        let pending = self.list_pending_packages().await?;
+        for req in pending {
+            if let ApprovalCategory::PackageApproval {
+                package: p,
+                runtime: r,
+            } = &req.category
+            {
+                if p == &package && r == &runtime {
+                    log::info!(
+                        "[UnifiedApprovalQueue] Found existing pending PackageApproval for {} ({}), returning existing ID: {}",
+                        package,
+                        runtime,
+                        req.id
+                    );
+                    // Update metadata with current session_id and run_id so approval resolution
+                    // can resume the correct run
+                    let mut updated_req = req.clone();
+                    let mut metadata_changed = false;
+                    
+                    if let Some(ref sid) = session_id {
+                        if updated_req.metadata.get("session_id") != Some(sid) {
+                            updated_req.metadata.insert("session_id".to_string(), sid.clone());
+                            metadata_changed = true;
+                        }
+                    }
+                    
+                    if let Some(ref rid) = run_id {
+                        if updated_req.metadata.get("run_id") != Some(rid) {
+                            updated_req.metadata.insert("run_id".to_string(), rid.clone());
+                            metadata_changed = true;
+                        }
+                    }
+                    
+                    if metadata_changed {
+                        log::info!(
+                            "[UnifiedApprovalQueue] Updating existing approval {} metadata with session_id={:?}, run_id={:?}",
+                            req.id,
+                            session_id,
+                            run_id
+                        );
+                        self.storage.update(&updated_req).await?;
+                    }
+                    
+                    // IMPORTANT: Notify consumers even for existing approvals
+                    // This ensures the user gets nudged about the pending approval
+                    let consumers = self.consumers.read().await;
+                    for consumer in consumers.iter() {
+                        consumer.on_approval_requested(&updated_req).await;
+                    }
+                    
+                    return Ok(req.id);
+                }
+            }
+        }
+
+        log::info!(
+            "[UnifiedApprovalQueue] Creating new PackageApproval for {} ({}) with session_id={:?}, run_id={:?}",
+            package,
+            runtime,
+            session_id,
+            run_id
+        );
+
+        let mut request = ApprovalRequest::new(
+            ApprovalCategory::PackageApproval {
+                package,
+                runtime: runtime.clone(),
+            },
+            RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec![format!("{} package not in auto-approved list", runtime)],
+            },
+            24, // 24 hour expiry
+            None,
+        );
+
+        if let Some(sid) = session_id {
+            request.metadata.insert("session_id".to_string(), sid);
+        }
+        
+        if let Some(rid) = run_id {
+            request.metadata.insert("run_id".to_string(), rid);
+        }
+
+        let id = self.add(request).await?;
+        log::info!(
+            "[UnifiedApprovalQueue] Created new PackageApproval with ID: {}",
+            id
+        );
+        Ok(id)
+    }
+
+    /// List pending package approvals
+    pub async fn list_pending_packages(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
+        self.list_pending_by_category("PackageApproval").await
+    }
+
+    /// Check if a package has been approved
+    pub async fn is_package_approved(&self, package: &str, runtime: &str) -> RuntimeResult<bool> {
+        let approved = self
+            .storage
+            .list(ApprovalFilter {
+                category_type: Some("PackageApproval".to_string()),
+                status_pending: Some(false),
+                ..Default::default()
+            })
+            .await?;
+
+        for req in approved {
+            if !req.status.is_approved() {
+                continue;
+            }
+            if let ApprovalCategory::PackageApproval {
+                package: p,
+                runtime: r,
+            } = &req.category
+            {
+                if p.to_lowercase() == package.to_lowercase()
+                    && r.to_lowercase() == runtime.to_lowercase()
+                {
+                    return Ok(true);
                 }
             }
         }
