@@ -580,6 +580,7 @@ impl RunStore {
 
     pub fn update_run_state(&mut self, run_id: &str, new_state: RunState) -> bool {
         if let Some(run) = self.runs.get_mut(run_id) {
+            let old_state = run.state.clone();
             match (&run.state, &new_state) {
                 // Special case: resuming a paused run resets the budget window
                 (_, RunState::Active) if run.state.is_paused() => run.resume(),
@@ -588,6 +589,12 @@ impl RunStore {
                 // All other transitions
                 _ => run.transition(new_state),
             }
+            log::info!(
+                "[RunStore] Transitioned run {} from {:?} to {:?}",
+                run_id,
+                old_state,
+                run.state
+            );
             true
         } else {
             false
