@@ -23,9 +23,14 @@ use super::prompt::{FilePromptStore, PromptManager};
 use crate::capability_marketplace::types::{CapabilityKind, CapabilityManifest, CapabilityQuery};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::delegation_keys::{agent, generation};
+use crate::llm::tool_calling::{
+    capability_id_to_tool_name, resolve_capability_id, ToolChatMessage, ToolChatRequest,
+    ToolDefinition,
+};
 use crate::synthesis::artifact_generator::generate_planner_via_arbiter;
 use crate::synthesis::{schema_builder::ParamSchema, InteractionTurn};
 use crate::types::{ExecutionResult, Intent, IntentStatus, Plan, StorableIntent};
+use crate::utils::value_conversion::json_to_rtfs_value;
 
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 
@@ -253,6 +258,83 @@ impl DelegatingCognitiveEngine {
         available_tools: &[String],
         tool_schemas: Option<&HashMap<String, serde_json::Value>>,
     ) -> Result<(String, HashMap<String, Value>), RuntimeError> {
+        if self.llm_provider.supports_tool_calling() && !available_tools.is_empty() {
+            let tool_defs = available_tools
+                .iter()
+                .map(|tool_name| {
+                    let input_schema = tool_schemas
+                        .and_then(|schemas| schemas.get(tool_name))
+                        .map(Self::normalize_tool_schema)
+                        .unwrap_or_else(Self::default_tool_schema);
+
+                    ToolDefinition {
+                        capability_id: tool_name.clone(),
+                        tool_name: capability_id_to_tool_name(tool_name),
+                        description: format!("MCP tool '{}'", tool_name),
+                        input_schema,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let request = ToolChatRequest {
+                messages: vec![
+                    ToolChatMessage {
+                        role: "system".to_string(),
+                        content: "Select exactly one tool from the provided list and return arguments through a native tool call. Do not answer in prose.".to_string(),
+                        tool_call_id: None,
+                        name: None,
+                    },
+                    ToolChatMessage {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Hint: {}\nAvailable tools: {}",
+                            hint,
+                            available_tools.join(", ")
+                        ),
+                        tool_call_id: None,
+                        name: None,
+                    },
+                ],
+                tools: tool_defs.clone(),
+                max_tokens: self.llm_config.max_tokens,
+                temperature: self.llm_config.temperature,
+            };
+
+            match self.llm_provider.chat_with_tools(&request).await {
+                Ok(response) if response.has_tool_calls() => {
+                    if let Some(call) = response.tool_calls.first() {
+                        if let Some(capability_id) =
+                            resolve_capability_id(&call.tool_name, &tool_defs)
+                        {
+                            let mut args_map = HashMap::new();
+                            if let Some(obj) = call.arguments.as_object() {
+                                for (k, v) in obj {
+                                    args_map.insert(k.clone(), json_to_rtfs_value(v)?);
+                                }
+                            } else {
+                                args_map.insert(
+                                    "input".to_string(),
+                                    json_to_rtfs_value(&call.arguments)?,
+                                );
+                            }
+                            return Ok((capability_id.to_string(), args_map));
+                        }
+                    }
+                }
+                Ok(_) => {
+                    eprintln!(
+                        "ℹ️ Tool-calling provider returned no tool calls for MCP selection; falling back"
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "⚠️ Tool-calling MCP selection failed; falling back to RTFS parse: {}",
+                        e
+                    );
+                }
+            }
+        }
+
         // Create prompt using the specialized tool_selection template
         let tool_list = available_tools.join(", ");
         let mut vars = HashMap::new();
@@ -339,6 +421,149 @@ The tool name MUST be one of: {}"#,
         Ok((tool_name, intent.constraints))
     }
 
+    fn default_tool_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "additionalProperties": true,
+        })
+    }
+
+    fn normalize_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
+        if schema.get("type").is_some() || schema.get("properties").is_some() {
+            return schema.clone();
+        }
+
+        if schema.is_object() {
+            json!({
+                "type": "object",
+                "properties": schema,
+                "additionalProperties": true,
+            })
+        } else {
+            Self::default_tool_schema()
+        }
+    }
+
+    async fn try_generate_intent_with_tool_call(
+        &self,
+        natural_language: &str,
+        context: Option<&HashMap<String, Value>>,
+    ) -> Result<Option<Intent>, RuntimeError> {
+        if !self.llm_provider.supports_tool_calling() {
+            return Ok(None);
+        }
+
+        let context_summary = context
+            .map(|ctx| {
+                ctx.iter()
+                    .take(20)
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        let tool = ToolDefinition {
+            capability_id: "emit_intent".to_string(),
+            tool_name: capability_id_to_tool_name("emit_intent"),
+            description: "Return one structured intent as JSON fields".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "goal": { "type": "string" },
+                    "constraints": { "type": "object", "additionalProperties": true },
+                    "preferences": { "type": "object", "additionalProperties": true },
+                    "success_criteria": { "type": "string" }
+                },
+                "required": ["goal"],
+                "additionalProperties": true
+            }),
+        };
+
+        let request = ToolChatRequest {
+            messages: vec![
+                ToolChatMessage {
+                    role: "system".to_string(),
+                    content: "Generate exactly one intent and return it by calling the provided tool. Do not answer with prose.".to_string(),
+                    tool_call_id: None,
+                    name: None,
+                },
+                ToolChatMessage {
+                    role: "user".to_string(),
+                    content: format!(
+                        "User request:\n{}\n\nContext:\n{}",
+                        natural_language,
+                        context_summary
+                    ),
+                    tool_call_id: None,
+                    name: None,
+                },
+            ],
+            tools: vec![tool.clone()],
+            max_tokens: self.llm_config.max_tokens,
+            temperature: self.llm_config.temperature,
+        };
+
+        let response = match self.llm_provider.chat_with_tools(&request).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "⚠️ Intent tool-calling failed; falling back to text parsing: {}",
+                    e
+                );
+                return Ok(None);
+            }
+        };
+
+        if !response.has_tool_calls() {
+            return Ok(None);
+        }
+
+        let Some(call) = response.tool_calls.first() else {
+            return Ok(None);
+        };
+
+        let defs = vec![tool];
+        let Some(_capability_id) = resolve_capability_id(&call.tool_name, &defs) else {
+            return Ok(None);
+        };
+
+        let payload = if call.arguments.is_object() {
+            call.arguments.clone()
+        } else {
+            json!({ "goal": natural_language, "constraints": { "raw": call.arguments } })
+        };
+
+        let payload_str = match serde_json::to_string(&payload) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "⚠️ Intent tool-calling payload serialization failed; falling back: {}",
+                    e
+                );
+                return Ok(None);
+            }
+        };
+
+        match self.parse_json_intent_response(&payload_str, natural_language) {
+            Ok(mut intent) => {
+                intent.metadata.insert(
+                    "parse_format".to_string(),
+                    Value::String("tool_call".to_string()),
+                );
+                Ok(Some(intent))
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️ Intent tool-calling payload parse failed; falling back: {}",
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
     /// Find agent capabilities that match the given required capabilities
     async fn find_agents_for_capabilities(
         &self,
@@ -406,6 +631,15 @@ The tool name MUST be one of: {}"#,
             .ok()
             .unwrap_or_else(|| "rtfs".to_string());
 
+        let tool_call_intent = self
+            .try_generate_intent_with_tool_call(natural_language, context.as_ref())
+            .await?;
+        let effective_format_mode = if tool_call_intent.is_some() {
+            "tool_call".to_string()
+        } else {
+            format_mode.clone()
+        };
+
         // Create prompt (mode-specific)
         let prompt = self.create_intent_prompt(natural_language, context.clone());
 
@@ -424,8 +658,12 @@ The tool name MUST be one of: {}"#,
             );
         }
 
-        // Get raw text response
-        let response = self.llm_provider.generate_text(&prompt).await?;
+        // Get raw text response (only when tool-calling did not provide an intent)
+        let response = if tool_call_intent.is_some() {
+            "{\"source\":\"tool_call\"}".to_string()
+        } else {
+            self.llm_provider.generate_text(&prompt).await?
+        };
 
         // Optional: print only the extracted RTFS `(intent ...)` s-expression for debugging
         // This avoids echoing the full prompt/response while letting developers inspect
@@ -479,7 +717,9 @@ The tool name MUST be one of: {}"#,
         })();
 
         // Parse according to mode (RTFS primary with JSON fallback; JSON-only mode skips RTFS attempt)
-        let mut intent = if format_mode == "json" {
+        let mut intent = if let Some(intent) = tool_call_intent {
+            intent
+        } else if format_mode == "json" {
             // Direct JSON parse path
             match parse_json_intent_response(&response, natural_language) {
                 Ok(intent) => intent,
@@ -567,12 +807,14 @@ The tool name MUST be one of: {}"#,
         );
         intent.metadata.insert(
             "intent_format_mode".to_string(),
-            Value::String(format_mode.clone()),
+            Value::String(effective_format_mode.clone()),
         );
         // Derive parse_format if not already set (e.g., RTFS success path)
         if !intent.metadata.contains_key("parse_format") {
-            let pf = if format_mode == "json" {
+            let pf = if effective_format_mode == "json" {
                 "json"
+            } else if effective_format_mode == "tool_call" {
+                "tool_call"
             } else {
                 "rtfs"
             };
@@ -1989,6 +2231,9 @@ mod tests {
     use super::*;
 
     use crate::cognitive_engine::config::{DelegationConfig, LlmConfig, LlmProviderType};
+    use crate::cognitive_engine::llm_provider::{LlmProviderInfo, ValidationResult};
+    use crate::llm::tool_calling::{capability_id_to_tool_name, ToolCall, ToolChatRequest, ToolChatResponse};
+    use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -2017,6 +2262,138 @@ mod tests {
         };
 
         (llm_config, delegation_config)
+    }
+
+    struct ToolCallingIntentProvider;
+
+    struct NoToolCallsIntentProvider;
+
+    #[async_trait]
+    impl LlmProvider for ToolCallingIntentProvider {
+        async fn generate_intent(
+            &self,
+            _prompt: &str,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<StorableIntent, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "generate_intent not used in this test".to_string(),
+            ))
+        }
+
+        async fn generate_plan(
+            &self,
+            _intent: &StorableIntent,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<Plan, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "generate_plan not used in this test".to_string(),
+            ))
+        }
+
+        async fn validate_plan(
+            &self,
+            _plan_content: &str,
+        ) -> Result<ValidationResult, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "validate_plan not used in this test".to_string(),
+            ))
+        }
+
+        async fn generate_text(&self, _prompt: &str) -> Result<String, RuntimeError> {
+            Ok("fallback".to_string())
+        }
+
+        fn supports_tool_calling(&self) -> bool {
+            true
+        }
+
+        async fn chat_with_tools(
+            &self,
+            _request: &ToolChatRequest,
+        ) -> Result<ToolChatResponse, RuntimeError> {
+            Ok(ToolChatResponse {
+                content: String::new(),
+                tool_calls: vec![ToolCall {
+                    id: "call_1".to_string(),
+                    tool_name: capability_id_to_tool_name("emit_intent"),
+                    arguments: json!({
+                        "name": "tool_call_intent",
+                        "goal": "Extracted by tool call",
+                        "constraints": { "source": "tool" },
+                        "preferences": { "mode": "fast" },
+                        "success_criteria": "intent generated"
+                    }),
+                }],
+            })
+        }
+
+        fn get_info(&self) -> LlmProviderInfo {
+            LlmProviderInfo {
+                name: "ToolCallingIntentProvider".to_string(),
+                version: "test".to_string(),
+                model: "test".to_string(),
+                capabilities: vec!["tool_calling".to_string()],
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for NoToolCallsIntentProvider {
+        async fn generate_intent(
+            &self,
+            _prompt: &str,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<StorableIntent, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "generate_intent not used in this test".to_string(),
+            ))
+        }
+
+        async fn generate_plan(
+            &self,
+            _intent: &StorableIntent,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<Plan, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "generate_plan not used in this test".to_string(),
+            ))
+        }
+
+        async fn validate_plan(
+            &self,
+            _plan_content: &str,
+        ) -> Result<ValidationResult, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "validate_plan not used in this test".to_string(),
+            ))
+        }
+
+        async fn generate_text(&self, _prompt: &str) -> Result<String, RuntimeError> {
+            Ok("fallback".to_string())
+        }
+
+        fn supports_tool_calling(&self) -> bool {
+            true
+        }
+
+        async fn chat_with_tools(
+            &self,
+            _request: &ToolChatRequest,
+        ) -> Result<ToolChatResponse, RuntimeError> {
+            Ok(ToolChatResponse {
+                content: "No tool call returned".to_string(),
+                tool_calls: vec![],
+            })
+        }
+
+        fn get_info(&self) -> LlmProviderInfo {
+            LlmProviderInfo {
+                name: "NoToolCallsIntentProvider".to_string(),
+                version: "test".to_string(),
+                model: "test".to_string(),
+                capabilities: vec!["tool_calling".to_string()],
+            }
+        }
     }
 
     #[tokio::test]
@@ -2146,5 +2523,65 @@ mod tests {
                 .as_deref(),
             Some("json_fallback")
         );
+    }
+
+    #[tokio::test]
+    async fn test_try_generate_intent_with_tool_call() {
+        let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::types::IntentGraph::new().unwrap(),
+        ));
+
+        let registry = Arc::new(RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
+        ));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+
+        let engine = DelegatingCognitiveEngine::for_test(
+            Box::new(ToolCallingIntentProvider),
+            marketplace,
+            intent_graph,
+        );
+
+        let intent_opt = engine
+            .try_generate_intent_with_tool_call("create a backup workflow", None)
+            .await
+            .unwrap();
+
+        let intent = intent_opt.expect("expected intent generated via tool call");
+        assert_eq!(intent.name, Some("tool_call_intent".to_string()));
+        assert_eq!(intent.goal, "Extracted by tool call");
+        assert_eq!(
+            intent
+                .metadata
+                .get("parse_format")
+                .and_then(|v| v.as_string())
+                .as_deref(),
+            Some("tool_call")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_generate_intent_with_tool_call_no_tool_calls_returns_none() {
+        let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::types::IntentGraph::new().unwrap(),
+        ));
+
+        let registry = Arc::new(RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
+        ));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+
+        let engine = DelegatingCognitiveEngine::for_test(
+            Box::new(NoToolCallsIntentProvider),
+            marketplace,
+            intent_graph,
+        );
+
+        let intent_opt = engine
+            .try_generate_intent_with_tool_call("create a backup workflow", None)
+            .await
+            .unwrap();
+
+        assert!(intent_opt.is_none());
     }
 }
