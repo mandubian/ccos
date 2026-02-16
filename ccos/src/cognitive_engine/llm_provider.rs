@@ -6,6 +6,10 @@
 
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::ccos_eprintln;
+use crate::llm::tool_calling::{
+    extract_openai_assistant_content, extract_openai_tool_calls, ToolCall, ToolChatRequest,
+    ToolChatResponse,
+};
 use crate::types::{
     GenerationContext, IntentStatus, Plan, PlanBody, PlanLanguage, StorableIntent, TriggerSource,
 };
@@ -449,6 +453,33 @@ pub trait LlmProvider: Send + Sync {
 
     /// Generate text from a prompt (generic text generation)
     async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError>;
+
+    /// Whether this provider supports native tool calling.
+    fn supports_tool_calling(&self) -> bool {
+        false
+    }
+
+    /// Perform a tool-aware chat completion.
+    ///
+    /// Providers with native tool-calling support should return `tool_calls` when applicable.
+    /// Default implementation falls back to plain text generation and returns no tool calls.
+    async fn chat_with_tools(
+        &self,
+        request: &ToolChatRequest,
+    ) -> Result<ToolChatResponse, RuntimeError> {
+        let prompt = request
+            .messages
+            .iter()
+            .map(|message| format!("{}: {}", message.role, message.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let content = self.generate_text(&prompt).await?;
+        Ok(ToolChatResponse {
+            content,
+            tool_calls: Vec::<ToolCall>::new(),
+        })
+    }
 
     /// Get provider information
     fn get_info(&self) -> LlmProviderInfo;
@@ -915,6 +946,86 @@ impl OpenAILlmProvider {
                 }
             }
         }
+    }
+
+    async fn make_tool_request(
+        &self,
+        request: &ToolChatRequest,
+    ) -> Result<ToolChatResponse, RuntimeError> {
+        let api_key = self.config.api_key.as_ref().ok_or_else(|| {
+            RuntimeError::Generic("API key required for OpenAI provider".to_string())
+        })?;
+
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
+        let url = format!("{}/chat/completions", base_url);
+
+        let body = OpenAIToolRequest {
+            model: self.config.model.clone(),
+            messages: request
+                .messages
+                .iter()
+                .map(|message| OpenAIToolMessage {
+                    role: message.role.clone(),
+                    content: message.content.clone(),
+                    tool_call_id: message.tool_call_id.clone(),
+                    name: message.name.clone(),
+                })
+                .collect(),
+            tools: request
+                .tools
+                .iter()
+                .map(|definition| definition.to_openai_tool_json())
+                .collect(),
+            tool_choice: if request.tools.is_empty() {
+                None
+            } else {
+                Some("auto".to_string())
+            },
+            max_tokens: request.max_tokens.or(self.config.max_tokens),
+            temperature: request.temperature.or(self.config.temperature),
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| {
+                RuntimeError::Generic(format!("Tool-calling request failed: {}", error))
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(RuntimeError::Generic(format!(
+                "Tool-calling API error (HTTP {}): {}",
+                status.as_u16(),
+                error_text
+            )));
+        }
+
+        let response_json: serde_json::Value = response.json().await.map_err(|error| {
+            RuntimeError::Generic(format!("Failed to decode tool-calling response JSON: {}", error))
+        })?;
+
+        Ok(ToolChatResponse {
+            content: extract_openai_assistant_content(&response_json),
+            tool_calls: extract_openai_tool_calls(&response_json)
+                .into_iter()
+                .map(|call| ToolCall {
+                    id: call.id,
+                    tool_name: call.tool_name,
+                    arguments: call.arguments,
+                })
+                .collect(),
+        })
     }
 
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
@@ -1963,6 +2074,17 @@ Only respond with valid JSON."#;
         Ok(completion.content)
     }
 
+    fn supports_tool_calling(&self) -> bool {
+        true
+    }
+
+    async fn chat_with_tools(
+        &self,
+        request: &ToolChatRequest,
+    ) -> Result<ToolChatResponse, RuntimeError> {
+        self.make_tool_request(request).await
+    }
+
     fn get_info(&self) -> LlmProviderInfo {
         LlmProviderInfo {
             name: "OpenAI LLM Provider".to_string(),
@@ -1972,6 +2094,7 @@ Only respond with valid JSON."#;
                 "intent_generation".to_string(),
                 "plan_generation".to_string(),
                 "plan_validation".to_string(),
+                "tool_calling".to_string(),
             ],
         }
     }
@@ -1984,6 +2107,29 @@ struct OpenAIRequest {
     messages: Vec<OpenAIMessage>,
     max_tokens: Option<u32>,
     temperature: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct OpenAIToolRequest {
+    model: String,
+    messages: Vec<OpenAIToolMessage>,
+    tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct OpenAIToolMessage {
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

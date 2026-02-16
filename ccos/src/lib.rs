@@ -73,6 +73,7 @@ pub mod delegation;
 pub mod delegation_keys;
 pub mod delegation_l4;
 pub mod local_models;
+pub mod llm;
 pub mod remote_models;
 
 // Infrastructure
