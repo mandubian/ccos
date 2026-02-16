@@ -4,7 +4,7 @@
 
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -45,6 +45,17 @@ struct Args {
 
     #[arg(long, default_value = "general")]
     channel_id: String,
+
+    /// Path to agent configuration file used for /model autocompletion
+    #[arg(long, default_value = "config/agent_config.toml")]
+    config_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct ModelCompletionState {
+    prefix: String,
+    matches: Vec<String>,
+    index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +89,7 @@ enum AppEvent {
 struct AppState {
     messages: Vec<ChatMessage>,
     input: String,
+    input_cursor: usize,
     scroll: usize,
     status: String,
     last_tick: Instant,
@@ -85,10 +97,12 @@ struct AppState {
     is_waiting: bool,
     spinner_frame: usize,
     seen_audit_events: HashSet<String>,
+    available_llm_profiles: Vec<String>,
+    model_completion: Option<ModelCompletionState>,
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(available_llm_profiles: Vec<String>) -> Self {
         Self {
             messages: vec![ChatMessage {
                 source: MessageSource::System,
@@ -98,6 +112,7 @@ impl AppState {
                 metadata: None,
             }],
             input: String::new(),
+            input_cursor: 0,
             scroll: 0,
             status: "Connecting...".to_string(),
             last_tick: Instant::now(),
@@ -105,13 +120,182 @@ impl AppState {
             is_waiting: false,
             spinner_frame: 0,
             seen_audit_events: HashSet::new(),
+            available_llm_profiles,
+            model_completion: None,
         }
     }
+
+    fn clear_completion(&mut self) {
+        self.model_completion = None;
+    }
+}
+
+fn load_available_llm_profiles(config_path: &str) -> Vec<String> {
+    let mut profiles = Vec::new();
+    let mut seen = HashSet::new();
+
+    let path = std::path::Path::new(config_path);
+    let resolved_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        std::path::Path::new("..").join(config_path)
+    };
+
+    let content = match std::fs::read_to_string(&resolved_path) {
+        Ok(content) => content,
+        Err(_) => return profiles,
+    };
+
+    let normalized = if content.starts_with("# RTFS") {
+        content.lines().skip(1).collect::<Vec<_>>().join("\n")
+    } else {
+        content
+    };
+
+    let config = match toml::from_str::<ccos::config::types::AgentConfig>(&normalized) {
+        Ok(config) => config,
+        Err(_) => return profiles,
+    };
+
+    if let Some(llm_profiles) = config.llm_profiles {
+        for profile in llm_profiles.profiles {
+            if seen.insert(profile.name.clone()) {
+                profiles.push(profile.name);
+            }
+        }
+
+        if let Some(model_sets) = llm_profiles.model_sets {
+            for set in model_sets {
+                for model in set.models {
+                    let synthetic = format!("{}:{}", set.name, model.name);
+                    if seen.insert(synthetic.clone()) {
+                        profiles.push(synthetic);
+                    }
+                }
+            }
+        }
+    }
+
+    profiles.sort();
+    profiles
+}
+
+fn prev_char_boundary(text: &str, cursor: usize) -> usize {
+    if cursor == 0 {
+        return 0;
+    }
+    text[..cursor]
+        .char_indices()
+        .last()
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> usize {
+    if cursor >= text.len() {
+        return text.len();
+    }
+    cursor
+        + text[cursor..]
+            .chars()
+            .next()
+            .map(|c| c.len_utf8())
+            .unwrap_or(0)
+}
+
+fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn byte_index_at_char(text: &str, char_idx: usize) -> usize {
+    if char_idx == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(char_idx)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
+}
+
+fn move_cursor_vertically(text: &str, cursor: usize, direction: i32) -> usize {
+    let before_cursor = &text[..cursor];
+    let current_line_idx = before_cursor.matches('\n').count();
+    let current_line_start = before_cursor.rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let current_col = char_count(&before_cursor[current_line_start..]);
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let target_line_idx = if direction < 0 {
+        current_line_idx.saturating_sub(1)
+    } else {
+        (current_line_idx + 1).min(lines.len().saturating_sub(1))
+    };
+
+    if target_line_idx == current_line_idx {
+        return cursor;
+    }
+
+    let mut target_line_start = 0usize;
+    for line in lines.iter().take(target_line_idx) {
+        target_line_start += line.len() + 1;
+    }
+    let target_col = current_col.min(char_count(lines[target_line_idx]));
+    target_line_start + byte_index_at_char(lines[target_line_idx], target_col)
+}
+
+fn apply_model_completion(state: &mut AppState) {
+    let input = state.input.as_str();
+    if !input.starts_with("/model") || input.contains('\n') {
+        state.clear_completion();
+        return;
+    }
+
+    let prefix = input
+        .strip_prefix("/model")
+        .map(|s| s.trim_start())
+        .unwrap_or("")
+        .to_string();
+
+    let matches = if prefix.is_empty() {
+        state.available_llm_profiles.clone()
+    } else {
+        let lower = prefix.to_ascii_lowercase();
+        state
+            .available_llm_profiles
+            .iter()
+            .filter(|p| p.to_ascii_lowercase().starts_with(&lower))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    if matches.is_empty() {
+        state.clear_completion();
+        return;
+    }
+
+    let next_index = if let Some(comp) = &state.model_completion {
+        if comp.prefix == prefix && comp.matches == matches {
+            (comp.index + 1) % matches.len()
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let selected = matches[next_index].clone();
+    state.input = format!("/model {}", selected);
+    state.input_cursor = state.input.len();
+    state.model_completion = Some(ModelCompletionState {
+        prefix,
+        matches,
+        index: next_index,
+    });
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let available_profiles = load_available_llm_profiles(&args.config_path);
 
     // Setup terminal
     enable_raw_mode()?;
@@ -121,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Setup app state and channels
-    let mut state = AppState::new();
+    let mut state = AppState::new(available_profiles);
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     // Spawn event handlers
@@ -467,13 +651,33 @@ async fn main() -> anyhow::Result<()> {
                     if let Event::Key(key) = ev {
                         match key.code {
                             KeyCode::Char(c) => {
-                                state.input.push(c);
+                                state.input.insert(state.input_cursor, c);
+                                state.input_cursor += c.len_utf8();
+                                state.clear_completion();
                             }
                             KeyCode::Backspace => {
-                                state.input.pop();
+                                if state.input_cursor > 0 {
+                                    let prev = prev_char_boundary(&state.input, state.input_cursor);
+                                    state.input.replace_range(prev..state.input_cursor, "");
+                                    state.input_cursor = prev;
+                                    state.clear_completion();
+                                }
+                            }
+                            KeyCode::Delete => {
+                                if state.input_cursor < state.input.len() {
+                                    let next = next_char_boundary(&state.input, state.input_cursor);
+                                    state.input.replace_range(state.input_cursor..next, "");
+                                    state.clear_completion();
+                                }
                             }
                             KeyCode::Enter => {
-                                if !state.input.trim().is_empty() {
+                                if key.modifiers.contains(KeyModifiers::SHIFT)
+                                    || key.modifiers.contains(KeyModifiers::CONTROL)
+                                {
+                                    state.input.insert(state.input_cursor, '\n');
+                                    state.input_cursor += 1;
+                                    state.clear_completion();
+                                } else if !state.input.trim().is_empty() {
                                     let mut text = state.input.trim().to_string();
 
                                     // Smart Mentions: Add @agent if no mention is present
@@ -572,8 +776,13 @@ async fn main() -> anyhow::Result<()> {
                                     });
 
                                     state.input.clear();
+                                    state.input_cursor = 0;
+                                    state.clear_completion();
                                     state.scroll = 0; // Auto-scroll to bottom
                                 }
+                            }
+                            KeyCode::Tab => {
+                                apply_model_completion(&mut state);
                             }
                             KeyCode::Esc => {
                                 state.should_quit = true;
@@ -585,10 +794,32 @@ async fn main() -> anyhow::Result<()> {
                                 state.scroll = state.scroll.saturating_sub(5);
                             }
                             KeyCode::Up => {
-                                state.scroll += 1;
+                                if key.modifiers.contains(KeyModifiers::ALT) {
+                                    state.scroll += 1;
+                                } else {
+                                    state.input_cursor =
+                                        move_cursor_vertically(&state.input, state.input_cursor, -1);
+                                }
                             }
                             KeyCode::Down => {
-                                state.scroll = state.scroll.saturating_sub(1);
+                                if key.modifiers.contains(KeyModifiers::ALT) {
+                                    state.scroll = state.scroll.saturating_sub(1);
+                                } else {
+                                    state.input_cursor =
+                                        move_cursor_vertically(&state.input, state.input_cursor, 1);
+                                }
+                            }
+                            KeyCode::Left => {
+                                state.input_cursor = prev_char_boundary(&state.input, state.input_cursor);
+                            }
+                            KeyCode::Right => {
+                                state.input_cursor = next_char_boundary(&state.input, state.input_cursor);
+                            }
+                            KeyCode::Home => {
+                                state.input_cursor = 0;
+                            }
+                            KeyCode::End => {
+                                state.input_cursor = state.input.len();
                             }
                             _ => {}
                         }
@@ -641,7 +872,7 @@ fn render(f: &mut Frame, state: &AppState) {
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(1),    // Messages
-            Constraint::Length(3), // Input
+            Constraint::Length(6), // Input
         ])
         .split(f.size());
 
@@ -670,7 +901,7 @@ fn render(f: &mut Frame, state: &AppState) {
                 Color::Yellow
             }),
         ),
-        Span::raw(" │ ESC: quit │ Arrows: scroll"),
+        Span::raw(" │ ESC: quit │ PgUp/PgDn: scroll │ Alt+↑/↓: fine scroll"),
     ]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(header, chunks[0]);
@@ -741,11 +972,23 @@ fn render(f: &mut Frame, state: &AppState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Type your message "),
-        );
+                .title(" Type your message (Enter=send, Shift/Ctrl+Enter=newline, Tab=/model autocomplete) "),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(input, chunks[2]);
 
-    f.set_cursor(chunks[2].x + state.input.len() as u16 + 1, chunks[2].y + 1);
+    let before_cursor = &state.input[..state.input_cursor.min(state.input.len())];
+    let cursor_row = before_cursor.matches('\n').count() as u16;
+    let cursor_col = before_cursor
+        .rsplit('\n')
+        .next()
+        .map(|s| s.chars().count() as u16)
+        .unwrap_or(0);
+    let max_row = chunks[2].height.saturating_sub(3);
+    f.set_cursor(
+        chunks[2].x + 1 + cursor_col,
+        chunks[2].y + 1 + cursor_row.min(max_row),
+    );
 }
 
 async fn fetch_status(client: &Client, url: &str) -> anyhow::Result<serde_json::Value> {

@@ -152,6 +152,61 @@ struct ActionEventDetails {
 }
 
 #[derive(Debug, Clone)]
+struct RunCreateProgramDetails {
+    goal: String,
+    target_session_id: Option<String>,
+    schedule: Option<String>,
+    next_run_at: Option<String>,
+    max_run: Option<String>,
+    budget: Option<String>,
+    execution_mode: Option<String>,
+    trigger_capability_id: Option<String>,
+    trigger_inputs: Option<String>,
+    parent_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryOperationDetails {
+    operation: String,
+    key: Option<String>,
+    store_value: Option<String>,
+    store_entry_id: Option<String>,
+    store_success: Option<bool>,
+    get_found: Option<bool>,
+    get_expired: Option<bool>,
+    get_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayRunSummary {
+    run_id: String,
+    goal: String,
+    state: String,
+    steps_taken: u32,
+    elapsed_secs: u64,
+    #[allow(dead_code)]
+    created_at: String,
+    #[allow(dead_code)]
+    updated_at: String,
+    #[allow(dead_code)]
+    current_step_id: Option<String>,
+    next_run_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayListRunsResponse {
+    session_id: String,
+    runs: Vec<GatewayRunSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayCancelRunResponse {
+    run_id: String,
+    cancelled: bool,
+    previous_state: String,
+}
+
+#[derive(Debug, Clone)]
 enum MonitorEvent {
     Input(Event),
     SessionUpdate(Vec<SessionInfo>),
@@ -171,6 +226,10 @@ struct MonitorState {
     llm_consultations: Vec<(String, LlmConsultation)>, // (session_id, consultation)
     selected_tab: usize,
     selected_agent_index: usize,
+    /// Runs loaded for currently selected session
+    session_runs: Vec<GatewayRunSummary>,
+    selected_run_index: usize,
+    runs_session_id: Option<String>,
     /// Selected event index in Events tab
     selected_event_index: usize,
     /// Stable selected event ID (prevents selection drift when new events arrive)
@@ -201,6 +260,9 @@ impl MonitorState {
             llm_consultations: Vec::new(),
             selected_tab: 0,
             selected_agent_index: 0,
+            session_runs: Vec::new(),
+            selected_run_index: 0,
+            runs_session_id: None,
             selected_event_index: 0,
             selected_event_id: None,
             next_event_id: 1,
@@ -260,6 +322,18 @@ impl MonitorState {
                 .collect()
         } else {
             self.llm_consultations.iter().collect()
+        }
+    }
+
+    fn selected_run(&self) -> Option<&GatewayRunSummary> {
+        self.session_runs.get(self.selected_run_index)
+    }
+
+    fn sync_run_selection(&mut self) {
+        if self.session_runs.is_empty() {
+            self.selected_run_index = 0;
+        } else if self.selected_run_index >= self.session_runs.len() {
+            self.selected_run_index = self.session_runs.len() - 1;
         }
     }
 
@@ -781,15 +855,110 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     }
                                 }
+                                KeyCode::Char('r') => {
+                                    if state.selected_tab == 4 {
+                                        match refresh_runs_for_selected_session(
+                                            &mut state,
+                                            &client,
+                                            &args.gateway_url,
+                                            &args.token,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                state.status_message = format!(
+                                                    "Loaded {} scheduled run(s) for selected session",
+                                                    state.session_runs.len()
+                                                );
+                                            }
+                                            Err(e) => {
+                                                state.status_message =
+                                                    format!("Failed to refresh runs: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('c') => {
+                                    if state.selected_tab == 4 {
+                                        if let Some(selected_run_id) =
+                                            state.selected_run().map(|run| run.run_id.clone())
+                                        {
+                                            match cancel_run(
+                                                &client,
+                                                &args.gateway_url,
+                                                &args.token,
+                                                &selected_run_id,
+                                            )
+                                            .await
+                                            {
+                                                Ok(result) => {
+                                                    state.status_message = format!(
+                                                        "Run {} cancelled={} (was {})",
+                                                        result.run_id,
+                                                        result.cancelled,
+                                                        result.previous_state
+                                                    );
+                                                    if let Err(e) = refresh_runs_for_selected_session(
+                                                        &mut state,
+                                                        &client,
+                                                        &args.gateway_url,
+                                                        &args.token,
+                                                    )
+                                                    .await
+                                                    {
+                                                        state.status_message = format!(
+                                                            "Run cancelled, refresh failed: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    state.status_message =
+                                                        format!("Failed to cancel run: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            state.status_message =
+                                                "No run selected to cancel".to_string();
+                                        }
+                                    }
+                                }
                                 KeyCode::Tab => {
-                                    state.selected_tab = (state.selected_tab + 1) % 4;
+                                    state.selected_tab = (state.selected_tab + 1) % 5;
+                                    if state.selected_tab == 4 {
+                                        if let Err(e) = refresh_runs_for_selected_session(
+                                            &mut state,
+                                            &client,
+                                            &args.gateway_url,
+                                            &args.token,
+                                        )
+                                        .await
+                                        {
+                                            state.status_message =
+                                                format!("Failed to load runs: {}", e);
+                                        }
+                                    }
                                 }
                                 KeyCode::BackTab => {
                                     state.selected_tab = if state.selected_tab == 0 {
-                                        3
+                                        4
                                     } else {
                                         state.selected_tab - 1
                                     };
+
+                                    if state.selected_tab == 4 {
+                                        if let Err(e) = refresh_runs_for_selected_session(
+                                            &mut state,
+                                            &client,
+                                            &args.gateway_url,
+                                            &args.token,
+                                        )
+                                        .await
+                                        {
+                                            state.status_message =
+                                                format!("Failed to load runs: {}", e);
+                                        }
+                                    }
                                 }
                                 KeyCode::Up => {
                                     // Navigate agents in Agents tab or events in Events tab
@@ -810,6 +979,14 @@ async fn main() -> anyhow::Result<()> {
                                                 state.selected_event_index = filtered_count - 1;
                                             }
                                         }
+                                    } else if state.selected_tab == 4 {
+                                        if !state.session_runs.is_empty() {
+                                            if state.selected_run_index > 0 {
+                                                state.selected_run_index -= 1;
+                                            } else {
+                                                state.selected_run_index = state.session_runs.len() - 1;
+                                            }
+                                        }
                                     }
                                 }
                                 KeyCode::Down => {
@@ -826,6 +1003,11 @@ async fn main() -> anyhow::Result<()> {
                                             } else {
                                                 state.selected_event_index = 0;
                                             }
+                                        }
+                                    } else if state.selected_tab == 4 {
+                                        if !state.session_runs.is_empty() {
+                                            state.selected_run_index =
+                                                (state.selected_run_index + 1) % state.session_runs.len();
                                         }
                                     }
                                 }
@@ -946,6 +1128,54 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     }
                                 }
+                            } else if state.selected_tab == 4 {
+                                let runs_area = get_runs_tab_area(terminal.size()?);
+                                let in_runs_area = mouse.column >= runs_area.x
+                                    && mouse.column < runs_area.x + runs_area.width
+                                    && mouse.row >= runs_area.y
+                                    && mouse.row < runs_area.y + runs_area.height;
+
+                                if in_runs_area {
+                                    let runs_count = state.session_runs.len();
+
+                                    if runs_count > 0 {
+                                        match mouse.kind {
+                                            MouseEventKind::ScrollUp => {
+                                                if state.selected_run_index > 0 {
+                                                    state.selected_run_index -= 1;
+                                                }
+                                            }
+                                            MouseEventKind::ScrollDown => {
+                                                if state.selected_run_index < runs_count - 1 {
+                                                    state.selected_run_index += 1;
+                                                }
+                                            }
+                                            MouseEventKind::Down(MouseButton::Left) => {
+                                                if runs_area.height > 2 && mouse.row > runs_area.y {
+                                                    let viewport_height =
+                                                        runs_area.height.saturating_sub(2) as usize;
+                                                    let inner_row =
+                                                        mouse.row.saturating_sub(runs_area.y + 1) as usize;
+
+                                                    if inner_row < viewport_height {
+                                                        let max_offset =
+                                                            runs_count.saturating_sub(viewport_height);
+                                                        let scroll_offset = state
+                                                            .selected_run_index
+                                                            .saturating_sub(viewport_height / 2)
+                                                            .min(max_offset);
+                                                        let clicked_index = scroll_offset + inner_row;
+
+                                                        if clicked_index < runs_count {
+                                                            state.selected_run_index = clicked_index;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -1007,6 +1237,19 @@ async fn main() -> anyhow::Result<()> {
                         };
                     }
 
+                    let runs_refresh_error = if let Err(e) = refresh_runs_for_selected_session(
+                        &mut state,
+                        &client,
+                        &args.gateway_url,
+                        &args.token,
+                    )
+                    .await
+                    {
+                        Some(e.to_string())
+                    } else {
+                        None
+                    };
+
                     // Ensure selected_event_index remains valid for current Events filter
                     let filtered_count = state.get_filtered_event_indices().len();
                     if filtered_count == 0 {
@@ -1015,7 +1258,15 @@ async fn main() -> anyhow::Result<()> {
                         state.selected_event_index = filtered_count - 1;
                     }
 
-                    state.status_message = format!("Updated {} sessions", state.sessions.len());
+                    state.status_message = if let Some(err) = runs_refresh_error {
+                        format!(
+                            "Updated {} sessions (runs refresh error: {})",
+                            state.sessions.len(),
+                            err
+                        )
+                    } else {
+                        format!("Updated {} sessions", state.sessions.len())
+                    };
                 }
 
                 MonitorEvent::AgentHeartbeat(session_id, agent_info) => {
@@ -1063,6 +1314,33 @@ async fn main() -> anyhow::Result<()> {
                         String::new()
                     };
 
+                    let run_create_program = action_details
+                        .metadata
+                        .as_ref()
+                        .and_then(extract_run_create_program_details);
+                    let memory_operation = action_details
+                        .metadata
+                        .as_ref()
+                        .and_then(extract_memory_operation_details);
+
+                    if let Some(program) = run_create_program.as_ref() {
+                        let program_summary = single_line(&format_run_create_program_summary(program), 120);
+                        if result_summary.is_empty() {
+                            result_summary = format!("program: {}", program_summary);
+                        } else {
+                            result_summary = format!("{} | program: {}", result_summary, program_summary);
+                        }
+                    }
+
+                    if let Some(memory) = memory_operation.as_ref() {
+                        let memory_summary = single_line(&format_memory_operation_summary(memory), 120);
+                        if result_summary.is_empty() {
+                            result_summary = format!("memory: {}", memory_summary);
+                        } else {
+                            result_summary = format!("{} | memory: {}", result_summary, memory_summary);
+                        }
+                    }
+
                     if result_summary == status_label {
                         result_summary.clear();
                     }
@@ -1090,6 +1368,85 @@ async fn main() -> anyhow::Result<()> {
                     }
                     if !action_details.summary.is_empty() {
                         full_lines.push(format!("Summary: {}", action_details.summary));
+                    }
+                    if let Some(program) = run_create_program.as_ref() {
+                        full_lines.push("Programmed Run:".to_string());
+                        full_lines.push(format!("  Goal: {}", program.goal));
+                        if let Some(session_id) = &program.target_session_id {
+                            full_lines.push(format!("  Target Session: {}", session_id));
+                        }
+                        full_lines.push(format!(
+                            "  Schedule: {}",
+                            program.schedule.as_deref().unwrap_or("none")
+                        ));
+                        full_lines.push(format!(
+                            "  Next Run At: {}",
+                            program.next_run_at.as_deref().unwrap_or("none")
+                        ));
+                        full_lines.push(format!(
+                            "  Max Runs: {}",
+                            program.max_run.as_deref().unwrap_or("none")
+                        ));
+                        full_lines.push(format!(
+                            "  Budget: {}",
+                            program.budget.as_deref().unwrap_or("none")
+                        ));
+                        full_lines.push(format!(
+                            "  Execution Mode: {}",
+                            program.execution_mode.as_deref().unwrap_or("llm_agent")
+                        ));
+                        if let Some(trigger_capability_id) = &program.trigger_capability_id {
+                            full_lines.push(format!("  Trigger Capability: {}", trigger_capability_id));
+                        }
+                        if let Some(trigger_inputs) = &program.trigger_inputs {
+                            full_lines.push(format!("  Trigger Inputs: {}", trigger_inputs));
+                        }
+                        if let Some(parent_run_id) = &program.parent_run_id {
+                            full_lines.push(format!("  Parent Run: {}", parent_run_id));
+                        }
+                    }
+                    if let Some(memory) = memory_operation.as_ref() {
+                        full_lines.push("Memory Operation:".to_string());
+                        full_lines.push(format!("  Type: {}", memory.operation));
+                        if let Some(key) = &memory.key {
+                            full_lines.push(format!("  Key: {}", key));
+                        }
+                        if memory.operation == "store" {
+                            full_lines.push(format!(
+                                "  Value Stored: {}",
+                                memory.store_value.as_deref().unwrap_or("none")
+                            ));
+                            full_lines.push(format!(
+                                "  Entry ID: {}",
+                                memory.store_entry_id.as_deref().unwrap_or("none")
+                            ));
+                            full_lines.push(format!(
+                                "  Store Success: {}",
+                                memory
+                                    .store_success
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "none".to_string())
+                            ));
+                        } else {
+                            full_lines.push(format!(
+                                "  Found: {}",
+                                memory
+                                    .get_found
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "none".to_string())
+                            ));
+                            full_lines.push(format!(
+                                "  Expired: {}",
+                                memory
+                                    .get_expired
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "none".to_string())
+                            ));
+                            full_lines.push(format!(
+                                "  Value Retrieved: {}",
+                                memory.get_value.as_deref().unwrap_or("none")
+                            ));
+                        }
                     }
                     if let Some(err) = &error_text {
                         full_lines.push("Error:".to_string());
@@ -1290,6 +1647,80 @@ async fn fetch_sessions(
 
     let sessions = resp.json::<Vec<SessionInfo>>().await?;
     Ok(sessions)
+}
+
+async fn fetch_session_runs(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+    session_id: &str,
+) -> anyhow::Result<GatewayListRunsResponse> {
+    let url = format!("{}/chat/run?session_id={}", gateway_url, session_id);
+    let resp = client
+        .get(&url)
+        .header("X-Agent-Token", token)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch runs for session {}: HTTP {}",
+            session_id,
+            resp.status()
+        ));
+    }
+
+    let runs = resp.json::<GatewayListRunsResponse>().await?;
+    Ok(runs)
+}
+
+async fn cancel_run(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+    run_id: &str,
+) -> anyhow::Result<GatewayCancelRunResponse> {
+    let url = format!("{}/chat/run/{}/cancel", gateway_url, run_id);
+    let resp = client
+        .post(&url)
+        .header("X-Agent-Token", token)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to cancel run {}: HTTP {}",
+            run_id,
+            resp.status()
+        ));
+    }
+
+    let body = resp.json::<GatewayCancelRunResponse>().await?;
+    Ok(body)
+}
+
+async fn refresh_runs_for_selected_session(
+    state: &mut MonitorState,
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    let Some(session_id) = state.get_selected_session_id().map(|s| s.to_string()) else {
+        state.session_runs.clear();
+        state.runs_session_id = None;
+        state.selected_run_index = 0;
+        return Ok(());
+    };
+
+    let response = fetch_session_runs(client, gateway_url, token, &session_id).await?;
+    state.runs_session_id = Some(response.session_id);
+    state.session_runs = response
+        .runs
+        .into_iter()
+        .filter(|run| run.state == "Scheduled" || run.next_run_at.is_some())
+        .collect();
+    state.sync_run_selection();
+    Ok(())
 }
 
 async fn connect_to_session_stream(
@@ -1576,6 +2007,25 @@ fn get_events_tab_area(screen: Rect) -> Rect {
     main_chunks[1]
 }
 
+fn get_runs_tab_area(screen: Rect) -> Rect {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
+        ])
+        .split(screen);
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(10)])
+        .split(chunks[1]);
+
+    main_chunks[1]
+}
+
 fn compute_events_viewport(
     filtered_count: usize,
     selected_event_index: usize,
@@ -1603,6 +2053,163 @@ fn single_line(text: &str, max_chars: usize) -> String {
         format!("{}...", truncated)
     } else {
         normalized
+    }
+}
+
+fn json_value_to_display(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(v) => v.to_string(),
+        serde_json::Value::Number(v) => v.to_string(),
+        serde_json::Value::String(v) => v.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "<invalid>".to_string()),
+    }
+}
+
+fn extract_run_create_program_details(
+    metadata: &serde_json::Value,
+) -> Option<RunCreateProgramDetails> {
+    let goal = metadata
+        .get("run_create_goal")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())?;
+
+    let target_session_id = metadata
+        .get("run_create_session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let schedule = metadata
+        .get("run_create_schedule")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let next_run_at = metadata
+        .get("run_create_next_run_at")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let max_run = metadata
+        .get("run_create_max_run")
+        .map(json_value_to_display);
+    let budget = metadata
+        .get("run_create_budget")
+        .map(json_value_to_display)
+        .map(|s| single_line(&s, 120));
+    let execution_mode = metadata
+        .get("run_create_execution_mode")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let trigger_capability_id = metadata
+        .get("run_create_trigger_capability_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let trigger_inputs = metadata
+        .get("run_create_trigger_inputs")
+        .map(json_value_to_display)
+        .map(|s| single_line(&s, 120));
+    let parent_run_id = metadata
+        .get("run_create_parent_run_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(RunCreateProgramDetails {
+        goal,
+        target_session_id,
+        schedule,
+        next_run_at,
+        max_run,
+        budget,
+        execution_mode,
+        trigger_capability_id,
+        trigger_inputs,
+        parent_run_id,
+    })
+}
+
+fn format_run_create_program_summary(program: &RunCreateProgramDetails) -> String {
+    format!(
+        "goal=\"{}\", schedule={}, next_run_at={}, mode={}, trigger={}, max_run={}, budget={}",
+        single_line(&program.goal, 60),
+        program.schedule.as_deref().unwrap_or("none"),
+        program.next_run_at.as_deref().unwrap_or("none"),
+        program.execution_mode.as_deref().unwrap_or("llm_agent"),
+        program.trigger_capability_id.as_deref().unwrap_or("none"),
+        program.max_run.as_deref().unwrap_or("none"),
+        program.budget.as_deref().unwrap_or("none")
+    )
+}
+
+fn extract_memory_operation_details(
+    metadata: &serde_json::Value,
+) -> Option<MemoryOperationDetails> {
+    let operation = metadata
+        .get("memory_operation")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())?;
+
+    let key = metadata
+        .get("memory_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let store_value = metadata
+        .get("memory_store_value")
+        .map(json_value_to_display)
+        .map(|s| single_line(&s, 120));
+    let store_entry_id = metadata
+        .get("memory_store_entry_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let store_success = metadata
+        .get("memory_store_success")
+        .and_then(|v| v.as_bool());
+    let get_found = metadata
+        .get("memory_get_found")
+        .and_then(|v| v.as_bool());
+    let get_expired = metadata
+        .get("memory_get_expired")
+        .and_then(|v| v.as_bool());
+    let get_value = metadata
+        .get("memory_get_value")
+        .map(json_value_to_display)
+        .map(|s| single_line(&s, 120));
+
+    Some(MemoryOperationDetails {
+        operation,
+        key,
+        store_value,
+        store_entry_id,
+        store_success,
+        get_found,
+        get_expired,
+        get_value,
+    })
+}
+
+fn format_memory_operation_summary(memory: &MemoryOperationDetails) -> String {
+    let key = memory.key.as_deref().unwrap_or("none");
+    if memory.operation == "store" {
+        format!(
+            "store key={} value={} entry_id={} success={}",
+            key,
+            memory.store_value.as_deref().unwrap_or("none"),
+            memory.store_entry_id.as_deref().unwrap_or("none"),
+            memory
+                .store_success
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )
+    } else {
+        format!(
+            "get key={} found={} expired={} value={}",
+            key,
+            memory
+                .get_found
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            memory
+                .get_expired
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            memory.get_value.as_deref().unwrap_or("none")
+        )
     }
 }
 
@@ -1670,7 +2277,7 @@ fn draw_ui(f: &mut Frame, state: &MonitorState) {
     f.render_widget(title, chunks[0]);
 
     // Main content tabs
-    let tab_titles = vec!["Sessions", "Agents", "Events", "LLM"];
+    let tab_titles = vec!["Sessions", "Agents", "Events", "LLM", "Runs"];
     let tabs = ratatui::widgets::Tabs::new(
         tab_titles
             .iter()
@@ -1698,6 +2305,7 @@ fn draw_ui(f: &mut Frame, state: &MonitorState) {
         1 => draw_agents_tab(f, main_chunks[1], state),
         2 => draw_events_tab(f, main_chunks[1], state),
         3 => draw_llm_tab(f, main_chunks[1], state),
+        4 => draw_runs_tab(f, main_chunks[1], state),
         _ => {}
     }
 
@@ -1912,6 +2520,84 @@ fn draw_agents_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
     } else {
         "Agents (use ↑↓ to select)".to_string()
     };
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::default().title(title).borders(Borders::ALL));
+
+    f.render_widget(table, area);
+}
+
+fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
+    let selected_session = state.get_selected_session_id().map(|s| s.to_string());
+
+    let Some(session_id) = selected_session else {
+        let placeholder = Paragraph::new(
+            "No selected session with active agent. Use the Agents tab to select a session first.",
+        )
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().title("Runs").borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+        f.render_widget(placeholder, area);
+        return;
+    };
+
+    let loaded_for = state.runs_session_id.as_deref().unwrap_or("<none>");
+    let title = format!(
+        "Scheduled Runs for {} (loaded: {}, [r] refresh, [c] cancel selected)",
+        session_id, loaded_for
+    );
+
+    let header = Row::new(vec!["Run ID", "State", "Next Run", "Steps", "Elapsed", "Goal"])
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let rows: Vec<Row> = state
+        .session_runs
+        .iter()
+        .enumerate()
+        .map(|(idx, run)| {
+            let is_selected = idx == state.selected_run_index;
+            let row_style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let state_color = if run.next_run_at.is_some() || run.state.contains("Scheduled") {
+                Color::Green
+            } else if run.state.contains("Cancelled") || run.state.contains("Failed") {
+                Color::Red
+            } else {
+                Color::White
+            };
+
+            Row::new(vec![
+                Cell::from(run.run_id.clone()),
+                Cell::from(run.state.clone()).style(Style::default().fg(state_color)),
+                Cell::from(run.next_run_at.as_deref().unwrap_or("-")),
+                Cell::from(run.steps_taken.to_string()),
+                Cell::from(format!("{}s", run.elapsed_secs)),
+                Cell::from(single_line(&run.goal, 60)),
+            ])
+            .style(row_style)
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Ratio(2, 12),
+        Constraint::Ratio(2, 12),
+        Constraint::Ratio(3, 12),
+        Constraint::Ratio(1, 12),
+        Constraint::Ratio(1, 12),
+        Constraint::Ratio(3, 12),
+    ];
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -2182,6 +2868,169 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                     "  ... (truncated)",
                     Style::default().fg(Color::DarkGray),
                 )]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    if let Some(ref metadata) = event.metadata {
+        if let Some(program) = extract_run_create_program_details(metadata) {
+            lines.push(Line::from(vec![Span::styled(
+                "━━━ Programmed Run ━━━",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            lines.push(Line::from(vec![
+                Span::styled("Goal: ", Style::default().fg(Color::Yellow)),
+                Span::styled(program.goal, Style::default().fg(Color::White)),
+            ]));
+            if let Some(session_id) = program.target_session_id {
+                lines.push(Line::from(vec![
+                    Span::styled("Target Session: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(session_id, Style::default().fg(Color::White)),
+                ]));
+            }
+            lines.push(Line::from(vec![
+                Span::styled("Schedule: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program
+                        .schedule
+                        .unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Next Run At: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program
+                        .next_run_at
+                        .unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Max Runs: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program.max_run.unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Budget: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program.budget.unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Execution Mode: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program
+                        .execution_mode
+                        .unwrap_or_else(|| "llm_agent".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Trigger Capability: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    program
+                        .trigger_capability_id
+                        .unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            if let Some(trigger_inputs) = program.trigger_inputs {
+                lines.push(Line::from(vec![
+                    Span::styled("Trigger Inputs: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(trigger_inputs, Style::default().fg(Color::White)),
+                ]));
+            }
+            if let Some(parent_run_id) = program.parent_run_id {
+                lines.push(Line::from(vec![
+                    Span::styled("Parent Run: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(parent_run_id, Style::default().fg(Color::White)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
+        if let Some(memory) = extract_memory_operation_details(metadata) {
+            lines.push(Line::from(vec![Span::styled(
+                "━━━ Memory Operation ━━━",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            lines.push(Line::from(vec![
+                Span::styled("Type: ", Style::default().fg(Color::Yellow)),
+                Span::styled(memory.operation.clone(), Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Key: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    memory.key.unwrap_or_else(|| "none".to_string()),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            if memory.operation == "store" {
+                lines.push(Line::from(vec![
+                    Span::styled("Value Stored: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory
+                            .store_value
+                            .unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Entry ID: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory
+                            .store_entry_id
+                            .unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Store Success: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory
+                            .store_success
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Found: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory
+                            .get_found
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Expired: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory
+                            .get_expired
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Value Retrieved: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        memory.get_value.unwrap_or_else(|| "none".to_string()),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
             }
             lines.push(Line::from(""));
         }
