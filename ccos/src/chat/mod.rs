@@ -1757,6 +1757,7 @@ pub async fn register_chat_capabilities(
 
                         let goal = get_str("goal")
                             .ok_or_else(|| RuntimeError::Generic("Missing goal parameter".to_string()))?;
+                        let parent_run_id = get_str("run_id");
                         let schedule = get_str("schedule");
                         let next_run_at = get_str("next_run_at");
                         let max_run = get_int("max_run");
@@ -1768,6 +1769,9 @@ pub async fn register_chat_capabilities(
                         let mut body_map = HashMap::new();
                         body_map.insert("session_id".to_string(), Value::String(session_id));
                         body_map.insert("goal".to_string(), Value::String(goal));
+                        if let Some(run_id) = parent_run_id {
+                            body_map.insert("run_id".to_string(), Value::String(run_id));
+                        }
                         if let Some(s) = schedule {
                             body_map.insert("schedule".to_string(), Value::String(s));
                         }

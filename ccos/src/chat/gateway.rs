@@ -109,6 +109,8 @@ pub(crate) struct GatewayState {
     pub(crate) approval_ui_url: String,
     /// Optional LLM profile override applied to newly spawned agents.
     pub(crate) spawn_llm_profile: Arc<RwLock<Option<String>>>,
+    /// Optional session-specific LLM profile overrides.
+    pub(crate) session_llm_profiles: Arc<RwLock<HashMap<String, String>>>,
 }
 
 #[async_trait]
@@ -361,6 +363,20 @@ impl ApprovalConsumer for GatewayState {
 }
 
 impl GatewayState {
+    async fn resolve_spawn_profile_for_session(&self, session_id: &str) -> Option<String> {
+        if let Some(profile) = self
+            .session_llm_profiles
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+        {
+            return Some(profile);
+        }
+
+        self.spawn_llm_profile.read().await.clone()
+    }
+
     async fn send_chat_message(&self, session_id: &str, text: String) {
         let parts: Vec<&str> = session_id.split(':').collect();
         if parts.len() < 3 {
@@ -481,7 +497,7 @@ impl GatewayState {
         };
 
         let mut spawn_config = spawn_config.with_run_id(run_id);
-        if let Some(profile) = self.spawn_llm_profile.read().await.clone() {
+        if let Some(profile) = self.resolve_spawn_profile_for_session(session_id).await {
             spawn_config = spawn_config.with_llm_profile(profile);
         }
         log::info!(
@@ -569,6 +585,22 @@ impl SheriffLogger {
     pub fn log_action(run_id: &str, capability_id: &str, inputs: &serde_json::Value) {
         let inputs_str = serde_json::to_string(inputs).unwrap_or_default();
         let truncated = Self::truncate_for_log(&inputs_str, 100);
+
+        if capability_id == "ccos.run.create" {
+            let summary = Self::summarize_run_create_program(inputs);
+            println!(
+                "{} {:<10} | {:<20} | run={:<12} | cap={:<24} {} inputs={}",
+                Utc::now().format("%H:%M:%S"),
+                "ACTION",
+                "TRIGGER",
+                run_id.chars().take(8).collect::<String>(),
+                capability_id,
+                summary,
+                truncated
+            );
+            return;
+        }
+
         println!(
             "{} {:<10} | {:<20} | run={:<12} | cap={:<24} inputs={}",
             Utc::now().format("%H:%M:%S"),
@@ -578,6 +610,39 @@ impl SheriffLogger {
             capability_id,
             truncated
         );
+    }
+
+    fn summarize_run_create_program(inputs: &serde_json::Value) -> String {
+        let get_text = |key: &str, fallback: &str| {
+            inputs
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or(fallback)
+                .to_string()
+        };
+
+        let goal = Self::truncate_for_log(&get_text("goal", "<missing>"), 80);
+        let schedule = get_text("schedule", "none");
+        let next_run_at = get_text("next_run_at", "none");
+        let trigger_capability_id = get_text("trigger_capability_id", "none");
+        let execution_mode = if trigger_capability_id != "none" {
+            "capability_trigger"
+        } else {
+            "llm_agent"
+        };
+        let max_run = inputs
+            .get("max_run")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let budget = inputs
+            .get("budget")
+            .map(|v| Self::truncate_for_log(&v.to_string(), 80))
+            .unwrap_or_else(|| "none".to_string());
+
+        format!(
+            "program=goal=\"{}\" schedule={} next_run_at={} mode={} trigger={} max_run={} budget={}",
+            goal, schedule, next_run_at, execution_mode, trigger_capability_id, max_run, budget
+        )
     }
 
     pub fn log_result(
@@ -843,6 +908,7 @@ impl ChatGateway {
             admin_tokens: config.admin_tokens.clone(),
             approval_ui_url: config.approval_ui_url.clone(),
             spawn_llm_profile: Arc::new(RwLock::new(resolve_default_spawn_llm_profile())),
+            session_llm_profiles: Arc::new(RwLock::new(HashMap::new())),
         });
 
         // Register gateway as approval consumer
@@ -1099,7 +1165,11 @@ impl ChatGateway {
             );
 
             let mut spawn_config = SpawnConfig::default();
-            if let Some(profile) = self.state.spawn_llm_profile.read().await.clone() {
+            if let Some(profile) = self
+                .state
+                .resolve_spawn_profile_for_session(&session_id)
+                .await
+            {
                 spawn_config = spawn_config.with_llm_profile(profile);
             }
 
@@ -1217,6 +1287,101 @@ impl ChatGateway {
                 }
                 return Ok(()); // Command handled, don't push to agent
             }
+            if content_to_push.starts_with("/model") {
+                let profile = content_to_push
+                    .strip_prefix("/model")
+                    .map(|s| s.trim())
+                    .unwrap_or("");
+
+                if profile.is_empty() {
+                    self.state
+                        .send_chat_message(
+                            &session_id,
+                            "Usage: /model <profile-name> (example: /model openai:gpt-4.1)"
+                                .to_string(),
+                        )
+                        .await;
+                    return Ok(());
+                }
+
+                {
+                    let mut guard = self.state.session_llm_profiles.write().await;
+                    guard.insert(session_id.clone(), profile.to_string());
+                }
+
+                let mut old_pid: Option<u32> = None;
+                let mut token: Option<String> = None;
+                if let Some(session) = self.state.session_registry.get_session(&session_id).await {
+                    old_pid = session.agent_pid;
+                    token = Some(session.auth_token.clone());
+
+                    let mut updated = session;
+                    updated.agent_pid = None;
+                    updated.status = crate::chat::session::SessionStatus::AgentNotRunning;
+                    self.state.session_registry.update_session(updated).await;
+                }
+
+                if let Some(pid) = old_pid {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .status();
+                }
+
+                let restart_result = if let Some(auth_token) = token {
+                    let spawn_config = SpawnConfig::default().with_llm_profile(profile.to_string());
+                    self.state
+                        .spawner
+                        .spawn(session_id.clone(), auth_token, spawn_config)
+                        .await
+                } else {
+                    Err(RuntimeError::Generic(
+                        "Session not found while applying model switch".to_string(),
+                    ))
+                };
+
+                match restart_result {
+                    Ok(spawn_result) => {
+                        if let Some(new_pid) = spawn_result.pid {
+                            let _ = self
+                                .state
+                                .session_registry
+                                .set_agent_pid(&session_id, new_pid)
+                                .await;
+                        }
+                        self.state
+                            .session_registry
+                            .update_session_status(
+                                &session_id,
+                                crate::chat::session::SessionStatus::Active,
+                            )
+                            .await;
+
+                        self.state
+                            .send_chat_message(
+                                &session_id,
+                                format!(
+                                    "✅ Model switched to '{}' and agent restarted (pid={:?})",
+                                    profile, spawn_result.pid
+                                ),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        self.state
+                            .send_chat_message(
+                                &session_id,
+                                format!(
+                                    "⚠️ Model profile set to '{}' but agent restart failed: {}",
+                                    profile, e
+                                ),
+                            )
+                            .await;
+                    }
+                }
+
+                return Ok(());
+            }
             // Add more commands here (e.g., /reject, /status)
         }
 
@@ -1312,6 +1477,113 @@ impl ChatGateway {
                     meta.insert("code".to_string(), Value::String(code.to_string()));
                     meta.insert("language".to_string(), Value::String(language.to_string()));
                 }
+
+                if capability_id == "ccos.run.create" {
+                    if let Some(goal) = inputs.get("goal").and_then(|v| v.as_str()) {
+                        meta.insert(
+                            "run_create_goal".to_string(),
+                            Value::String(goal.to_string()),
+                        );
+                    }
+                    if let Some(target_session_id) =
+                        inputs.get("session_id").and_then(|v| v.as_str())
+                    {
+                        meta.insert(
+                            "run_create_session_id".to_string(),
+                            Value::String(target_session_id.to_string()),
+                        );
+                    }
+                    if let Some(schedule) = inputs.get("schedule").and_then(|v| v.as_str()) {
+                        meta.insert(
+                            "run_create_schedule".to_string(),
+                            Value::String(schedule.to_string()),
+                        );
+                    }
+                    if let Some(next_run_at) =
+                        inputs.get("next_run_at").and_then(|v| v.as_str())
+                    {
+                        meta.insert(
+                            "run_create_next_run_at".to_string(),
+                            Value::String(next_run_at.to_string()),
+                        );
+                    }
+                    if let Some(max_run) = inputs.get("max_run").and_then(|v| v.as_i64()) {
+                        meta.insert("run_create_max_run".to_string(), Value::Integer(max_run));
+                    } else if let Some(max_run) = inputs.get("max_run").and_then(|v| v.as_u64()) {
+                        meta.insert(
+                            "run_create_max_run".to_string(),
+                            Value::Integer(max_run.min(i64::MAX as u64) as i64),
+                        );
+                    }
+                    if let Some(budget_json) = inputs.get("budget") {
+                        if let Ok(budget_value) = json_to_rtfs_value(budget_json) {
+                            meta.insert("run_create_budget".to_string(), budget_value);
+                        }
+                    }
+                    let trigger_capability_id = inputs
+                        .get("trigger_capability_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    let execution_mode = if trigger_capability_id.is_some() {
+                        "capability_trigger"
+                    } else {
+                        "llm_agent"
+                    };
+                    meta.insert(
+                        "run_create_execution_mode".to_string(),
+                        Value::String(execution_mode.to_string()),
+                    );
+                    if let Some(trigger_capability_id) = trigger_capability_id {
+                        meta.insert(
+                            "run_create_trigger_capability_id".to_string(),
+                            Value::String(trigger_capability_id),
+                        );
+                    }
+                    if let Some(trigger_inputs_json) = inputs.get("trigger_inputs") {
+                        if let Ok(trigger_inputs_value) = json_to_rtfs_value(trigger_inputs_json) {
+                            meta.insert(
+                                "run_create_trigger_inputs".to_string(),
+                                trigger_inputs_value,
+                            );
+                        }
+                    }
+                    if let Some(parent_run_id) = inputs.get("run_id").and_then(|v| v.as_str()) {
+                        meta.insert(
+                            "run_create_parent_run_id".to_string(),
+                            Value::String(parent_run_id.to_string()),
+                        );
+                    }
+                } else if capability_id == "ccos.memory.store" {
+                    meta.insert(
+                        "memory_operation".to_string(),
+                        Value::String("store".to_string()),
+                    );
+                    if let Some(memory_key) = inputs.get("key").and_then(|v| v.as_str()) {
+                        meta.insert(
+                            "memory_key".to_string(),
+                            Value::String(memory_key.to_string()),
+                        );
+                    }
+                    if let Some(value_json) = inputs.get("value") {
+                        if let Ok(value_rtfs) = json_to_rtfs_value(value_json) {
+                            meta.insert("memory_store_value".to_string(), value_rtfs);
+                        }
+                    }
+                } else if capability_id == "ccos.memory.get" {
+                    meta.insert(
+                        "memory_operation".to_string(),
+                        Value::String("get".to_string()),
+                    );
+                    if let Some(memory_key) = inputs.get("key").and_then(|v| v.as_str()) {
+                        meta.insert(
+                            "memory_key".to_string(),
+                            Value::String(memory_key.to_string()),
+                        );
+                    }
+                }
+
                 chain
                     .log_capability_call_with_metadata(
                         session_id.as_deref(),
@@ -1354,6 +1626,60 @@ impl ChatGateway {
 
         if let Some(action) = action {
             let mut result_metadata = HashMap::new();
+            if capability_id == "ccos.memory.store" {
+                result_metadata.insert(
+                    "memory_operation".to_string(),
+                    Value::String("store".to_string()),
+                );
+                if let Some(memory_key) = inputs.get("key").and_then(|v| v.as_str()) {
+                    result_metadata.insert(
+                        "memory_key".to_string(),
+                        Value::String(memory_key.to_string()),
+                    );
+                }
+                if let Some(value_json) = inputs.get("value") {
+                    if let Ok(value_rtfs) = json_to_rtfs_value(value_json) {
+                        result_metadata.insert("memory_store_value".to_string(), value_rtfs);
+                    }
+                }
+                if let Some(entry_id) = result_json.get("entry_id").and_then(|v| v.as_str()) {
+                    result_metadata.insert(
+                        "memory_store_entry_id".to_string(),
+                        Value::String(entry_id.to_string()),
+                    );
+                }
+                if let Some(store_success) = result_json.get("success").and_then(|v| v.as_bool()) {
+                    result_metadata.insert(
+                        "memory_store_success".to_string(),
+                        Value::Boolean(store_success),
+                    );
+                }
+            } else if capability_id == "ccos.memory.get" {
+                result_metadata.insert(
+                    "memory_operation".to_string(),
+                    Value::String("get".to_string()),
+                );
+                if let Some(memory_key) = inputs.get("key").and_then(|v| v.as_str()) {
+                    result_metadata.insert(
+                        "memory_key".to_string(),
+                        Value::String(memory_key.to_string()),
+                    );
+                }
+                if let Some(found) = result_json.get("found").and_then(|v| v.as_bool()) {
+                    result_metadata.insert("memory_get_found".to_string(), Value::Boolean(found));
+                }
+                if let Some(expired) = result_json.get("expired").and_then(|v| v.as_bool()) {
+                    result_metadata.insert(
+                        "memory_get_expired".to_string(),
+                        Value::Boolean(expired),
+                    );
+                }
+                if let Some(value_json) = result_json.get("value") {
+                    if let Ok(value_rtfs) = json_to_rtfs_value(value_json) {
+                        result_metadata.insert("memory_get_value".to_string(), value_rtfs);
+                    }
+                }
+            }
             if !success {
                 if let Some(err) = result_json.get("error").and_then(|v| v.as_str()) {
                     result_metadata.insert("error".to_string(), Value::String(err.to_string()));
@@ -2526,11 +2852,55 @@ fn is_scheduled_payload(payload: &CreateRunRequest) -> bool {
     payload.schedule.is_some() || payload.next_run_at.is_some()
 }
 
+fn normalize_schedule_input(schedule: &str) -> Option<String> {
+    let trimmed = schedule.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if crate::chat::scheduler::Scheduler::calculate_next_run(trimmed).is_some() {
+        return Some(trimmed.to_string());
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = lower.strip_prefix("every ")?.trim();
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+
+    let (value, unit) = match parts.as_slice() {
+        [unit] => (1_u32, *unit),
+        [num, unit] => {
+            let parsed = num.parse::<u32>().ok()?;
+            if parsed == 0 {
+                return None;
+            }
+            (parsed, *unit)
+        }
+        _ => return None,
+    };
+
+    match unit {
+        "second" | "seconds" => Some(format!("*/{} * * * * *", value)),
+        "minute" | "minutes" => Some(format!("*/{} * * * *", value)),
+        "hour" | "hours" => Some(format!("0 */{} * * *", value)),
+        "day" | "days" => Some(format!("0 0 */{} * *", value)),
+        _ => None,
+    }
+}
+
 async fn create_run_handler(
     State(state): State<Arc<GatewayState>>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, StatusCode> {
+    let normalized_schedule = payload
+        .schedule
+        .as_deref()
+        .and_then(normalize_schedule_input);
+
+    if payload.schedule.is_some() && normalized_schedule.is_none() && payload.next_run_at.is_none() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // Require X-Agent-Token header OR X-Internal-Secret
     let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
     let maybe_secret = headers
@@ -2571,10 +2941,73 @@ async fn create_run_handler(
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if let Some(parent_run_id) = payload.run_id.as_deref() {
+            if let Some(parent_run) = store.get_run(parent_run_id) {
+                if parent_run.schedule.is_some() {
+                    log::info!(
+                        "[Gateway] Suppressing nested scheduled run creation from scheduled parent run {}",
+                        parent_run_id
+                    );
+                    SheriffLogger::log_run(
+                        "DEDUP",
+                        parent_run_id,
+                        &payload.session_id,
+                        "Suppressing nested run.create from scheduled parent run",
+                    );
+                    return Ok(Json(CreateRunResponse {
+                        run_id: parent_run.id.clone(),
+                        session_id: payload.session_id.clone(),
+                        goal: parent_run.goal.clone(),
+                        state: format!("{:?}", parent_run.state),
+                        correlation_id: parent_run.correlation_id.clone(),
+                        next_run_at: parent_run.next_run_at,
+                    }));
+                }
+            }
+
+            if let Some(existing_run) = store
+                .get_runs_for_session(&payload.session_id)
+                .into_iter()
+                .rev()
+                .find(|run| {
+                    matches!(run.state, RunState::Scheduled)
+                        && run
+                            .metadata
+                            .get("created_from_run_id")
+                            .and_then(|v| v.as_str())
+                            == Some(parent_run_id)
+                })
+            {
+                log::info!(
+                    "[Gateway] Deduplicating scheduled run by parent run_id {} -> existing run {}",
+                    parent_run_id,
+                    existing_run.id
+                );
+                SheriffLogger::log_run(
+                    "DEDUP",
+                    &existing_run.id,
+                    &payload.session_id,
+                    &format!(
+                        "Returning existing scheduled run created by parent run {}",
+                        parent_run_id
+                    ),
+                );
+                return Ok(Json(CreateRunResponse {
+                    run_id: existing_run.id.clone(),
+                    session_id: payload.session_id.clone(),
+                    goal: existing_run.goal.clone(),
+                    state: format!("{:?}", existing_run.state),
+                    correlation_id: existing_run.correlation_id.clone(),
+                    next_run_at: existing_run.next_run_at,
+                }));
+            }
+        }
+
         if let Some(existing_run_id) = store.find_similar_scheduled_run(
             &payload.session_id,
             &payload.goal,
-            payload.schedule.as_deref(),
+            normalized_schedule.as_deref(),
             payload.next_run_at,
             payload.trigger_capability_id.as_deref(),
             payload.trigger_inputs.as_ref(),
@@ -2615,8 +3048,7 @@ async fn create_run_handler(
             Run::new_scheduled(
                 payload.session_id.clone(),
                 payload.goal.clone(),
-                payload
-                    .schedule
+                normalized_schedule
                     .clone()
                     .unwrap_or_else(|| "one-off".to_string()),
                 next_at,
@@ -2624,7 +3056,7 @@ async fn create_run_handler(
                 payload.trigger_capability_id.clone(),
                 payload.trigger_inputs.clone(),
             )
-        } else if let Some(ref sched) = payload.schedule {
+        } else if let Some(ref sched) = normalized_schedule {
             if let Some(next_at) = crate::chat::scheduler::Scheduler::calculate_next_run(sched) {
                 Run::new_scheduled(
                     payload.session_id.clone(),
@@ -2651,6 +3083,13 @@ async fn create_run_handler(
         r.trigger_inputs = payload.trigger_inputs.clone();
         r
     };
+
+    if let Some(parent_run_id) = payload.run_id.as_ref() {
+        run.metadata.insert(
+            "created_from_run_id".to_string(),
+            serde_json::Value::String(parent_run_id.clone()),
+        );
+    }
     if let Some(pred_value) = &payload.completion_predicate {
         let predicate: Option<crate::chat::Predicate> = if pred_value.is_string() {
             // Legacy/convenience migration
@@ -3141,6 +3580,37 @@ async fn list_runs_handler(
     headers: axum::http::HeaderMap,
     Query(query): Query<ListRunsQuery>,
 ) -> Result<Json<ListRunsResponse>, StatusCode> {
+    if is_admin_request(&state, &headers) {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut runs = store.get_runs_for_session(&query.session_id);
+
+        runs.sort_by_key(|r| r.updated_at);
+        runs.reverse();
+
+        let runs = runs
+            .into_iter()
+            .map(|run| RunSummaryResponse {
+                run_id: run.id.clone(),
+                goal: run.goal.clone(),
+                state: format!("{:?}", run.state),
+                steps_taken: run.consumption.steps_taken,
+                elapsed_secs: run.elapsed_secs(),
+                created_at: run.created_at.to_rfc3339(),
+                updated_at: run.updated_at.to_rfc3339(),
+                current_step_id: run.current_step_id.clone(),
+                next_run_at: run.next_run_at.map(|dt| dt.to_rfc3339()),
+            })
+            .collect();
+
+        return Ok(Json(ListRunsResponse {
+            session_id: query.session_id,
+            runs,
+        }));
+    }
+
     // Require X-Agent-Token header OR X-Internal-Secret
     let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
     let maybe_secret = headers
@@ -3320,6 +3790,48 @@ async fn cancel_run_handler(
         let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
         (format!("{:?}", run.state), run.session_id.clone())
     };
+
+    // Require admin token OR X-Agent-Token header OR X-Internal-Secret
+    if is_admin_request(&state, &headers) {
+        let cancelled = {
+            let mut store = state
+                .run_store
+                .lock()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            store.cancel_run(&run_id)
+        };
+
+        SheriffLogger::log_run("CANCELLED", &run_id, &session_id, "Run cancelled via API");
+
+        {
+            let mut meta = HashMap::new();
+            meta.insert(
+                "previous_state".to_string(),
+                Value::String(previous_state.clone()),
+            );
+            meta.insert("cancelled".to_string(), Value::Boolean(cancelled));
+            meta.insert(
+                "rule_id".to_string(),
+                Value::String("chat.run.cancel".to_string()),
+            );
+            let _ = record_chat_audit_event(
+                &state.chain,
+                "chat",
+                "chat",
+                &session_id,
+                &run_id,
+                "run.cancel",
+                "run.cancel",
+                meta,
+            );
+        }
+
+        return Ok(Json(CancelRunResponse {
+            run_id,
+            cancelled,
+            previous_state,
+        }));
+    }
 
     // Require X-Agent-Token header OR X-Internal-Secret
     let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
