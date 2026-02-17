@@ -37,6 +37,23 @@ pub struct SandboxExecutionResult {
     pub output_files: HashMap<String, Vec<u8>>,
 }
 
+/// Dispatcher closure used by [`BubblewrapSandbox::execute_python_interactive`].
+///
+/// Receives `(capability_id, json_inputs)` and returns a JSON-serialised result.
+/// The implementation in `chat/mod.rs` maps this to `marketplace.execute_capability`.
+pub type CapabilityDispatcher = std::sync::Arc<
+    dyn Fn(
+            String,
+            serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, RuntimeError>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// Content of ccos_sdk.py embedded at compile time for mounting into the sandbox.
+const CCOS_SDK_PY: &str = include_str!("ccos_sdk.py");
+
 /// Bubblewrap sandbox runtime for Python execution
 pub struct BubblewrapSandbox {
     scanner: SecurityScanner,
@@ -131,6 +148,350 @@ impl BubblewrapSandbox {
             dep_manager,
         )
         .await
+    }
+
+    /// Execute Python code with a two-way CCOS_CALL:: / CCOS_RESULT:: IPC protocol.
+    ///
+    /// The sandbox mounts `ccos_sdk.py` at `/workspace/input/ccos_sdk.py` and sets
+    /// `PYTHONPATH=/workspace/input` so scripts can `import ccos_sdk`.
+    ///
+    /// When Python code calls `ccos_sdk.memory.get(...)` (or any other SDK method):
+    /// 1. Python prints `CCOS_CALL::<json>` to stdout and blocks on `sys.stdin.readline()`.
+    /// 2. This method intercepts the line, calls `dispatcher(cap_id, json_inputs)`.
+    /// 3. Writes `CCOS_RESULT::<json>` to the process's stdin.
+    /// 4. Python unblocks and receives the result value.
+    ///
+    /// Non-CCOS lines are accumulated as visible stdout returned to the caller.
+    pub async fn execute_python_interactive(
+        &self,
+        code: &str,
+        input_files: &[InputFile],
+        config: &SandboxConfig,
+        dispatcher: CapabilityDispatcher,
+    ) -> Result<SandboxExecutionResult, RuntimeError> {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        self.scanner
+            .scan(code)
+            .map_err(|e| RuntimeError::Generic(format!("Security violation: {}", e)))?;
+
+        // Create temp workspace
+        let work_dir = tempfile::tempdir()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create temp dir: {}", e)))?;
+        let input_dir = work_dir.path().join("input");
+        let output_dir = work_dir.path().join("output");
+        let workspace_dir = work_dir.path().join("workspace");
+
+        fs::create_dir_all(&input_dir)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create input dir: {}", e)))?;
+        fs::create_dir_all(&output_dir)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create output dir: {}", e)))?;
+        fs::create_dir_all(&workspace_dir)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create workspace dir: {}", e)))?;
+
+        // Write SDK to input_dir so it gets mounted at /workspace/input/ccos_sdk.py
+        let sdk_host_path = input_dir.join("ccos_sdk.py");
+        fs::write(&sdk_host_path, CCOS_SDK_PY)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write ccos_sdk.py: {}", e)))?;
+
+        let timeout_ms = config
+            .resources
+            .as_ref()
+            .map(|r| if r.timeout_ms > 0 { r.timeout_ms } else { 30000 })
+            .unwrap_or(30000);
+
+        // Build command — bwrap or unjailed
+        let mut cmd = if no_sandbox_requested() {
+            log::warn!(
+                "[sandbox] CCOS_EXECUTE_NO_SANDBOX set; running Python without bubblewrap (less secure)"
+            );
+            // Copy input files into input_dir
+            for file in input_files {
+                if file.host_path.exists() {
+                    let dest = input_dir.join(&file.name);
+                    fs::copy(&file.host_path, &dest).await.map_err(|e| {
+                        RuntimeError::Generic(format!(
+                            "Failed to copy input file {}: {}",
+                            file.name, e
+                        ))
+                    })?;
+                }
+            }
+            let mut c = Command::new("/usr/bin/python3");
+            c.current_dir(&workspace_dir);
+            c.env("PYTHONPATH", input_dir.to_string_lossy().as_ref());
+            c
+        } else {
+            let mut c = Command::new("bwrap");
+            c.arg("--unshare-all");
+            c.arg("--die-with-parent");
+            c.arg("--new-session");
+
+            if config.network_enabled
+                || !config.allowed_hosts.is_empty()
+                || !config.allowed_ports.is_empty()
+            {
+                c.arg("--share-net");
+            }
+
+            // System read-only mounts
+            for sys_path in &["/usr", "/lib", "/lib64", "/bin", "/sbin"] {
+                if Path::new(sys_path).exists() {
+                    c.arg("--ro-bind").arg(sys_path).arg(sys_path);
+                }
+            }
+            for cert_path in &[
+                "/etc/ssl/certs",
+                "/etc/ssl/openssl.cnf",
+                "/etc/pki",
+                "/etc/ca-certificates",
+                "/usr/share/ca-certificates",
+            ] {
+                if Path::new(cert_path).exists() {
+                    c.arg("--ro-bind").arg(cert_path).arg(cert_path);
+                }
+            }
+
+            c.arg("--proc").arg("/proc");
+            c.arg("--dev").arg("/dev");
+            c.arg("--tmpfs").arg("/tmp");
+
+            // Workspace (writable)
+            c.arg("--bind").arg(&workspace_dir).arg("/workspace");
+
+            // SDK file (read-only) — /workspace/input/ccos_sdk.py
+            c.arg("--ro-bind")
+                .arg(&sdk_host_path)
+                .arg("/workspace/input/ccos_sdk.py");
+
+            // Additional input files (read-only)
+            for file in input_files {
+                let sandbox_path = format!("/workspace/input/{}", file.name);
+                if file.host_path.exists() {
+                    c.arg("--ro-bind").arg(&file.host_path).arg(&sandbox_path);
+                }
+            }
+
+            // Output directory (writable)
+            c.arg("--bind").arg(&output_dir).arg("/workspace/output");
+
+            c.arg("--chdir").arg("/workspace");
+
+            // Resource rlimits
+            if let Some(resources) = &config.resources {
+                let mem_limit = resources.memory_mb * 1024 * 1024;
+                let cpu_limit = resources.cpu_shares;
+                let nproc_limit = sandbox_max_nproc();
+                unsafe {
+                    c.pre_exec(move || {
+                        if mem_limit > 0 {
+                            let rl = libc::rlimit {
+                                rlim_cur: mem_limit as libc::rlim_t,
+                                rlim_max: mem_limit as libc::rlim_t,
+                            };
+                            libc::setrlimit(libc::RLIMIT_RSS, &rl);
+                        }
+                        if cpu_limit > 0 {
+                            let rl = libc::rlimit {
+                                rlim_cur: (cpu_limit as u64 * 60) as libc::rlim_t,
+                                rlim_max: (cpu_limit as u64 * 60) as libc::rlim_t,
+                            };
+                            libc::setrlimit(libc::RLIMIT_CPU, &rl);
+                        }
+                        if let Some(lim) = nproc_limit {
+                            let rl = libc::rlimit {
+                                rlim_cur: lim as libc::rlim_t,
+                                rlim_max: lim as libc::rlim_t,
+                            };
+                            libc::setrlimit(libc::RLIMIT_NPROC, &rl);
+                        }
+                        Ok(())
+                    });
+                }
+            }
+
+            c.arg("/usr/bin/python3");
+            c.env("PYTHONPATH", "/workspace/input");
+            c
+        };
+
+        cmd.arg("-c").arg(code);
+        cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to spawn process: {}", e)))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| RuntimeError::Generic("Failed to capture stdin".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Generic("Failed to capture stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| RuntimeError::Generic("Failed to capture stderr".to_string()))?;
+
+        // Read stderr asynchronously in a background task
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let mut r = stderr;
+            let _ = r.read_to_end(&mut buf).await;
+            buf
+        });
+
+        let mut stdin_writer = tokio::io::BufWriter::new(stdin);
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut visible_stdout = String::new();
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+        // Interactive IPC loop
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                let _ = child.kill().await;
+                return Err(RuntimeError::Generic(format!(
+                    "Execution timeout after {}ms",
+                    timeout_ms
+                )));
+            }
+
+            match tokio::time::timeout(remaining, stdout_reader.next_line()).await {
+                Err(_) => {
+                    let _ = child.kill().await;
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution timeout after {}ms",
+                        timeout_ms
+                    )));
+                }
+                Ok(Err(e)) => {
+                    return Err(RuntimeError::Generic(format!("Stdout read error: {}", e)))
+                }
+                Ok(Ok(None)) => break, // EOF — process finished writing
+                Ok(Ok(Some(line))) => {
+                    if let Some(json_str) = line.strip_prefix("CCOS_CALL::") {
+                        // Dispatch capability call
+                        let result_json = match serde_json::from_str::<serde_json::Value>(json_str)
+                        {
+                            Err(e) => {
+                                log::warn!("[sandbox] Invalid CCOS_CALL JSON: {}", e);
+                                serde_json::json!({"success": false, "error": format!("Invalid call JSON: {}", e)})
+                            }
+                            Ok(call) => {
+                                let cap_id = call["cap"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string();
+                                let inputs = call["inputs"].clone();
+                                match dispatcher(cap_id.clone(), inputs).await {
+                                    Ok(v) => {
+                                        log::debug!(
+                                            "[sandbox] CCOS_CALL {} → ok",
+                                            cap_id
+                                        );
+                                        serde_json::json!({"success": true, "value": v})
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "[sandbox] CCOS_CALL {} → error: {}",
+                                            cap_id, e
+                                        );
+                                        serde_json::json!({"success": false, "error": e.to_string()})
+                                    }
+                                }
+                            }
+                        };
+                        // Write result to Python's stdin
+                        let response =
+                            format!("CCOS_RESULT::{}\n", serde_json::to_string(&result_json)
+                                .unwrap_or_else(|_| r#"{"success":false,"error":"serialise"}"#.to_string()));
+                        if let Err(e) = stdin_writer.write_all(response.as_bytes()).await {
+                            log::warn!("[sandbox] Failed to write CCOS_RESULT to stdin: {}", e);
+                        }
+                        let _ = stdin_writer.flush().await;
+                    } else {
+                        visible_stdout.push_str(&line);
+                        visible_stdout.push('\n');
+                    }
+                }
+            }
+        }
+
+        // Close stdin — signals EOF to Python if it's still reading
+        drop(stdin_writer);
+
+        // Wait for process to exit
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let exit_status = match tokio::time::timeout(remaining, child.wait()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(RuntimeError::Generic(format!("Process error: {}", e))),
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(RuntimeError::Generic(format!(
+                    "Execution timeout after {}ms (wait phase)",
+                    timeout_ms
+                )));
+            }
+        };
+
+        let stderr_buf = stderr_task.await.unwrap_or_default();
+        let mut stderr_str = String::from_utf8_lossy(&stderr_buf).to_string();
+
+        if !exit_status.success()
+            && (stderr_str.contains("Creating new namespace failed")
+                || stderr_str.contains("Resource temporarily unavailable"))
+        {
+            stderr_str.push_str(
+                "\n\n[CCOS] bwrap failed to create user namespace. \
+                To fix: run 'sudo sysctl -w user.max_user_namespaces=15000'. \
+                Or set CCOS_EXECUTE_NO_SANDBOX=1 (less secure).",
+            );
+        }
+
+        // Collect output files
+        let mut output_files = HashMap::new();
+        if let Ok(mut entries) = fs::read_dir(&output_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_string_lossy().to_lowercase();
+                        if is_allowed_extension(&ext_str) {
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            if let Ok(content) = fs::read(&path).await {
+                                if content.len() <= 10 * 1024 * 1024 {
+                                    output_files.insert(name, content);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SandboxExecutionResult {
+            success: exit_status.success(),
+            stdout: visible_stdout,
+            stderr: stderr_str,
+            exit_code: exit_status.code(),
+            output_files,
+        })
     }
 
     /// Generic execution method for different runtimes
