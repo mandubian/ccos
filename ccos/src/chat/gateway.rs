@@ -520,11 +520,41 @@ impl GatewayState {
                         .iter()
                         .map(|e| format!("[{}]: {}", e.title, e.content))
                         .collect();
+                    // Extract all keys mentioned across the prior-run entries so we
+                    // can give an explicit, unambiguous instruction to the next agent.
+                    let known_keys: Vec<String> = result.entries.iter().flat_map(|e| {
+                        // content: "run_id=X goal=Y memory_keys=[k1, k2]"
+                        e.content.split("memory_keys=[").nth(1)
+                            .and_then(|s| s.split(']').next())
+                            .map(|keys_str| {
+                                keys_str.split(',').map(|k| k.trim().to_string())
+                                    .filter(|k| !k.is_empty())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    }).collect();
+                    let key_instruction = if known_keys.is_empty() {
+                        "When using ccos.memory.get or ccos.memory.store (or ccos_sdk.memory), \
+                        use the EXACT SAME key that was used in prior runs for this session."
+                            .to_string()
+                    } else {
+                        // Deduplicate while preserving order
+                        let mut seen = std::collections::HashSet::new();
+                        let unique_keys: Vec<&String> = known_keys.iter()
+                            .filter(|k| seen.insert(k.as_str()))
+                            .collect();
+                        format!(
+                            "CRITICAL: The WorkingMemory keys used in prior runs for this session \
+                            are: [{}]. You MUST use these EXACT key names in \
+                            ccos_sdk.memory.get / ccos_sdk.memory.store (or ccos.memory.get / \
+                            ccos.memory.store). Do NOT invent new key names.",
+                            unique_keys.iter().map(|k| format!("\"{}\"", k)).collect::<Vec<_>>().join(", ")
+                        )
+                    };
                     let prior_context = format!(
-                        "PRIOR RUN HISTORY (most recent scheduled runs for this session):\n{}\n\
-                        When calling ccos.memory.get or ccos.memory.store, use the EXACT SAME key \
-                        that was used in prior runs for this session.",
-                        ctx_lines.join("\n")
+                        "PRIOR RUN HISTORY (most recent scheduled runs for this session):\n{}\n{}",
+                        ctx_lines.join("\n"),
+                        key_instruction
                     );
                     spawn_config = spawn_config.with_prior_context(prior_context);
                 }
@@ -2037,9 +2067,10 @@ async fn evaluate_run_completion(
             };
 
             // C1: Write a scheduled-context entry to WorkingMemory so the next run can
-            // be informed that a prior run existed for this session.
+            // be informed that a prior run existed for this session, including which
+            // WorkingMemory keys were actually used so the LLM can reuse them exactly.
             {
-                use crate::working_memory::{WorkingMemoryEntry, WorkingMemoryMeta};
+                use crate::working_memory::{QueryParams, WorkingMemoryEntry, WorkingMemoryMeta};
                 use std::collections::HashSet;
                 use std::time::SystemTime;
                 let now_s = SystemTime::now()
@@ -2054,7 +2085,41 @@ async fn evaluate_run_completion(
                 let goal_text = state.run_store.lock().ok()
                     .and_then(|s| s.get_run(run_id).map(|r| r.goal.clone()))
                     .unwrap_or_default();
-                let content = format!("run_id={} goal={}", run_id, goal_text);
+                // Discover which WM keys were written during this run (D-tagged entries).
+                // Entry IDs follow "global:{key}" or "skill:{id}:{key}"; skip metadata.
+                let memory_keys: Vec<String> = state.working_memory.lock()
+                    .ok()
+                    .and_then(|wm| {
+                        let params = QueryParams::with_tags([format!("session:{}", session_id)])
+                            .with_limit(Some(50));
+                        wm.query(&params).ok().map(|result| {
+                            result.entries.iter().filter_map(|e| {
+                                let id = &e.id;
+                                if id.starts_with("scheduled-ctx:") {
+                                    None // skip our own metadata entries
+                                } else if let Some(key) = id.strip_prefix("global:") {
+                                    Some(key.to_string())
+                                } else if id.starts_with("skill:") {
+                                    // skill:{skill_id}:{key} — take everything after second ':'
+                                    id.splitn(3, ':').nth(2).map(|k| k.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                        })
+                    })
+                    .unwrap_or_default();
+                let content = if memory_keys.is_empty() {
+                    format!("run_id={} goal={}", run_id, goal_text)
+                } else {
+                    format!(
+                        "run_id={} goal={} memory_keys=[{}]",
+                        run_id,
+                        goal_text,
+                        memory_keys.join(", ")
+                    )
+                };
                 let entry = WorkingMemoryEntry::new_with_estimate(
                     entry_id,
                     format!("scheduled-ctx:{}", run_id),
