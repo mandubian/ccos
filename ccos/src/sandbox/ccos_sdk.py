@@ -143,4 +143,15 @@ class _CCOS:
 # Singleton exported as `ccos`
 ccos = _CCOS()
 
-__all__ = ["ccos"]
+# Module-level aliases so `import ccos_sdk; ccos_sdk.memory.get(...)` works
+# (the prompts and docs use this flat style rather than `ccos_sdk.ccos.memory`)
+memory: _Memory = ccos.memory
+io: _IO = ccos.io
+
+
+def call(capability_id: str, inputs: dict) -> Any:  # noqa: ANN401
+    """Module-level generic capability call — delegates to ccos.call()."""
+    return ccos.call(capability_id, inputs)
+
+
+__all__ = ["ccos", "memory", "io", "call"]
