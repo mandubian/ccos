@@ -2257,6 +2257,20 @@ pub async fn register_chat_capabilities(
 
                     let dep_manager = DependencyManager::new(effective_sandbox_cfg);
 
+                    // Capture session/run context from outer inputs so the dispatcher can
+                    // inject them into every SDK-originated ccos.memory.* call, enabling
+                    // session tagging (D) for entries written from inside the sandbox.
+                    let sdk_session_id = map
+                        .get(&MapKey::String("session_id".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string());
+                    let sdk_run_id = map
+                        .get(&MapKey::String("run_id".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string());
+
                     // Execute: interactive mode (with ccos_sdk.py IPC) when no deps to install;
                     // fall back to standard mode when dependencies are requested.
                     let result = if dependencies.is_empty() {
@@ -2264,10 +2278,26 @@ pub async fn register_chat_capabilities(
                         use crate::sandbox::bubblewrap::CapabilityDispatcher;
                         use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
                         let mp = sandbox_marketplace.clone();
+                        let dispatch_session_id = sdk_session_id.clone();
+                        let dispatch_run_id = sdk_run_id.clone();
                         let dispatcher: CapabilityDispatcher = std::sync::Arc::new(
-                            move |cap_id: String, json_inputs: serde_json::Value| {
+                            move |cap_id: String, mut json_inputs: serde_json::Value| {
                                 let mp = mp.clone();
+                                let session_id = dispatch_session_id.clone();
+                                let run_id = dispatch_run_id.clone();
                                 Box::pin(async move {
+                                    // Inject session_id and run_id so WM entries are tagged
+                                    // correctly (enables C2 cross-run query to find them).
+                                    if let Some(obj) = json_inputs.as_object_mut() {
+                                        if let Some(ref sid) = session_id {
+                                            obj.entry("session_id")
+                                                .or_insert_with(|| serde_json::json!(sid));
+                                        }
+                                        if let Some(ref rid) = run_id {
+                                            obj.entry("run_id")
+                                                .or_insert_with(|| serde_json::json!(rid));
+                                        }
+                                    }
                                     let rtfs_inputs = json_to_rtfs_value(&json_inputs)
                                         .map_err(|e| RuntimeError::Generic(
                                             format!("SDK inputs conversion: {}", e),

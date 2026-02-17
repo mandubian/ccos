@@ -761,7 +761,7 @@ Available capabilities:
 
 IMPORTANT - Capability Input Formats:
 - ccos.network.http-fetch: {{"url": "https://api.example.com/data"}}
-- ccos.execute.python: {{"code": "print(0.2 * 68918)"}}
+- ccos.execute.python: {{"code": "print(0.2 * 68918)"}}  — Note: `ccos_sdk` is pre-mounted; use `import ccos_sdk; ccos_sdk.memory.get/store(key, val)` for stateful tasks
 - ccos.execute.javascript: {{"code": "console.log(0.2 * 68918)"}}
 - ccos.execute.rtfs: {{"code": "(* 0.2 68918)"}}  <- RTFS uses Lisp-like syntax
 - ccos.chat.egress.send_outbound: {{"content": "message text", "content_class": "public"}}
