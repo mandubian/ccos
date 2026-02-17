@@ -2128,14 +2128,14 @@ pub async fn register_chat_capabilities(
                 let sandbox_cfg = sandbox_cfg.clone();
                 let approval_queue = approval_queue.clone();
                 Box::pin(async move {
-                    // Check if bubblewrap is available
+                    // Check if bubblewrap is available (or CCOS_EXECUTE_NO_SANDBOX allows unjailed execution)
                     let bwrap_available = std::process::Command::new("which")
                         .arg("bwrap")
                         .output()
                         .map(|output| output.status.success())
                         .unwrap_or(false);
-                    
-                    if !bwrap_available {
+
+                    if !bwrap_available && !crate::sandbox::no_sandbox_requested() {
                         return Err(RuntimeError::Generic(
                             "Python execution not available (bubblewrap not installed)".to_string()
                         ));

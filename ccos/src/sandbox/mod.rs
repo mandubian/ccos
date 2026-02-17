@@ -9,7 +9,9 @@ pub mod refiner;
 pub mod resources;
 pub mod secret_injection;
 
-pub use bubblewrap::{BubblewrapSandbox, InputFile, SandboxExecutionResult, SecurityScanner};
+pub use bubblewrap::{
+    no_sandbox_requested, BubblewrapSandbox, InputFile, SandboxExecutionResult, SecurityScanner,
+};
 pub use coding_agent::{CodingAgent, CodingConstraints, CodingRequest, CodingResponse};
 pub use config::{SandboxConfig, SandboxRuntimeType};
 pub use dependency_manager::{DependencyManager, DependencyResolution};
