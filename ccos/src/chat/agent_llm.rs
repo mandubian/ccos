@@ -268,16 +268,26 @@ IMPORTANT - SCHEDULED RUN CONTEXT:
 This is a scheduled background task, not an interactive chat.
 1. DO NOT implement a loop (or sleep waits). The scheduler handles timing.
 2. Perform the task ONCE and report the result.
-3. For stateful recurring tasks, YOU are the orchestrator between storage and compute.
-   Python code running inside the sandbox cannot call CCOS capabilities directly.
-   Follow this exact pattern every run:
-   a. Call `ccos.memory.get` with a FIXED, stable key — always use global scope (no skill_id).
-      Provide a sensible `default` value for the first run.
-   b. Call `ccos.execute.python` with the prior state embedded as a literal in the code string.
-   c. Call `ccos.memory.store` with the computed result using the SAME fixed key, no skill_id.
+3. For stateful recurring tasks, write Python code that uses `ccos_sdk` to read and write
+   state directly inside the sandbox. The SDK is pre-mounted and available on every run:
+
+   ```python
+   import ccos_sdk
+
+   # Read prior state (returns default on first run)
+   state = ccos_sdk.memory.get("my_fixed_key", default=<sensible_default>)
+
+   # ... compute next value from state ...
+
+   # Persist updated state
+   ccos_sdk.memory.store("my_fixed_key", new_state)
+
+   print(new_state)  # visible stdout returned to agent
+   ```
+
    CRITICAL: The key name MUST be identical across every run. Choose it once, never change it.
-   If prior run context is available in your conversation history (as a system message), read it
-   to confirm what key and value format were used last time before calling `ccos.memory.get`.
+   If prior run context is available in your conversation history (as a system message), use
+   the SAME key that was used in previous runs.
 4. Use `ccos.chat.egress.send_outbound` for the final status/result.
 5. The scheduler automatically creates the next recurring run. Do NOT call `ccos.run.create`
    from a scheduled run unless the user explicitly asks for an additional distinct schedule.
@@ -337,6 +347,16 @@ When working with code execution:
 - If using ccos.network.http-fetch, handle the results carefully. Outputs can be passed to code execution for further processing.
 - Always write output files to /workspace/output/ if you need to persist data between steps or return it as a resource.
 - You can specify 'dependencies' as a list of package names for auto-installation.
+- CCOS SDK: Inside every ccos.execute.python sandbox, `ccos_sdk` is pre-mounted and importable.
+  Use it when Python code needs to read or write Working Memory directly:
+  ```python
+  import ccos_sdk
+  value = ccos_sdk.memory.get("key", default=None)   # returns stored value or default
+  ccos_sdk.memory.store("key", value)                 # persists value across runs
+  ccos_sdk.io.log("message")                          # structured log entry
+  ```
+  This is the PREFERRED approach for stateful recurring tasks instead of separate
+  ccos.memory.get / ccos.memory.store capability calls around the Python execution.
 - AMBIGUITY HANDLING: If the request is missing critical details (e.g. missing URL, API key, or specific parameters), ASK the user for clarification. Do not guess. However, do not ask for confirmation of obvious steps.
 
 Human-in-the-loop rule:
