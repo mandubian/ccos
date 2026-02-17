@@ -2,37 +2,34 @@
 CCOS Python SDK for sandboxed capability execution.
 
 Provides a minimal interface allowing Python code running inside the CCOS
-bubblewrap sandbox to interact with the CCOS capability system via stdout
-markers intercepted by the host runtime.
+bubblewrap sandbox to interact with the CCOS capability system via a
+two-way stdout/stdin protocol intercepted by the host runtime.
 
 PROTOCOL
 --------
 Python code cannot make HTTP calls inside the sandbox (network is disabled by
-default, and no bearer token is available). Instead, this SDK emits structured
+default and no bearer token is available). Instead, this SDK emits structured
 markers on stdout that the CCOS sandbox runner intercepts and dispatches:
 
-    CCOS_CALL::<json>
+    CCOS_CALL::<json>        ← Python writes to stdout
+    CCOS_RESULT::<json>      ← host writes to Python's stdin
 
-Where <json> is a UTF-8 JSON object with the shape:
-    {
-        "cap": "<capability_id>",
-        "inputs": { ... }
-    }
+Where each <json> is a UTF-8 JSON object.
 
-The runner intercepts the line, executes the capability locally (in-process),
-and injects the result into the next iteration as:
+CCOS_CALL shape:
+    { "cap": "<capability_id>", "inputs": { ... } }
 
-    CCOS_RESULT::<json>
+CCOS_RESULT shape:
+    { "success": true,  "value": <result_json> }   # on success
+    { "success": false, "error": "<message>"    }   # on failure
 
-Where <json> is the raw RTFS Value serialized as JSON.
+The host intercepts each CCOS_CALL:: line, executes the local capability
+synchronously, then writes one CCOS_RESULT:: line to stdin. Python blocks on
+`sys.stdin.readline()` until the result arrives, making the call appear
+synchronous from Python's perspective.
 
-TODO: The bubblewrap.rs process runner must be updated to:
-  1. Scan stdout lines for the CCOS_CALL:: prefix and strip them from the
-     visible output passed back to the LLM.
-  2. Execute the named local capability with the decoded inputs.
-  3. Write the result line (CCOS_RESULT::...) to the process's stdin.
-  4. Mount this file at /ccos/ccos_sdk.py and set PYTHONPATH=/ccos so Python
-     scripts can `import ccos_sdk` without any install step.
+The host runner mounts this file at /workspace/input/ccos_sdk.py and sets
+PYTHONPATH=/workspace/input so scripts can `import ccos_sdk`.
 
 USAGE EXAMPLE
 -------------
@@ -50,13 +47,38 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Optional
+from typing import Any
 
 
-def _emit(cap: str, inputs: dict) -> None:
-    """Emit a CCOS_CALL:: marker on stdout and flush immediately."""
+_CALL_PREFIX = "CCOS_CALL::"
+_RESULT_PREFIX = "CCOS_RESULT::"
+
+
+def _call(cap: str, inputs: dict) -> Any:  # noqa: ANN401
+    """Emit a CCOS_CALL:: marker on stdout, block until CCOS_RESULT:: arrives on stdin.
+
+    Returns the deserialized result value, or raises RuntimeError on failure.
+    """
     marker = json.dumps({"cap": cap, "inputs": inputs}, ensure_ascii=False)
-    print(f"CCOS_CALL::{marker}", flush=True)
+    # Write to stderr-less stdout (PYTHONUNBUFFERED=1 is set by the host).
+    sys.stdout.write(f"{_CALL_PREFIX}{marker}\n")
+    sys.stdout.flush()
+
+    # Block waiting for the host to write the result back.
+    result_line = sys.stdin.readline()
+    if not result_line:
+        raise RuntimeError(f"CCOS host closed stdin before returning result for cap '{cap}'")
+
+    result_line = result_line.rstrip("\n")
+    if not result_line.startswith(_RESULT_PREFIX):
+        raise RuntimeError(
+            f"Unexpected response from CCOS host (cap '{cap}'): {result_line!r}"
+        )
+
+    result = json.loads(result_line[len(_RESULT_PREFIX):])
+    if result.get("success"):
+        return result.get("value")
+    raise RuntimeError(f"Capability '{cap}' failed: {result.get('error', 'unknown error')}")
 
 
 # ---------------------------------------------------------------------------
@@ -66,22 +88,27 @@ def _emit(cap: str, inputs: dict) -> None:
 class _Memory:
     """Interface to ccos.memory.get / ccos.memory.store."""
 
-    def get(self, key: str, default: Any = None) -> None:  # noqa: ANN401
-        """Emit a request to retrieve a value from Working Memory.
+    def get(self, key: str, default: Any = None) -> Any:  # noqa: ANN401
+        """Retrieve a value from Working Memory.
 
-        NOTE: In the current implementation the result is NOT returned to
-        Python — the SDK emits the CCOS_CALL:: marker and the host runner
-        must inject the result via CCOS_RESULT:: (not yet implemented).
-        Until that interceptor is in place, use the LLM-as-orchestrator
-        pattern: let the LLM agent call ccos.memory.get, embed the result
-        as a literal in the Python script, then call ccos.memory.store with
-        the output.
+        Returns the stored value, or `default` if the key does not exist.
+        Blocks until the host dispatches the capability and returns the result.
         """
-        _emit("ccos.memory.get", {"key": key, "default": default})
+        result = _call("ccos.memory.get", {"key": key, "default": default})
+        # result is the serialised MemoryGetOutput:
+        # { "value": <any>, "found": bool, "expired": bool }
+        if isinstance(result, dict):
+            if result.get("found"):
+                return result.get("value", default)
+            return default
+        return default
 
     def store(self, key: str, value: Any) -> None:  # noqa: ANN401
-        """Emit a request to store a value in Working Memory."""
-        _emit("ccos.memory.store", {"key": key, "value": value})
+        """Store a value in Working Memory under the given key.
+
+        Blocks until the host confirms the write.
+        """
+        _call("ccos.memory.store", {"key": key, "value": value})
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +119,12 @@ class _IO:
     """Utility I/O helpers."""
 
     def log(self, message: str) -> None:
-        """Emit a structured log message via ccos.io.log."""
-        _emit("ccos.io.log", {"message": str(message)})
+        """Emit a log message via ccos.io.log (best-effort, non-blocking result)."""
+        try:
+            _call("ccos.io.log", {"message": str(message)})
+        except Exception:  # noqa: BLE001
+            # Logging must never crash user code.
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +135,9 @@ class _CCOS:
     memory: _Memory = _Memory()
     io: _IO = _IO()
 
-    def call(self, capability_id: str, inputs: dict) -> None:
-        """Generic capability call — emits CCOS_CALL:: for any local cap."""
-        _emit(capability_id, inputs)
+    def call(self, capability_id: str, inputs: dict) -> Any:  # noqa: ANN401
+        """Generic capability call — dispatches any local CCOS capability."""
+        return _call(capability_id, inputs)
 
 
 # Singleton exported as `ccos`

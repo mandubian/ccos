@@ -2117,6 +2117,8 @@ pub async fn register_chat_capabilities(
         // Clone config for capture in closure
         let sandbox_cfg = sandbox_config.clone();
         let approval_queue = approval_queue.clone();
+        // Clone marketplace so the sandbox can dispatch ccos_sdk.py CCOS_CALL:: requests.
+        let sandbox_marketplace = marketplace.clone();
 
         register_native_chat_capability(
             &*marketplace,
@@ -2127,6 +2129,7 @@ pub async fn register_chat_capabilities(
                 let inputs = inputs.clone();
                 let sandbox_cfg = sandbox_cfg.clone();
                 let approval_queue = approval_queue.clone();
+                let sandbox_marketplace = sandbox_marketplace.clone();
                 Box::pin(async move {
                     // Check if bubblewrap is available (or CCOS_EXECUTE_NO_SANDBOX allows unjailed execution)
                     let bwrap_available = std::process::Command::new("which")
@@ -2254,16 +2257,38 @@ pub async fn register_chat_capabilities(
 
                     let dep_manager = DependencyManager::new(effective_sandbox_cfg);
 
-                    // Execute with optional dependencies
-                    let result_future = sandbox.execute_python(
-                        &code, 
-                        &input_files, 
-                        &exec_sandbox_config,
-                        if dependencies.is_empty() { None } else { Some(&dependencies) },
-                        Some(&dep_manager)
-                    );
+                    // Execute: interactive mode (with ccos_sdk.py IPC) when no deps to install;
+                    // fall back to standard mode when dependencies are requested.
+                    let result = if dependencies.is_empty() {
+                        use std::pin::Pin;
+                        use crate::sandbox::bubblewrap::CapabilityDispatcher;
+                        use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
+                        let mp = sandbox_marketplace.clone();
+                        let dispatcher: CapabilityDispatcher = std::sync::Arc::new(
+                            move |cap_id: String, json_inputs: serde_json::Value| {
+                                let mp = mp.clone();
+                                Box::pin(async move {
+                                    let rtfs_inputs = json_to_rtfs_value(&json_inputs)
+                                        .map_err(|e| RuntimeError::Generic(
+                                            format!("SDK inputs conversion: {}", e),
+                                        ))?;
+                                    let result = mp.execute_capability(&cap_id, &rtfs_inputs).await?;
+                                    rtfs_value_to_json(&result).map_err(|e| RuntimeError::Generic(
+                                        format!("SDK result conversion: {}", e),
+                                    ))
+                                }) as Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, RuntimeError>> + Send>>
+                            },
+                        );
+                        sandbox
+                            .execute_python_interactive(&code, &input_files, &exec_sandbox_config, dispatcher)
+                            .await
+                    } else {
+                        sandbox
+                            .execute_python(&code, &input_files, &exec_sandbox_config, Some(&dependencies), Some(&dep_manager))
+                            .await
+                    };
 
-                    let result = match result_future.await {
+                    let result = match result {
                         Ok(res) => res,
                         Err(e) => {
                             let err_msg = e.to_string();
