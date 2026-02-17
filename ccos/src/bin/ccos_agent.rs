@@ -1755,6 +1755,14 @@ Approve it in the UI or with /approve {}.",
                     .unwrap_or_else(|| "Unknown error".to_string());
                 warn!("Action failed: {}", error_msg);
 
+                // If the gateway has marked this run as terminal (Done/Cancelled/Failed),
+                // there is nothing more we can do — break immediately rather than looping
+                // back to the LLM and generating further actions that will all be refused.
+                if error_msg.contains("Run is terminal") {
+                    info!("[Agent] Run is terminal on gateway side; shutting down agent loop.");
+                    break;
+                }
+
                 // Ask explicitly for missing required runtime keys instead of generic retry text.
                 let missing_required = Self::extract_missing_required_keys(&error_msg);
                 if !missing_required.is_empty() {
