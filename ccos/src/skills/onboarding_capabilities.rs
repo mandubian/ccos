@@ -62,6 +62,9 @@ struct MemoryStoreInput {
     skill_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ttl: Option<u64>,
+    /// Optional session ID used to tag entries for cross-run retrieval (recurring scheduled runs).
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 /// Output for ccos.memory.store
@@ -776,6 +779,10 @@ async fn handle_memory_store(
     tags.insert("onboarding".to_string());
     if let Some(ref skill_id) = payload.skill_id {
         tags.insert(format!("skill:{}", skill_id));
+    }
+    // Tag with session ID when provided so cross-run WM queries can filter by session.
+    if let Some(ref sid) = payload.session_id {
+        tags.insert(format!("session:{}", sid));
     }
 
     let content = serde_json::to_string(&payload.value)

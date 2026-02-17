@@ -111,6 +111,8 @@ pub(crate) struct GatewayState {
     pub(crate) spawn_llm_profile: Arc<RwLock<Option<String>>>,
     /// Optional session-specific LLM profile overrides.
     pub(crate) session_llm_profiles: Arc<RwLock<HashMap<String, String>>>,
+    /// Shared WorkingMemory instance used to inject prior-run context into scheduled agent spawns.
+    pub(crate) working_memory: Arc<Mutex<crate::working_memory::WorkingMemory>>,
 }
 
 #[async_trait]
@@ -500,6 +502,35 @@ impl GatewayState {
         if let Some(profile) = self.resolve_spawn_profile_for_session(session_id).await {
             spawn_config = spawn_config.with_llm_profile(profile);
         }
+
+        // C2: Query WorkingMemory for prior scheduled-run context to inject into agent spawn.
+        // This gives the LLM agent awareness of the last run's goal and memory key so it uses
+        // a consistent WorkingMemory key across recurring ticks.
+        if let Ok(wm) = self.working_memory.lock() {
+            use crate::working_memory::QueryParams;
+            let params = QueryParams::with_tags([
+                "scheduled-context".to_string(),
+                format!("session:{}", session_id),
+            ])
+            .with_limit(Some(3));
+            if let Ok(result) = wm.query(&params) {
+                if !result.entries.is_empty() {
+                    let ctx_lines: Vec<String> = result
+                        .entries
+                        .iter()
+                        .map(|e| format!("[{}]: {}", e.title, e.content))
+                        .collect();
+                    let prior_context = format!(
+                        "PRIOR RUN HISTORY (most recent scheduled runs for this session):\n{}\n\
+                        When calling ccos.memory.get or ccos.memory.store, use the EXACT SAME key \
+                        that was used in prior runs for this session.",
+                        ctx_lines.join("\n")
+                    );
+                    spawn_config = spawn_config.with_prior_context(prior_context);
+                }
+            }
+        }
+
         log::info!(
             "[Gateway] Spawning agent for run {} session {} (budget: steps={}, duration_secs={}, max_tokens={:?})",
             run_id,
@@ -808,6 +839,14 @@ impl ChatGateway {
         )
         .await?;
 
+        // Default in-memory WorkingMemory — overridden with persistent backend inside the
+        // approvals block below when a persistent path is available.
+        let mut working_memory_arc = Arc::new(Mutex::new(
+            crate::working_memory::WorkingMemory::new(Box::new(
+                crate::working_memory::InMemoryJsonlBackend::new(None, None, None),
+            )),
+        ));
+
         // Register onboarding capabilities (approval + secrets + onboarding memory)
         // so chat agents can explicitly request human approvals during execution.
         if let Some(ref approvals_queue) = approvals {
@@ -848,6 +887,7 @@ impl ChatGateway {
             let working_memory = crate::working_memory::WorkingMemory::new(Box::new(
                 crate::working_memory::InMemoryJsonlBackend::new(wm_backend_path.clone(), None, None),
             ));
+            working_memory_arc = Arc::new(Mutex::new(working_memory));
             if let Some(path) = wm_backend_path {
                 log::info!(
                     "[Gateway] Working memory persistence enabled at {}",
@@ -858,7 +898,7 @@ impl ChatGateway {
             crate::skills::onboarding_capabilities::register_onboarding_capabilities(
                 marketplace.clone(),
                 Arc::new(Mutex::new(secret_store)),
-                Arc::new(Mutex::new(working_memory)),
+                working_memory_arc.clone(),
                 Arc::new(approvals_queue.clone()),
             )
             .await?;
@@ -909,6 +949,7 @@ impl ChatGateway {
             approval_ui_url: config.approval_ui_url.clone(),
             spawn_llm_profile: Arc::new(RwLock::new(resolve_default_spawn_llm_profile())),
             session_llm_profiles: Arc::new(RwLock::new(HashMap::new())),
+            working_memory: working_memory_arc,
         });
 
         // Register gateway as approval consumer
@@ -1994,6 +2035,38 @@ async fn evaluate_run_completion(
                     None
                 }
             };
+
+            // C1: Write a scheduled-context entry to WorkingMemory so the next run can
+            // be informed that a prior run existed for this session.
+            {
+                use crate::working_memory::{WorkingMemoryEntry, WorkingMemoryMeta};
+                use std::collections::HashSet;
+                use std::time::SystemTime;
+                let now_s = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let entry_id = format!("scheduled-ctx:{}:{}", session_id, run_id);
+                let mut tags: HashSet<String> = HashSet::new();
+                tags.insert("scheduled-context".to_string());
+                tags.insert(format!("session:{}", session_id));
+                // Retrieve goal from run store for richer context
+                let goal_text = state.run_store.lock().ok()
+                    .and_then(|s| s.get_run(run_id).map(|r| r.goal.clone()))
+                    .unwrap_or_default();
+                let content = format!("run_id={} goal={}", run_id, goal_text);
+                let entry = WorkingMemoryEntry::new_with_estimate(
+                    entry_id,
+                    format!("scheduled-ctx:{}", run_id),
+                    content,
+                    tags,
+                    now_s,
+                    WorkingMemoryMeta::default(),
+                );
+                if let Ok(mut wm) = state.working_memory.lock() {
+                    let _ = wm.append(entry);
+                }
+            }
 
             if let Some((new_run_id, max_runs, run_number)) = next_run_snapshot {
                 log::info!(

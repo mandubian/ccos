@@ -268,15 +268,21 @@ IMPORTANT - SCHEDULED RUN CONTEXT:
 This is a scheduled background task, not an interactive chat.
 1. DO NOT implement a loop (or sleep waits). The scheduler handles timing.
 2. Perform the task ONCE and report the result.
-3. Use `ccos.memory.get` / `ccos.memory.store` for state between runs.
-4. For computation, prefer `ccos.execute.python` over mental math.
-5. Use `ccos.chat.egress.send_outbound` for the final status/result.
-6. The scheduler automatically creates the next recurring run. Do NOT call `ccos.run.create` from a scheduled run unless the user explicitly asks for an additional distinct schedule.
-7. If the goal text contains scheduling words ("every ..."), ignore them and focus on the atomic work payload.
-
-COMPILED TASKS:
-For recurring tasks that do not need per-run reasoning, prefer `trigger_capability_id` + `trigger_inputs` instead of LLM execution.
-- Example: { "goal": "cleanup memory", "schedule": "0 0 * * *", "trigger_capability_id": "ccos.memory.cleanup", "trigger_inputs": {} }
+3. For stateful recurring tasks, YOU are the orchestrator between storage and compute.
+   Python code running inside the sandbox cannot call CCOS capabilities directly.
+   Follow this exact pattern every run:
+   a. Call `ccos.memory.get` with a FIXED, stable key — always use global scope (no skill_id).
+      Provide a sensible `default` value for the first run.
+   b. Call `ccos.execute.python` with the prior state embedded as a literal in the code string.
+   c. Call `ccos.memory.store` with the computed result using the SAME fixed key, no skill_id.
+   CRITICAL: The key name MUST be identical across every run. Choose it once, never change it.
+   If prior run context is available in your conversation history (as a system message), read it
+   to confirm what key and value format were used last time before calling `ccos.memory.get`.
+4. Use `ccos.chat.egress.send_outbound` for the final status/result.
+5. The scheduler automatically creates the next recurring run. Do NOT call `ccos.run.create`
+   from a scheduled run unless the user explicitly asks for an additional distinct schedule.
+6. If the goal text contains scheduling words ("every ..."), ignore them and focus on the
+   atomic work payload.
 "#
         } else {
             ""
@@ -305,6 +311,12 @@ When working with scheduling:
   4. If user explicitly asked for multiple distinct schedules, create each required schedule once (no duplicates).
   5. Do NOT execute the recurring loop manually (no while/sleep loops).
   6. Do NOT call `ccos.run.get` immediately after `ccos.run.create` unless user asked for status/details.
+  7. When to use `trigger_capability_id` in `ccos.run.create` (runs a capability directly each tick, no LLM spawned):
+     - The user provides an EXPLICIT code block or script to run verbatim → set
+       `trigger_capability_id: "ccos.execute.python"` and `trigger_inputs: {{"code": "<script>"}}`.
+     - The goal names the exact ID of an existing CCOS capability with known static inputs →
+       set `trigger_capability_id` to that ID and `trigger_inputs` to its parameters.
+     - In ALL other cases: omit `trigger_capability_id`. A fresh LLM agent is spawned each tick.
 
 When working with skills:
 - Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions (Markdown/YAML/JSON).
