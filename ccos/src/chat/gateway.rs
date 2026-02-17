@@ -2852,22 +2852,62 @@ fn is_scheduled_payload(payload: &CreateRunRequest) -> bool {
     payload.schedule.is_some() || payload.next_run_at.is_some()
 }
 
+fn split_compact_interval_token(token: &str) -> Option<(u32, &str)> {
+    let first_alpha_idx = token
+        .char_indices()
+        .find(|(_, ch)| ch.is_ascii_alphabetic())
+        .map(|(idx, _)| idx)?;
+    if first_alpha_idx == 0 {
+        return None;
+    }
+    let (num_part, unit_part) = token.split_at(first_alpha_idx);
+    if unit_part.is_empty() {
+        return None;
+    }
+    let parsed = num_part.parse::<u32>().ok()?;
+    if parsed == 0 {
+        return None;
+    }
+    Some((parsed, unit_part))
+}
+
 fn normalize_schedule_input(schedule: &str) -> Option<String> {
     let trimmed = schedule.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    if crate::chat::scheduler::Scheduler::calculate_next_run(trimmed).is_some() {
-        return Some(trimmed.to_string());
+    // Provider-native tool calls may occasionally emit stray quotes.
+    // Normalize them so valid cron strings like `*/10 * * * * *"` still parse.
+    let cleaned = trimmed
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+        .trim();
+    if cleaned.is_empty() {
+        return None;
     }
 
-    let lower = trimmed.to_ascii_lowercase();
-    let rest = lower.strip_prefix("every ")?.trim();
+    if crate::chat::scheduler::Scheduler::calculate_next_run(cleaned).is_some() {
+        return Some(cleaned.to_string());
+    }
+
+    let lower = cleaned.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("every")
+        .map(|v| v.trim())
+        .unwrap_or(lower.trim());
+    if rest.is_empty() {
+        return None;
+    }
     let parts: Vec<&str> = rest.split_whitespace().collect();
 
     let (value, unit) = match parts.as_slice() {
-        [unit] => (1_u32, *unit),
+        [unit] => {
+            if let Some((parsed, parsed_unit)) = split_compact_interval_token(unit) {
+                (parsed, parsed_unit)
+            } else {
+                (1_u32, *unit)
+            }
+        }
         [num, unit] => {
             let parsed = num.parse::<u32>().ok()?;
             if parsed == 0 {
@@ -2878,12 +2918,49 @@ fn normalize_schedule_input(schedule: &str) -> Option<String> {
         _ => return None,
     };
 
-    match unit {
-        "second" | "seconds" => Some(format!("*/{} * * * * *", value)),
-        "minute" | "minutes" => Some(format!("*/{} * * * *", value)),
-        "hour" | "hours" => Some(format!("0 */{} * * *", value)),
-        "day" | "days" => Some(format!("0 0 */{} * *", value)),
-        _ => None,
+    let cron = match unit {
+        "s" | "sec" | "secs" | "second" | "seconds" => format!("*/{} * * * * *", value),
+        "m" | "min" | "mins" | "minute" | "minutes" => format!("*/{} * * * *", value),
+        "h" | "hr" | "hrs" | "hour" | "hours" => format!("0 */{} * * *", value),
+        "d" | "day" | "days" => format!("0 0 */{} * *", value),
+        _ => return None,
+    };
+
+    if crate::chat::scheduler::Scheduler::calculate_next_run(&cron).is_some() {
+        Some(cron)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod schedule_normalization_tests {
+    use super::normalize_schedule_input;
+
+    #[test]
+    fn normalizes_short_second_syntax() {
+        assert_eq!(
+            normalize_schedule_input("every 10s").as_deref(),
+            Some("*/10 * * * * *")
+        );
+        assert_eq!(
+            normalize_schedule_input("every 10seconds").as_deref(),
+            Some("*/10 * * * * *")
+        );
+    }
+
+    #[test]
+    fn normalizes_cron_with_trailing_quote() {
+        assert_eq!(
+            normalize_schedule_input("*/10 * * * * *\"").as_deref(),
+            Some("*/10 * * * * *")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_schedules() {
+        assert_eq!(normalize_schedule_input("every 0s"), None);
+        assert_eq!(normalize_schedule_input("every banana"), None);
     }
 }
 

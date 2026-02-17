@@ -25,7 +25,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 export CCOS_QUARANTINE_KEY="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
 export CCOS_GATEWAY_SPAWN_AGENTS=1
-export CCOS_AGENT_BINARY="$SCRIPT_DIR/../target/release/ccos-agent"
+export CCOS_AGENT_BINARY="$SCRIPT_DIR/../target/debug/ccos-agent"
 
 # Agent configuration
 export CCOS_AGENT_CONFIG_PATH="$SCRIPT_DIR/../config/agent_config.toml"
@@ -43,7 +43,8 @@ DEMO_ADMIN_TOKEN="${CCOS_DEMO_ADMIN_TOKEN:-admin-token}"
 
 # Build the binaries first
 echo -e "${BLUE}Building binaries...${NC}"
-cargo build --bin ccos-chat-gateway --bin ccos-gateway-monitor --bin ccos-agent --release 2>&1 | tail -10
+# cargo build --bin ccos-chat-gateway --bin ccos-gateway-monitor --bin ccos-agent --release 2>&1 | tail -10
+cargo build --bin ccos-chat-gateway --bin ccos-gateway-monitor --bin ccos-agent 2>&1 | tail -10
 echo -e "${GREEN}✓ Build complete${NC}"
 echo ""
 
@@ -83,7 +84,7 @@ trap cleanup EXIT INT TERM
 
 # Start the Gateway
 echo -e "${BLUE}Starting Gateway on port ${GATEWAY_PORT}...${NC}"
-RUST_LOG=ccos=debug "$SCRIPT_DIR/../target/release/ccos-chat-gateway" serve \
+RUST_LOG=ccos=debug "$SCRIPT_DIR/../target/debug/ccos-chat-gateway" serve \
     --bind-addr 127.0.0.1:${GATEWAY_PORT} \
     --connector-bind-addr 127.0.0.1:8833 \
     --connector-secret "demo-secret" \
@@ -110,7 +111,7 @@ echo ""
 
 # Start the Gateway Monitor
 echo -e "${BLUE}Starting Gateway Monitor...${NC}"
-"$SCRIPT_DIR/../target/release/ccos-gateway-monitor" \
+"$SCRIPT_DIR/../target/debug/ccos-gateway-monitor" \
     --gateway-url ${GATEWAY_URL} \
     --token "${DEMO_ADMIN_TOKEN}" &
 MONITOR_PID=$!

@@ -42,11 +42,29 @@ pub struct BubblewrapSandbox {
     scanner: SecurityScanner,
 }
 
+/// Env var to run ccos.execute.* without bubblewrap (when user namespaces are unavailable).
+/// Less secure; use only when bwrap fails with "Creating new namespace failed".
+pub const CCOS_EXECUTE_NO_SANDBOX: &str = "CCOS_EXECUTE_NO_SANDBOX";
+pub const CCOS_SANDBOX_MAX_NPROC: &str = "CCOS_SANDBOX_MAX_NPROC";
+
+pub fn no_sandbox_requested() -> bool {
+    std::env::var(CCOS_EXECUTE_NO_SANDBOX)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "yes")
+        .unwrap_or(false)
+}
+
+fn sandbox_max_nproc() -> Option<u64> {
+    std::env::var(CCOS_SANDBOX_MAX_NPROC)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+}
+
 impl BubblewrapSandbox {
-    /// Create a new bubblewrap sandbox
+    /// Create a new bubblewrap sandbox.
+    /// When CCOS_EXECUTE_NO_SANDBOX=1, bwrap is not required (execution will run unjailed).
     pub fn new() -> Result<Self, RuntimeError> {
-        // Check if bubblewrap is installed
-        if !Self::is_bwrap_available() {
+        if !no_sandbox_requested() && !Self::is_bwrap_available() {
             return Err(RuntimeError::Generic(
                 "bubblewrap not found. Install with: sudo apt install bubblewrap".to_string(),
             ));
@@ -211,6 +229,23 @@ impl BubblewrapSandbox {
             }
         }
 
+        if no_sandbox_requested() {
+            log::warn!(
+                "CCOS_EXECUTE_NO_SANDBOX is set; running {} without bubblewrap (less secure)",
+                runtime
+            );
+            return Self::execute_unjailed(
+                runtime,
+                code,
+                input_files,
+                &work_dir,
+                &input_dir,
+                &output_dir,
+                config,
+            )
+            .await;
+        }
+
         // Build bwrap command
         let mut cmd = Command::new("bwrap");
 
@@ -309,6 +344,7 @@ impl BubblewrapSandbox {
 
             let mem_limit = resources.memory_mb * 1024 * 1024;
             let cpu_limit = resources.cpu_shares; // Simplified mapping to CPU seconds for this demo if needed
+            let nproc_limit = sandbox_max_nproc();
 
             unsafe {
                 cmd.pre_exec(move || {
@@ -329,12 +365,13 @@ impl BubblewrapSandbox {
                         if libc::setrlimit(libc::RLIMIT_CPU, &rlimit) != 0 {}
                     }
 
-                    // Limit number of processes - increase to 1024
-                    let nproc_rlimit = libc::rlimit {
-                        rlim_cur: 1024,
-                        rlim_max: 1024,
-                    };
-                    libc::setrlimit(libc::RLIMIT_NPROC, &nproc_rlimit);
+                    if let Some(limit) = nproc_limit {
+                        let nproc_rlimit = libc::rlimit {
+                            rlim_cur: limit as libc::rlim_t,
+                            rlim_max: limit as libc::rlim_t,
+                        };
+                        libc::setrlimit(libc::RLIMIT_NPROC, &nproc_rlimit);
+                    }
 
                     Ok(())
                 });
@@ -432,7 +469,19 @@ impl BubblewrapSandbox {
             .map_err(|e| RuntimeError::Generic(format!("Failed to read stderr: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+        let mut stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+
+        // When bwrap fails due to user namespace limits, add a clear fix hint
+        if !exit_status.success()
+            && (stderr.contains("Creating new namespace failed")
+                || stderr.contains("Resource temporarily unavailable"))
+        {
+            const BWRAP_NAMESPACE_HINT: &str = "\n\n[CCOS] bwrap failed to create user namespace. \
+                To fix: run 'sudo sysctl -w user.max_user_namespaces=15000' (or add to /etc/sysctl.d). \
+                In constrained environments (e.g. some containers) you can set CCOS_EXECUTE_NO_SANDBOX=1 \
+                to run code without the sandbox (less secure).";
+            stderr.push_str(BWRAP_NAMESPACE_HINT);
+        }
 
         // Collect output files
         let mut output_files = HashMap::new();
@@ -460,6 +509,168 @@ impl BubblewrapSandbox {
                                 }
                                 Err(e) => {
                                     log::warn!("Failed to read output file {:?}: {}", path, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SandboxExecutionResult {
+            success: exit_status.success(),
+            stdout,
+            stderr,
+            exit_code: exit_status.code(),
+            output_files,
+        })
+    }
+
+    /// Run code without bubblewrap (when CCOS_EXECUTE_NO_SANDBOX=1).
+    /// Uses the same workspace layout: work_dir with input/ and output/ subdirs.
+    async fn execute_unjailed(
+        runtime: &str,
+        code: &str,
+        input_files: &[InputFile],
+        work_dir: &tempfile::TempDir,
+        input_dir: &Path,
+        output_dir: &Path,
+        config: &SandboxConfig,
+    ) -> Result<SandboxExecutionResult, RuntimeError> {
+        use tokio::io::AsyncReadExt;
+
+        for file in input_files {
+            if file.host_path.exists() {
+                let dest = input_dir.join(&file.name);
+                fs::copy(&file.host_path, &dest)
+                    .await
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to copy input file {}: {}", file.name, e)))?;
+            }
+        }
+
+        let timeout_ms = config
+            .resources
+            .as_ref()
+            .map(|r| if r.timeout_ms > 0 { r.timeout_ms } else { 30000 })
+            .unwrap_or(30000);
+
+        let mut cmd = Command::new(match runtime {
+            "python" => "/usr/bin/python3",
+            "javascript" => "/usr/bin/node",
+            _ => {
+                return Err(RuntimeError::Generic(format!("Unsupported runtime: {}", runtime)));
+            }
+        });
+
+        cmd.current_dir(work_dir.path());
+        cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+        cmd.env("PYTHONUNBUFFERED", "1");
+
+        match runtime {
+            "python" => {
+                cmd.arg("-c").arg(code);
+            }
+            "javascript" => {
+                cmd.arg("-e").arg(code);
+            }
+            _ => {}
+        }
+
+        if let Some(resources) = &config.resources {
+            let mem_limit = resources.memory_mb * 1024 * 1024;
+            let cpu_limit = resources.cpu_shares;
+            let nproc_limit = sandbox_max_nproc();
+            unsafe {
+                cmd.pre_exec(move || {
+                    if mem_limit > 0 {
+                        let rlimit = libc::rlimit {
+                            rlim_cur: mem_limit as libc::rlim_t,
+                            rlim_max: mem_limit as libc::rlim_t,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_RSS, &rlimit) != 0 {}
+                    }
+                    if cpu_limit > 0 {
+                        let rlimit = libc::rlimit {
+                            rlim_cur: (cpu_limit as u64 * 60) as libc::rlim_t,
+                            rlim_max: (cpu_limit as u64 * 60) as libc::rlim_t,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_CPU, &rlimit) != 0 {}
+                    }
+                    if let Some(limit) = nproc_limit {
+                        let nproc_rlimit = libc::rlimit {
+                            rlim_cur: limit as libc::rlim_t,
+                            rlim_max: limit as libc::rlim_t,
+                        };
+                        libc::setrlimit(libc::RLIMIT_NPROC, &nproc_rlimit);
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to spawn {}: {}", runtime, e)))?;
+
+        let mut stdout_handle = child
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Generic("Failed to capture stdout".to_string()))?;
+        let mut stderr_handle = child
+            .stderr
+            .take()
+            .ok_or_else(|| RuntimeError::Generic("Failed to capture stderr".to_string()))?;
+
+        let timeout_duration = Duration::from_millis(timeout_ms as u64);
+        let wait_result = timeout(timeout_duration, child.wait()).await;
+
+        let exit_status = match wait_result {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => {
+                return Err(RuntimeError::Generic(format!("Process error: {}", e)));
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(RuntimeError::Generic(format!(
+                    "Execution timeout after {}ms",
+                    timeout_ms
+                )));
+            }
+        };
+
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        stdout_handle
+            .read_to_end(&mut stdout_buf)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read stdout: {}", e)))?;
+        stderr_handle
+            .read_to_end(&mut stderr_buf)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read stderr: {}", e)))?;
+
+        let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+
+        let mut output_files = HashMap::new();
+        if let Ok(mut entries) = fs::read_dir(output_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    if let Some(ext) = path.extension() {
+                        let ext = ext.to_string_lossy().to_lowercase();
+                        if is_allowed_extension(&ext) {
+                            if let Ok(content) = fs::read(&path).await {
+                                if content.len() <= 10 * 1024 * 1024 {
+                                    output_files.insert(name, content);
                                 }
                             }
                         }

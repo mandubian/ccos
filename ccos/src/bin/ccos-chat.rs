@@ -20,6 +20,7 @@ use reqwest::Client;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -86,10 +87,15 @@ enum AppEvent {
     AuditUpdate(String, ChatMessage),
 }
 
+const MAX_HISTORY_ENTRIES: usize = 500;
+
 struct AppState {
     messages: Vec<ChatMessage>,
     input: String,
     input_cursor: usize,
+    input_history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: Option<String>,
     scroll: usize,
     status: String,
     last_tick: Instant,
@@ -113,6 +119,9 @@ impl AppState {
             }],
             input: String::new(),
             input_cursor: 0,
+            input_history: Vec::new(),
+            history_index: None,
+            history_draft: None,
             scroll: 0,
             status: "Connecting...".to_string(),
             last_tick: Instant::now(),
@@ -128,6 +137,104 @@ impl AppState {
     fn clear_completion(&mut self) {
         self.model_completion = None;
     }
+
+    fn push_input_history(&mut self, input: &str) {
+        if input.is_empty() {
+            return;
+        }
+        if self.input_history.last().map(|s| s.as_str()) == Some(input) {
+            return;
+        }
+        self.input_history.push(input.to_string());
+        if self.input_history.len() > MAX_HISTORY_ENTRIES {
+            let excess = self.input_history.len().saturating_sub(MAX_HISTORY_ENTRIES);
+            self.input_history.drain(0..excess);
+        }
+    }
+
+    fn reset_history_nav(&mut self) {
+        self.history_index = None;
+        self.history_draft = None;
+    }
+
+    fn history_prev(&mut self) -> bool {
+        if self.input_history.is_empty() {
+            return false;
+        }
+
+        match self.history_index {
+            None => {
+                self.history_draft = Some(self.input.clone());
+                self.history_index = Some(self.input_history.len() - 1);
+            }
+            Some(idx) if idx > 0 => {
+                self.history_index = Some(idx - 1);
+            }
+            Some(_) => {}
+        }
+
+        if let Some(idx) = self.history_index {
+            self.input = self.input_history[idx].clone();
+            self.input_cursor = self.input.len();
+            return true;
+        }
+        false
+    }
+
+    fn history_next(&mut self) -> bool {
+        let Some(idx) = self.history_index else {
+            return false;
+        };
+
+        if idx + 1 < self.input_history.len() {
+            self.history_index = Some(idx + 1);
+            if let Some(next_idx) = self.history_index {
+                self.input = self.input_history[next_idx].clone();
+                self.input_cursor = self.input.len();
+                return true;
+            }
+            return false;
+        }
+
+        self.history_index = None;
+        self.input = self.history_draft.take().unwrap_or_default();
+        self.input_cursor = self.input.len();
+        true
+    }
+}
+
+fn input_history_path() -> PathBuf {
+    ccos::utils::fs::get_workspace_root()
+        .join(".ccos")
+        .join("ccos-chat-history.json")
+}
+
+fn load_input_history_from_disk() -> Vec<String> {
+    let path = input_history_path();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+    let mut entries = match serde_json::from_str::<Vec<String>>(&content) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    entries.retain(|e| !e.trim().is_empty());
+    if entries.len() > MAX_HISTORY_ENTRIES {
+        let excess = entries.len() - MAX_HISTORY_ENTRIES;
+        entries.drain(0..excess);
+    }
+    entries
+}
+
+fn save_input_history_to_disk(history: &[String]) -> anyhow::Result<()> {
+    let path = input_history_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(history)?;
+    std::fs::write(path, content)?;
+    Ok(())
 }
 
 fn load_available_llm_profiles(config_path: &str) -> Vec<String> {
@@ -306,6 +413,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Setup app state and channels
     let mut state = AppState::new(available_profiles);
+    state.input_history = load_input_history_from_disk();
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     // Spawn event handlers
@@ -651,12 +759,14 @@ async fn main() -> anyhow::Result<()> {
                     if let Event::Key(key) = ev {
                         match key.code {
                             KeyCode::Char(c) => {
+                                state.reset_history_nav();
                                 state.input.insert(state.input_cursor, c);
                                 state.input_cursor += c.len_utf8();
                                 state.clear_completion();
                             }
                             KeyCode::Backspace => {
                                 if state.input_cursor > 0 {
+                                    state.reset_history_nav();
                                     let prev = prev_char_boundary(&state.input, state.input_cursor);
                                     state.input.replace_range(prev..state.input_cursor, "");
                                     state.input_cursor = prev;
@@ -665,6 +775,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             KeyCode::Delete => {
                                 if state.input_cursor < state.input.len() {
+                                    state.reset_history_nav();
                                     let next = next_char_boundary(&state.input, state.input_cursor);
                                     state.input.replace_range(state.input_cursor..next, "");
                                     state.clear_completion();
@@ -674,11 +785,17 @@ async fn main() -> anyhow::Result<()> {
                                 if key.modifiers.contains(KeyModifiers::SHIFT)
                                     || key.modifiers.contains(KeyModifiers::CONTROL)
                                 {
+                                    state.reset_history_nav();
                                     state.input.insert(state.input_cursor, '\n');
                                     state.input_cursor += 1;
                                     state.clear_completion();
                                 } else if !state.input.trim().is_empty() {
                                     let mut text = state.input.trim().to_string();
+                                    state.push_input_history(&text);
+                                    if let Err(e) = save_input_history_to_disk(&state.input_history)
+                                    {
+                                        warn!("Failed to persist chat input history: {}", e);
+                                    }
 
                                     // Smart Mentions: Add @agent if no mention is present
                                     // BUT: Don't add @agent to slash commands (they're handled locally)
@@ -777,6 +894,7 @@ async fn main() -> anyhow::Result<()> {
 
                                     state.input.clear();
                                     state.input_cursor = 0;
+                                    state.reset_history_nav();
                                     state.clear_completion();
                                     state.scroll = 0; // Auto-scroll to bottom
                                 }
@@ -796,17 +914,27 @@ async fn main() -> anyhow::Result<()> {
                             KeyCode::Up => {
                                 if key.modifiers.contains(KeyModifiers::ALT) {
                                     state.scroll += 1;
-                                } else {
+                                } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                                     state.input_cursor =
                                         move_cursor_vertically(&state.input, state.input_cursor, -1);
+                                } else {
+                                    let changed = state.history_prev();
+                                    if changed {
+                                        state.clear_completion();
+                                    }
                                 }
                             }
                             KeyCode::Down => {
                                 if key.modifiers.contains(KeyModifiers::ALT) {
                                     state.scroll = state.scroll.saturating_sub(1);
-                                } else {
+                                } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                                     state.input_cursor =
                                         move_cursor_vertically(&state.input, state.input_cursor, 1);
+                                } else {
+                                    let changed = state.history_next();
+                                    if changed {
+                                        state.clear_completion();
+                                    }
                                 }
                             }
                             KeyCode::Left => {
@@ -901,7 +1029,7 @@ fn render(f: &mut Frame, state: &AppState) {
                 Color::Yellow
             }),
         ),
-        Span::raw(" │ ESC: quit │ PgUp/PgDn: scroll │ Alt+↑/↓: fine scroll"),
+        Span::raw(" │ ESC: quit │ ↑/↓: history │ Ctrl+↑/↓: cursor line │ Alt+↑/↓: fine scroll"),
     ]))
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(header, chunks[0]);

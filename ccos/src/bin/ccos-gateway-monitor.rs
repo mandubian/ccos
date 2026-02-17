@@ -651,12 +651,20 @@ async fn main() -> anyhow::Result<()> {
     let available_profiles = load_available_llm_profiles(&args.config_path);
     let client = Client::new();
     let active_spawn_llm_profile =
-        match fetch_gateway_llm_profile(&client, &args.gateway_url, &args.token).await {
+        match fetch_gateway_llm_profile_with_retry(&client, &args.gateway_url, &args.token).await
+        {
             Ok(profile) => profile,
             Err(e) => {
+                let hint = if e.to_string().contains("503") {
+                    " (503 usually means: gateway not ready yet, wrong --gateway-url, or a proxy; ensure ccos-chat-gateway is running and --token matches --admin-tokens)"
+                } else if e.to_string().contains("401") {
+                    " (401: ensure --token matches the gateway's --admin-tokens / CCOS_ADMIN_TOKENS)"
+                } else {
+                    ""
+                };
                 warn!(
-                    "Failed to fetch current gateway spawn profile (continuing): {}",
-                    e
+                    "Failed to fetch current gateway spawn profile (continuing): {}{}",
+                    e, hint
                 );
                 None
             }
@@ -1580,6 +1588,32 @@ fn load_available_llm_profiles(config_path: &str) -> Vec<String> {
 
     profiles.sort();
     profiles
+}
+
+/// Retry count and delay for initial profile fetch (gateway may not be ready yet).
+const PROFILE_FETCH_RETRIES: u32 = 3;
+const PROFILE_FETCH_DELAY_SECS: u64 = 2;
+
+/// Fetch current spawn LLM profile from the gateway, with retries.
+/// Retries help when the monitor is started at the same time as the gateway (e.g. by run_demo or ccos-chat).
+async fn fetch_gateway_llm_profile_with_retry(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+) -> anyhow::Result<Option<String>> {
+    let mut last_err = None;
+    for attempt in 0..=PROFILE_FETCH_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(PROFILE_FETCH_DELAY_SECS)).await;
+        }
+        match fetch_gateway_llm_profile(client, gateway_url, token).await {
+            Ok(profile) => return Ok(profile),
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("No attempts")))
 }
 
 async fn fetch_gateway_llm_profile(
