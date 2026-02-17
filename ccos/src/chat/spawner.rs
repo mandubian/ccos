@@ -37,6 +37,9 @@ pub struct SpawnConfig {
     pub llm_max_tokens: Option<u32>,
     /// Optional LLM profile name (resolved by ccos-agent from agent_config.toml)
     pub llm_profile: Option<String>,
+    /// Optional prior-run context block injected into the agent's conversation history.
+    /// Used to give scheduled LLM-agent runs awareness of what previous runs computed.
+    pub prior_context: Option<String>,
 }
 
 impl SpawnConfig {
@@ -71,6 +74,11 @@ impl SpawnConfig {
 
     pub fn with_llm_profile(mut self, profile: impl Into<String>) -> Self {
         self.llm_profile = Some(profile.into());
+        self
+    }
+
+    pub fn with_prior_context(mut self, context: impl Into<String>) -> Self {
+        self.prior_context = Some(context.into());
         self
     }
 }
@@ -208,6 +216,9 @@ impl AgentSpawner for ProcessSpawner {
             }
             if let Some(profile) = &config.llm_profile {
                 cmd.arg("--llm-profile").arg(profile);
+            }
+            if let Some(prior_context) = &config.prior_context {
+                cmd.arg("--prior-context").arg(prior_context);
             }
 
             // Add environment variables

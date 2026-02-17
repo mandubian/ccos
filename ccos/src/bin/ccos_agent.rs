@@ -158,6 +158,11 @@ struct Args {
     /// Configuration reference (populated from config file)
     #[arg(skip)]
     config: AgentConfig,
+
+    /// Prior run context injected by the Gateway for recurring scheduled runs.
+    /// Contains a summary of previous runs so the agent can maintain state continuity.
+    #[arg(long, env = "CCOS_PRIOR_CONTEXT")]
+    prior_context: Option<String>,
 }
 
 impl Args {
@@ -1265,6 +1270,13 @@ impl AgentRuntime {
             .iter()
             .map(|e| format!("{}: {}", e.sender, e.content))
             .collect();
+
+        // Prepend prior-run context (injected by Gateway for recurring scheduled runs).
+        // This tells the LLM agent about previous runs so it can use a consistent
+        // WorkingMemory key for state continuity across recurring ticks.
+        if let Some(ref pc) = self.args.prior_context {
+            context.insert(0, format!("system: {}", pc));
+        }
 
         let agent_context = self.build_llm_context();
         let mut iteration = 0;
