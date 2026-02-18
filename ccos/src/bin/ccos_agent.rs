@@ -1382,6 +1382,17 @@ impl AgentRuntime {
                             format!("I encountered an error planning your request: {}", e);
                         self.send_response(&event, &error_msg).await?;
                         self.record_in_history("agent", error_msg, &event.channel_id);
+                        // Transition to Done so the gateway can create the next scheduled
+                        // run — without this the recurring chain breaks permanently.
+                        if self.args.run_id.is_some() || event.run_id.is_some() {
+                            let _ = self
+                                .transition_run_state(
+                                    "Done",
+                                    Some(&format!("LLM planning error: {}", e)),
+                                    event.run_id.as_deref(),
+                                )
+                                .await;
+                        }
                         return Ok(());
                     }
                 }
