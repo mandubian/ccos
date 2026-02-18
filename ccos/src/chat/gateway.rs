@@ -1971,6 +1971,7 @@ pub(crate) async fn record_run_event(
         step_id,
         event_type,
         metadata,
+        crate::types::ActionType::CapabilityCall,
     )?;
 
     evaluate_run_completion(state, session_id, run_id).await
@@ -2040,6 +2041,7 @@ async fn evaluate_run_completion(
                 &format!("auto-complete-{}", uuid::Uuid::new_v4()),
                 "run.complete",
                 meta,
+                crate::types::ActionType::InternalStep,
             );
 
             // Complete the run and schedule next if recurring.
@@ -2160,6 +2162,7 @@ async fn evaluate_run_completion(
                     &format!("scheduled-next-{}", uuid::Uuid::new_v4()),
                     "run.create",
                     meta,
+                    crate::types::ActionType::InternalStep,
                 );
             }
         }
@@ -4038,6 +4041,7 @@ async fn cancel_run_handler(
                 "run.cancel",
                 "run.cancel",
                 meta,
+                crate::types::ActionType::InternalStep,
             );
         }
 
@@ -4104,6 +4108,7 @@ async fn cancel_run_handler(
             "run.cancel",
             "run.cancel",
             meta,
+            crate::types::ActionType::InternalStep,
         );
     }
 
@@ -4323,6 +4328,7 @@ async fn transition_run_handler(
             &format!("scheduled-next-{}", uuid::Uuid::new_v4()),
             "run.create",
             meta,
+            crate::types::ActionType::InternalStep,
         );
     }
 
