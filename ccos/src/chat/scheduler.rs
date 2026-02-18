@@ -214,6 +214,7 @@ impl Scheduler {
                             // Record failure to causal chain
                             let mut meta = std::collections::HashMap::new();
                             meta.insert("capability_id".to_string(), rtfs::runtime::values::Value::String(cap_id_for_task.clone()));
+                            meta.insert("success".to_string(), rtfs::runtime::values::Value::Boolean(false));
                             meta.insert("error".to_string(), rtfs::runtime::values::Value::String(e.to_string()));
                             let _ = crate::chat::gateway::record_run_event(
                                 &state_for_task,

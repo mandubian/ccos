@@ -238,6 +238,8 @@ struct MonitorState {
     next_event_id: u64,
     /// Whether event detail popup is shown
     show_event_detail: bool,
+    /// Scroll offset for event detail popup
+    detail_scroll: u16,
     /// Show noisy internal-step events in Events tab
     show_internal_steps: bool,
     #[allow(dead_code)]
@@ -267,6 +269,7 @@ impl MonitorState {
             selected_event_id: None,
             next_event_id: 1,
             show_event_detail: false,
+            detail_scroll: 0,
             show_internal_steps: false,
             last_refresh: Instant::now(),
             show_profile_selector: false,
@@ -838,12 +841,36 @@ async fn main() -> anyhow::Result<()> {
                                 continue;
                             }
 
-                            // Handle Escape to close detail popup first
+                            // Handle keys while detail popup is open
                             if state.show_event_detail {
-                                if key.code == KeyCode::Esc {
-                                    state.show_event_detail = false;
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        state.show_event_detail = false;
+                                        state.detail_scroll = 0;
+                                    }
+                                    KeyCode::Up => {
+                                        state.detail_scroll = state.detail_scroll.saturating_sub(1);
+                                    }
+                                    KeyCode::Down => {
+                                        state.detail_scroll = state.detail_scroll.saturating_add(1);
+                                    }
+                                    KeyCode::PageUp => {
+                                        state.detail_scroll = state.detail_scroll.saturating_sub(10);
+                                    }
+                                    KeyCode::PageDown => {
+                                        state.detail_scroll = state.detail_scroll.saturating_add(10);
+                                    }
+                                    KeyCode::Char('y') | KeyCode::Char('c') => {
+                                        if let Some(event) = state.get_selected_event() {
+                                            let content = build_copy_text(event);
+                                            match std::fs::write("/tmp/ccos-monitor-copy.txt", &content) {
+                                                Ok(_) => state.status_message = "Copied to /tmp/ccos-monitor-copy.txt".to_string(),
+                                                Err(e) => state.status_message = format!("Copy failed: {}", e),
+                                            }
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                // Consume all other keys while popup is open
                                 continue;
                             }
 
@@ -1064,6 +1091,7 @@ async fn main() -> anyhow::Result<()> {
                                             state.selected_event_id =
                                                 state.event_id_for_display_index(state.selected_event_index);
                                             state.show_event_detail = true;
+                                            state.detail_scroll = 0;
                                         }
                                     }
                                 }
@@ -2740,13 +2768,55 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
     // Draw event detail popup if enabled
     if state.show_event_detail {
         if let Some(selected_event) = state.get_selected_event() {
-            draw_event_detail_popup(f, area, selected_event);
+            draw_event_detail_popup(f, area, selected_event, state.detail_scroll);
         }
     }
 }
 
+/// Build a plain-text copy of an event's full details for writing to file.
+fn build_copy_text(event: &SystemEvent) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Type:    {}\n", event.event_type));
+    out.push_str(&format!("Session: {}\n", event.session_id));
+    out.push_str(&format!("Details: {}\n", event.details));
+    if let Some(ref fd) = event.full_details {
+        out.push_str("\n--- Full Details ---\n");
+        out.push_str(fd);
+        out.push('\n');
+    }
+    if let Some(ref ce) = event.code_execution {
+        out.push_str("\n--- Code Execution ---\n");
+        out.push_str(&format!("Language: {}\n", ce.language));
+        if let Some(ec) = ce.exit_code { out.push_str(&format!("Exit Code: {}\n", ec)); }
+        if let Some(ms) = ce.duration_ms { out.push_str(&format!("Duration: {}ms\n", ms)); }
+        if !ce.code.is_empty() {
+            out.push_str("\nCode:\n");
+            out.push_str(&ce.code);
+            out.push('\n');
+        }
+        if !ce.stdout.is_empty() {
+            out.push_str("\nStdout:\n");
+            out.push_str(&ce.stdout);
+            out.push('\n');
+        }
+        if !ce.stderr.is_empty() {
+            out.push_str("\nStderr:\n");
+            out.push_str(&ce.stderr);
+            out.push('\n');
+        }
+    }
+    if let Some(ref meta) = event.metadata {
+        out.push_str("\n--- Metadata ---\n");
+        if let Ok(s) = serde_json::to_string_pretty(meta) {
+            out.push_str(&s);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Draw a popup showing detailed event information
-fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
+fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scroll: u16) {
     // Calculate popup size (centered, 80% width, 80% height)
     let popup_area = centered_rect(80, 80, area);
 
@@ -3138,7 +3208,21 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" to close", Style::default().fg(Color::DarkGray)),
+        Span::styled(" to close  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "↑↓/PgUp/PgDn",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" to scroll  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" to copy to /tmp/ccos-monitor-copy.txt", Style::default().fg(Color::DarkGray)),
     ]));
 
     let paragraph = Paragraph::new(lines)
@@ -3153,7 +3237,8 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
 
     f.render_widget(paragraph, popup_area);
 }
