@@ -825,6 +825,16 @@ impl ChatGateway {
         ));
         let handle = connector.connect().await?;
 
+        // Determine persistence paths for runs and sessions (under .ccos/ in cwd)
+        let ccos_state_dir = std::env::current_dir()
+            .unwrap_or_default()
+            .join(".ccos");
+        if let Err(e) = std::fs::create_dir_all(&ccos_state_dir) {
+            log::warn!("[Gateway] Failed to create .ccos state dir: {}", e);
+        }
+        let runs_persist_path = ccos_state_dir.join("runs.json");
+        let sessions_persist_path = ccos_state_dir.join("sessions.json");
+
         // Rebuild stores from causal chain (restart-safe autonomy).
         // These stores are also shared with chat capabilities (resource ingestion).
         let run_store: SharedRunStore = Arc::new(Mutex::new(RunStore::new()));
@@ -833,7 +843,14 @@ impl ChatGateway {
             let guard = chain.lock().unwrap();
             let actions = guard.get_all_actions();
             if let Ok(mut store) = run_store.lock() {
-                *store = RunStore::rebuild_from_chain(&actions);
+                // Load from JSON first (survives restarts); fall back to causal-chain replay
+                if let Some(loaded) = RunStore::load_from_disk(&runs_persist_path) {
+                    *store = loaded;
+                } else {
+                    *store = RunStore::rebuild_from_chain(&actions);
+                    log::info!("[Gateway] No persisted run state found; rebuilt from causal chain");
+                }
+                store.set_persist_path(runs_persist_path.clone());
             }
             if let Ok(mut store) = resource_store.lock() {
                 *store = ResourceStore::rebuild_from_chain(&actions);
@@ -945,8 +962,9 @@ impl ChatGateway {
             }
         }
 
-        // Initialize session management
-        let session_registry = SessionRegistry::new();
+        // Initialize session management with persistence so sessions survive gateway restarts
+        let session_registry = SessionRegistry::new_with_persistence(&sessions_persist_path);
+        session_registry.load_from_disk().await;
         let spawner = SpawnerFactory::create();
 
         // Initialize real-time tracking sink
@@ -2351,6 +2369,7 @@ async fn execute_handler(
                     run.updated_at = Utc::now();
                 }
             }
+            store.save_to_disk();
         }
 
         if let Some(reason) = budget_exceeded_reason {
@@ -3678,6 +3697,7 @@ async fn checkpoint_run_handler(
             checkpoint_id: ckpt_id.clone(),
         };
         run.latest_checkpoint_id = Some(ckpt_id.clone());
+        store.save_to_disk();
     }
 
     Ok(Json(ckpt_id))
@@ -4290,6 +4310,7 @@ async fn transition_run_handler(
                     Scheduler::calculate_next_run(sched)
                 })
             } else {
+                store.save_to_disk();
                 None
             };
 
