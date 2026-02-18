@@ -6,6 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -28,7 +29,7 @@ pub enum SessionStatus {
 }
 
 /// State of an individual session
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
     /// Unique session identifier
     pub session_id: String,
@@ -134,6 +135,8 @@ impl SessionState {
 #[derive(Debug, Clone)]
 pub struct SessionRegistry {
     sessions: Arc<RwLock<HashMap<String, SessionState>>>,
+    /// Optional path for persisting session state to disk
+    persist_path: Option<PathBuf>,
 }
 
 impl SessionRegistry {
@@ -141,6 +144,67 @@ impl SessionRegistry {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            persist_path: None,
+        }
+    }
+
+    /// Create a registry that persists sessions to the given path
+    pub fn new_with_persistence(path: impl Into<PathBuf>) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            persist_path: Some(path.into()),
+        }
+    }
+
+    /// Save all sessions to disk (if persistence is configured).
+    /// On restart, sessions are restored with status reset to `AgentNotRunning`
+    /// and PIDs cleared (since processes no longer exist).
+    pub async fn save_to_disk(&self) {
+        let Some(path) = &self.persist_path else {
+            return;
+        };
+        let sessions = self.sessions.read().await;
+        let snapshot: Vec<&SessionState> = sessions.values().collect();
+        match serde_json::to_string_pretty(&snapshot) {
+            Ok(json) => {
+                if let Some(parent) = path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                if let Err(e) = tokio::fs::write(path, json).await {
+                    log::error!("[SessionRegistry] Failed to save sessions to {:?}: {}", path, e);
+                } else {
+                    log::debug!("[SessionRegistry] Saved {} sessions to {:?}", snapshot.len(), path);
+                }
+            }
+            Err(e) => log::error!("[SessionRegistry] Failed to serialize sessions: {}", e),
+        }
+    }
+
+    /// Load sessions from disk (if persistence is configured).
+    /// Loaded sessions have their status reset to `AgentNotRunning` and PIDs cleared,
+    /// since the original agent processes are gone after a restart.
+    pub async fn load_from_disk(&self) {
+        let Some(path) = &self.persist_path else {
+            return;
+        };
+        let Ok(bytes) = tokio::fs::read(path).await else {
+            log::info!("[SessionRegistry] No persisted sessions found at {:?}", path);
+            return;
+        };
+        match serde_json::from_slice::<Vec<SessionState>>(&bytes) {
+            Ok(loaded) => {
+                let count = loaded.len();
+                let mut sessions = self.sessions.write().await;
+                for mut session in loaded {
+                    // Reset transient process state — PIDs are meaningless after restart
+                    session.agent_pid = None;
+                    session.status = SessionStatus::AgentNotRunning;
+                    session.current_step = None;
+                    sessions.insert(session.session_id.clone(), session);
+                }
+                log::info!("[SessionRegistry] Loaded {} sessions from {:?}", count, path);
+            }
+            Err(e) => log::error!("[SessionRegistry] Failed to deserialize sessions from {:?}: {}", path, e),
         }
     }
 
@@ -150,10 +214,13 @@ impl SessionRegistry {
             .unwrap_or_else(|| format!("session_{}", Uuid::new_v4().to_string().replace("-", "")));
         let session = SessionState::new(session_id.clone());
 
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session_id.clone(), session.clone());
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(session_id.clone(), session.clone());
+        }
 
         log::debug!("Created new session: {}", session_id);
+        self.save_to_disk().await;
         session
     }
 
@@ -200,18 +267,24 @@ impl SessionRegistry {
 
     /// Update session status (e.g., when agent crashes)
     pub async fn update_session_status(&self, session_id: &str, status: SessionStatus) {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.get_mut(session_id) {
-            let status_str = format!("{:?}", status);
-            session.status = status;
-            log::debug!("Updated session {} status to {}", session_id, status_str);
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(session_id) {
+                let status_str = format!("{:?}", status);
+                session.status = status;
+                log::debug!("Updated session {} status to {}", session_id, status_str);
+            }
         }
+        self.save_to_disk().await;
     }
 
     /// Update session state
     pub async fn update_session(&self, session: SessionState) {
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session.session_id.clone(), session);
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(session.session_id.clone(), session);
+        }
+        self.save_to_disk().await;
     }
 
     /// Set agent PID for a session
@@ -247,15 +320,18 @@ impl SessionRegistry {
 
     /// Mark session as terminated
     pub async fn terminate_session(&self, session_id: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.write().await;
-
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.status = SessionStatus::Terminated;
-            log::debug!("Terminated session {}", session_id);
-            Ok(())
-        } else {
-            Err(format!("Session {} not found", session_id))
-        }
+        let result = {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(session_id) {
+                session.status = SessionStatus::Terminated;
+                log::debug!("Terminated session {}", session_id);
+                Ok(())
+            } else {
+                Err(format!("Session {} not found", session_id))
+            }
+        };
+        self.save_to_disk().await;
+        result
     }
 
     /// List all active sessions

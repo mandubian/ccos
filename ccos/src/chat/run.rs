@@ -250,6 +250,11 @@ impl Run {
         run.next_run_at = Some(next_run_at);
         run.trigger_capability_id = trigger_capability_id;
         run.trigger_inputs = trigger_inputs;
+        // Stable group ID — links all recurrences of the same scheduled task together
+        run.metadata.insert(
+            "schedule_group_id".to_string(),
+            serde_json::Value::String(format!("sched-{}", uuid::Uuid::new_v4())),
+        );
         run
     }
 

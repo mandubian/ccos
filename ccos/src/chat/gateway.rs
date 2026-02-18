@@ -3785,6 +3785,10 @@ struct RunSummaryResponse {
     updated_at: String,
     current_step_id: Option<String>,
     next_run_at: Option<String>,
+    /// Cron/interval schedule expression, if this is a recurring run
+    schedule: Option<String>,
+    /// Stable ID shared by all instances of the same recurring schedule
+    schedule_group_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3820,6 +3824,12 @@ async fn list_runs_handler(
                 updated_at: run.updated_at.to_rfc3339(),
                 current_step_id: run.current_step_id.clone(),
                 next_run_at: run.next_run_at.map(|dt| dt.to_rfc3339()),
+                schedule: run.schedule.clone(),
+                schedule_group_id: run
+                    .metadata
+                    .get("schedule_group_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             })
             .collect();
 
@@ -3875,6 +3885,12 @@ async fn list_runs_handler(
             updated_at: run.updated_at.to_rfc3339(),
             current_step_id: run.current_step_id.clone(),
             next_run_at: run.next_run_at.map(|dt| dt.to_rfc3339()),
+            schedule: run.schedule.clone(),
+            schedule_group_id: run
+                .metadata
+                .get("schedule_group_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
         .collect();
 
