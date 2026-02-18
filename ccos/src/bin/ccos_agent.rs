@@ -1442,14 +1442,24 @@ impl AgentRuntime {
                     }
                     Err(e) => {
                         warn!("LLM iterative consultation failed: {}", e);
-                        // Ask user what to do
                         let summary = self.format_action_summary(&action_history);
                         let msg = format!(
-                            "I encountered an error while working on your request: {}\n\nHere's what I've accomplished so far:\n\n{}\n\nHow would you like me to proceed?",
+                            "I encountered an error while working on your request: {}\n\nHere's what I've accomplished so far:\n\n{}",
                             e, summary
                         );
                         self.send_response(&event, &msg).await?;
                         self.record_in_history("agent", msg, &event.channel_id);
+                        // Transition to Done so the gateway creates the next scheduled
+                        // run — without this the recurring chain breaks permanently.
+                        if self.args.run_id.is_some() || event.run_id.is_some() {
+                            let _ = self
+                                .transition_run_state(
+                                    "Done",
+                                    Some(&format!("LLM iterative error: {}", e)),
+                                    event.run_id.as_deref(),
+                                )
+                                .await;
+                        }
                         return Ok(());
                     }
                 }

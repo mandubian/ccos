@@ -183,6 +183,29 @@ impl AgentLlmClient {
             .send()
             .await?;
 
+        // Retry once on 429 / 5xx before failing — OpenRouter rate-limits are transient.
+        let response = if !response.status().is_success()
+            && (response.status().as_u16() == 429
+                || response.status().is_server_error())
+        {
+            warn!(
+                "LLM returned {} on first attempt; retrying after 8 s",
+                response.status()
+            );
+            // consume the body so we can reuse the client
+            let _ = response.text().await;
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() {
             let error_text = response.text().await?;
             anyhow::bail!("OpenAI API error: {}", error_text);
@@ -960,6 +983,28 @@ Preferred response mode:
             .json(&request_body)
             .send()
             .await?;
+
+        // Retry once on 429 / 5xx before failing — OpenRouter rate-limits are transient.
+        let response = if !response.status().is_success()
+            && (response.status().as_u16() == 429
+                || response.status().is_server_error())
+        {
+            warn!(
+                "LLM iterative call returned {} on first attempt; retrying after 8 s",
+                response.status()
+            );
+            let _ = response.text().await;
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?
+        } else {
+            response
+        };
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
