@@ -338,6 +338,12 @@ mod tests {
             admin_tokens: vec![],
             approval_ui_url: "http://localhost:3000".to_string(),
             spawn_llm_profile: Arc::new(RwLock::new(None)),
+            session_llm_profiles: Arc::new(RwLock::new(HashMap::new())),
+            working_memory: Arc::new(Mutex::new(
+                crate::working_memory::WorkingMemory::new(Box::new(
+                    crate::working_memory::InMemoryJsonlBackend::new(None, None, None),
+                )),
+            )),
         })
     }
 
