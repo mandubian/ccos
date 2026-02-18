@@ -209,6 +209,17 @@ impl AgentLlmClient {
             }
         }
 
+        // Hard-fail on empty content — an empty body means the provider returned nothing
+        // (rate-limit, quota exhaustion, network error). Falling back silently produces an
+        // empty AgentPlan that triggers a fake task_complete, leaving runs stuck in
+        // PausedExternalEvent with no user-visible error.
+        if content.trim().is_empty() {
+            anyhow::bail!(
+                "LLM returned an empty response body (possible rate-limit or quota exhaustion). \
+                 Please retry."
+            );
+        }
+
         debug!(
             "LLM response preview (raw): {}",
             redact_text_for_logs(&truncate_for_log(&content, 800))
@@ -953,6 +964,17 @@ Preferred response mode:
                     response: content,
                 });
             }
+        }
+
+        // Hard-fail on empty content — same reasoning as process_with_openai: an empty body
+        // means the provider returned nothing (rate-limit, quota exhaustion, network error).
+        // Silently returning task_complete=true with an empty response leaves scheduled runs
+        // stuck in PausedExternalEvent with no diagnostic.
+        if content.trim().is_empty() {
+            anyhow::bail!(
+                "LLM returned an empty response body (possible rate-limit or quota exhaustion). \
+                 Please retry."
+            );
         }
 
         // Extract JSON from content

@@ -1816,6 +1816,19 @@ Approve it in the UI or with /approve {}.",
                 self.record_in_history("agent", plan.response.clone(), &event.channel_id);
             }
 
+            // Idempotency guard: once ccos.run.create succeeds the schedule is created.
+            // Stop immediately — no LLM re-consultation needed. Re-consulting causes the
+            // model to call run.create again in iteration N+1 (triple-create bug).
+            if action.capability_id == "ccos.run.create" && result.success {
+                info!("[Agent] ccos.run.create succeeded; breaking loop to prevent duplicate creates");
+                if !plan.response.is_empty() && !final_response_sent {
+                    self.send_response(&event, &plan.response).await?;
+                    self.record_in_history("agent", plan.response.clone(), &event.channel_id);
+                    final_response_sent = true;
+                }
+                break;
+            }
+
             // Handle skill load special case
             if action.capability_id == "ccos.skill.load" && result.success {
                 if let Some(ref res) = result.result {
