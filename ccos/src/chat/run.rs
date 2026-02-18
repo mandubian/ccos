@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use log;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -430,16 +431,67 @@ impl Run {
     }
 }
 
-/// In-memory run store (for MVP; should be persisted to causal chain in production)
+/// Serialization snapshot for RunStore persistence
+#[derive(Debug, Serialize, Deserialize)]
+struct RunStoreSnapshot {
+    runs: HashMap<String, Run>,
+    runs_by_session: HashMap<String, Vec<String>>,
+}
+
+/// In-memory run store with optional JSON persistence
 #[derive(Debug, Default)]
 pub struct RunStore {
     runs: HashMap<String, Run>,
     runs_by_session: HashMap<String, Vec<String>>,
+    /// Optional path for JSON persistence across restarts
+    persist_path: Option<PathBuf>,
 }
 
 impl RunStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the persist path and immediately save the current state.
+    pub fn set_persist_path(&mut self, path: PathBuf) {
+        self.persist_path = Some(path);
+        self.save_to_disk();
+    }
+
+    /// Persist current run state to JSON file (no-op if persist_path is None).
+    pub fn save_to_disk(&self) {
+        let path = match &self.persist_path {
+            Some(p) => p,
+            None => return,
+        };
+        let snapshot = RunStoreSnapshot {
+            runs: self.runs.clone(),
+            runs_by_session: self.runs_by_session.clone(),
+        };
+        match serde_json::to_string_pretty(&snapshot) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, &json) {
+                    log::warn!("[RunStore] Failed to persist runs to {}: {}", path.display(), e);
+                }
+            }
+            Err(e) => log::warn!("[RunStore] Failed to serialize runs: {}", e),
+        }
+    }
+
+    /// Load run store from JSON file. Returns None if file doesn't exist or fails to parse.
+    pub fn load_from_disk(path: &std::path::Path) -> Option<RunStore> {
+        let data = std::fs::read_to_string(path).ok()?;
+        let snapshot: RunStoreSnapshot = serde_json::from_str(&data).ok()?;
+        log::info!(
+            "[RunStore] Loaded {} runs from {}",
+            snapshot.runs.len(),
+            path.display()
+        );
+        Some(RunStore {
+            runs: snapshot.runs,
+            runs_by_session: snapshot.runs_by_session,
+            persist_path: None, // caller sets this after loading
+        })
     }
 
     pub fn create_run(&mut self, run: Run) -> String {
@@ -452,6 +504,7 @@ impl RunStore {
             .push(run_id.clone());
         self.runs.insert(run_id.clone(), run);
 
+        self.save_to_disk();
         run_id
     }
 
@@ -600,6 +653,7 @@ impl RunStore {
                 old_state,
                 run.state
             );
+            self.save_to_disk();
             true
         } else {
             false
