@@ -316,6 +316,14 @@ pub fn record_chat_audit_event(
     metadata.insert("run_id".to_string(), Value::String(run_id.to_string()));
     metadata.insert("step_id".to_string(), Value::String(step_id.to_string()));
 
+    // For CapabilityCall actions use the actual capability_id as the function name so the
+    // monitor event pane shows e.g. "ccos.execute.python" instead of "chat.audit.<event>".
+    let function_name = metadata
+        .get("capability_id")
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("chat.audit.{}", event_type));
+
     let action = Action {
         action_id: uuid::Uuid::new_v4().to_string(),
         parent_action_id: None,
@@ -323,7 +331,7 @@ pub fn record_chat_audit_event(
         plan_id: plan_id.to_string(),
         intent_id: intent_id.to_string(),
         action_type,
-        function_name: Some(format!("chat.audit.{}", event_type)),
+        function_name: Some(function_name),
         arguments: None,
         result: None,
         cost: None,
