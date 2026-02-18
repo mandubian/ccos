@@ -834,6 +834,10 @@ impl ChatGateway {
         }
         let runs_persist_path = ccos_state_dir.join("runs.json");
         let sessions_persist_path = ccos_state_dir.join("sessions.json");
+        log::info!(
+            "[Gateway] Persistence paths: runs={:?} sessions={:?}",
+            runs_persist_path, sessions_persist_path
+        );
 
         // Rebuild stores from causal chain (restart-safe autonomy).
         // These stores are also shared with chat capabilities (resource ingestion).

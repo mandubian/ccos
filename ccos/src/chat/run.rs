@@ -459,6 +459,7 @@ impl RunStore {
     }
 
     /// Persist current run state to JSON file (no-op if persist_path is None).
+    /// Uses an atomic write (temp file + rename) to avoid corruption on crash.
     pub fn save_to_disk(&self) {
         let path = match &self.persist_path {
             Some(p) => p,
@@ -468,30 +469,71 @@ impl RunStore {
             runs: self.runs.clone(),
             runs_by_session: self.runs_by_session.clone(),
         };
-        match serde_json::to_string_pretty(&snapshot) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(path, &json) {
-                    log::warn!("[RunStore] Failed to persist runs to {}: {}", path.display(), e);
-                }
+        let json = match serde_json::to_string_pretty(&snapshot) {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("[RunStore] Failed to serialize runs (data NOT saved): {}", e);
+                return;
             }
-            Err(e) => log::warn!("[RunStore] Failed to serialize runs: {}", e),
+        };
+        // Write atomically: temp file → rename to avoid partial writes on crash
+        let tmp_path = path.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp_path, &json) {
+            log::error!("[RunStore] Failed to write temp file {:?}: {}", tmp_path, e);
+            return;
         }
+        if let Err(e) = std::fs::rename(&tmp_path, path) {
+            log::error!("[RunStore] Failed to rename temp file to {:?}: {}", path, e);
+            let _ = std::fs::remove_file(&tmp_path);
+            return;
+        }
+        log::info!("[RunStore] Saved {} runs to {:?}", self.runs.len(), path);
     }
 
-    /// Load run store from JSON file. Returns None if file doesn't exist or fails to parse.
+    /// Load run store from JSON file. Returns None if file doesn't exist.
+    /// Logs an error (but does NOT overwrite the file) if the file exists but fails to parse.
     pub fn load_from_disk(path: &std::path::Path) -> Option<RunStore> {
-        let data = std::fs::read_to_string(path).ok()?;
-        let snapshot: RunStoreSnapshot = serde_json::from_str(&data).ok()?;
-        log::info!(
-            "[RunStore] Loaded {} runs from {}",
-            snapshot.runs.len(),
-            path.display()
-        );
-        Some(RunStore {
-            runs: snapshot.runs,
-            runs_by_session: snapshot.runs_by_session,
-            persist_path: None, // caller sets this after loading
-        })
+        let data = match std::fs::read_to_string(path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                log::error!("[RunStore] Failed to read {:?}: {}", path, e);
+                return None;
+            }
+        };
+        match serde_json::from_str::<RunStoreSnapshot>(&data) {
+            Ok(snapshot) => {
+                log::info!(
+                    "[RunStore] Loaded {} runs from {:?}",
+                    snapshot.runs.len(),
+                    path
+                );
+                Some(RunStore {
+                    runs: snapshot.runs,
+                    runs_by_session: snapshot.runs_by_session,
+                    persist_path: None, // caller sets this after loading
+                })
+            }
+            Err(e) => {
+                // Rename corrupt file to .bak so data isn't silently overwritten.
+                // Return None so the caller falls back to rebuild_from_chain without
+                // clobbering the on-disk data.
+                let bak = path.with_extension("json.bak");
+                match std::fs::rename(path, &bak) {
+                    Ok(()) => log::error!(
+                        "[RunStore] Failed to deserialize {:?}: {}. \
+                        Corrupt file renamed to {:?}. Starting with empty store.",
+                        path, e, bak
+                    ),
+                    Err(re) => log::error!(
+                        "[RunStore] Failed to deserialize {:?}: {}. \
+                        Could not rename to backup ({}) — original intact.",
+                        path, e, re
+                    ),
+                }
+                None
+            }
+        }
     }
 
     pub fn create_run(&mut self, run: Run) -> String {
@@ -1146,5 +1188,41 @@ mod tests {
                 ..
             } if reason == "milestone"
         ));
+    }
+}
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_run_store_save_load_roundtrip() {
+        let tmp = std::env::temp_dir().join("ccos_test_runs.json");
+        let mut store = RunStore::new();
+        store.set_persist_path(tmp.clone());
+
+        // Create a scheduled run
+        let next = Utc::now() + chrono::Duration::minutes(5);
+        let run = Run::new_scheduled(
+            "chat:test:user1".to_string(),
+            "Test scheduled goal".to_string(),
+            "every 5m".to_string(),
+            next,
+            None,
+            None,
+            None,
+        );
+        let run_id = run.id.clone();
+        store.create_run(run);
+
+        // File must have been updated
+        let data = std::fs::read_to_string(&tmp).expect("runs.json should exist");
+        let json: serde_json::Value = serde_json::from_str(&data).expect("valid JSON");
+        assert!(json["runs"].as_object().unwrap().contains_key(&run_id),
+            "run_id not found in saved JSON: {}", data);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&tmp);
     }
 }
