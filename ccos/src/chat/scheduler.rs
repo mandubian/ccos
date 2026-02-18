@@ -172,22 +172,24 @@ impl Scheduler {
                                 meta,
                             ).await;
 
-                            // Send stdout output to chat so it's visible in the messages pane
+                            // Send stdout output to chat so it's visible in the messages pane.
+                            // Use connector.send() directly (NOT push_message_to_session which
+                            // delivers to the agent inbox and wakes up the LLM agent).
                             if let Some(output) = stdout.filter(|s| !s.trim().is_empty()) {
                                 let channel_id = session_id_for_task
                                     .split(':')
                                     .nth(1)
                                     .unwrap_or("general")
                                     .to_string();
+                                let outbound = crate::chat::connector::OutboundRequest {
+                                    channel_id,
+                                    content: output.trim().to_string(),
+                                    reply_to: None,
+                                    metadata: None,
+                                };
                                 let _ = state_for_task
-                                    .session_registry
-                                    .push_message_to_session(
-                                        &session_id_for_task,
-                                        channel_id,
-                                        output.trim().to_string(),
-                                        "agent".to_string(),
-                                        Some(run_id_for_task.clone()),
-                                    )
+                                    .connector
+                                    .send(&state_for_task.connector_handle, outbound)
                                     .await;
                             }
 
