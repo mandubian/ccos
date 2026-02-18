@@ -123,14 +123,74 @@ impl Scheduler {
                 let marketplace = state.marketplace.clone();
                 let run_store = self.run_store.clone();
                 let run_id_for_task = run_id.clone();
+                let state_for_task = state.clone();
+                let session_id_for_task = session_id.clone();
+                let cap_id_for_task = cap_id.clone();
 
                 tokio::spawn(async move {
+                    let step_id = format!("{}-direct-{}", run_id_for_task, uuid::Uuid::new_v4());
                     match marketplace.execute_capability(&cap_id, &inputs).await {
                         Ok(result) => {
                             info!(
                                 "[Scheduler] Direct capability {} for run {} completed: {:?}",
-                                cap_id, run_id_for_task, result
+                                cap_id_for_task, run_id_for_task, result
                             );
+
+                            // Extract stdout / success from result for chat notification
+                            let stdout = match &result {
+                                rtfs::runtime::values::Value::Map(m) => {
+                                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("stdout".to_string())))
+                                        .or_else(|| m.get(&rtfs::ast::MapKey::String("stdout".to_string())))
+                                        .and_then(|v| v.as_string())
+                                        .map(|s| s.to_string())
+                                }
+                                _ => None,
+                            };
+                            let success = match &result {
+                                rtfs::runtime::values::Value::Map(m) => {
+                                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("success".to_string())))
+                                        .or_else(|| m.get(&rtfs::ast::MapKey::String("success".to_string())))
+                                        .and_then(|v| match v { rtfs::runtime::values::Value::Boolean(b) => Some(*b), _ => None })
+                                        .unwrap_or(true)
+                                }
+                                _ => true,
+                            };
+
+                            // Record capability execution to causal chain (event pane)
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("capability_id".to_string(), rtfs::runtime::values::Value::String(cap_id_for_task.clone()));
+                            meta.insert("success".to_string(), rtfs::runtime::values::Value::Boolean(success));
+                            if let Some(ref out) = stdout {
+                                meta.insert("stdout".to_string(), rtfs::runtime::values::Value::String(out.clone()));
+                            }
+                            let _ = crate::chat::gateway::record_run_event(
+                                &state_for_task,
+                                &session_id_for_task,
+                                &run_id_for_task,
+                                &step_id,
+                                "capability.direct.complete",
+                                meta,
+                            ).await;
+
+                            // Send stdout output to chat so it's visible in the messages pane
+                            if let Some(output) = stdout.filter(|s| !s.trim().is_empty()) {
+                                let channel_id = session_id_for_task
+                                    .split(':')
+                                    .nth(1)
+                                    .unwrap_or("general")
+                                    .to_string();
+                                let _ = state_for_task
+                                    .session_registry
+                                    .push_message_to_session(
+                                        &session_id_for_task,
+                                        channel_id,
+                                        output.trim().to_string(),
+                                        "agent".to_string(),
+                                        Some(run_id_for_task.clone()),
+                                    )
+                                    .await;
+                            }
+
                             let next_run_id = {
                                 let mut store = run_store.lock().unwrap();
                                 store.complete_run_and_schedule_next(&run_id_for_task, |sched| {
@@ -147,13 +207,25 @@ impl Scheduler {
                         Err(e) => {
                             error!(
                                 "[Scheduler] Direct capability {} for run {} failed: {}",
-                                cap_id, run_id_for_task, e
+                                cap_id_for_task, run_id_for_task, e
                             );
+                            // Record failure to causal chain
+                            let mut meta = std::collections::HashMap::new();
+                            meta.insert("capability_id".to_string(), rtfs::runtime::values::Value::String(cap_id_for_task.clone()));
+                            meta.insert("error".to_string(), rtfs::runtime::values::Value::String(e.to_string()));
+                            let _ = crate::chat::gateway::record_run_event(
+                                &state_for_task,
+                                &session_id_for_task,
+                                &run_id_for_task,
+                                &step_id,
+                                "capability.direct.failed",
+                                meta,
+                            ).await;
                             let mut store = run_store.lock().unwrap();
                             store.update_run_state(
                                 &run_id_for_task,
                                 RunState::Failed {
-                                    error: format!("direct capability '{}' failed: {}", cap_id, e),
+                                    error: format!("direct capability '{}' failed: {}", cap_id_for_task, e),
                                 },
                             );
                         }

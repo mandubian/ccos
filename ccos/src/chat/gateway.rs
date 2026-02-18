@@ -1954,7 +1954,7 @@ async fn audit_handler(
 }
 
 /// Helper to record an audit event and evaluate completion predicates
-async fn record_run_event(
+pub(crate) async fn record_run_event(
     state: &GatewayState,
     session_id: &str,
     run_id: &str,
