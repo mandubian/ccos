@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
     Frame, Terminal,
 };
 use reqwest::Client;
@@ -184,13 +184,18 @@ struct GatewayRunSummary {
     state: String,
     steps_taken: u32,
     elapsed_secs: u64,
-    #[allow(dead_code)]
     created_at: String,
     #[allow(dead_code)]
     updated_at: String,
     #[allow(dead_code)]
     current_step_id: Option<String>,
     next_run_at: Option<String>,
+    /// Cron/interval schedule expression
+    #[serde(default)]
+    schedule: Option<String>,
+    /// Stable ID shared by all recurrences of the same scheduled task
+    #[serde(default)]
+    schedule_group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,6 +209,39 @@ struct GatewayCancelRunResponse {
     run_id: String,
     cancelled: bool,
     previous_state: String,
+}
+
+/// A row in the Runs tab tree view.
+#[derive(Debug, Clone)]
+enum RunDisplayItem {
+    /// Header row for a group of runs sharing the same recurring schedule.
+    ScheduleGroup {
+        #[allow(dead_code)]
+        group_id: String,
+        goal: String,
+        schedule: String,
+        instance_count: usize,
+        next_run_at: Option<String>,
+        /// Run ID of the currently-`Scheduled` run in this group.
+        /// Cancelling the group cancels this run, stopping future firings.
+        pending_run_id: Option<String>,
+    },
+    /// An individual run instance (child under a group or standalone).
+    RunInstance {
+        run: GatewayRunSummary,
+        grouped: bool,
+        is_last_in_group: bool,
+    },
+}
+
+impl RunDisplayItem {
+    /// Run ID to cancel when the user presses `c` on this item.
+    fn cancel_run_id(&self) -> Option<String> {
+        match self {
+            RunDisplayItem::ScheduleGroup { pending_run_id, .. } => pending_run_id.clone(),
+            RunDisplayItem::RunInstance { run, .. } => Some(run.run_id.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -228,6 +266,8 @@ struct MonitorState {
     selected_agent_index: usize,
     /// Runs loaded for currently selected session
     session_runs: Vec<GatewayRunSummary>,
+    /// Flat tree-view items built from session_runs (groups + instances)
+    display_items: Vec<RunDisplayItem>,
     selected_run_index: usize,
     runs_session_id: Option<String>,
     /// Selected event index in Events tab
@@ -263,6 +303,7 @@ impl MonitorState {
             selected_tab: 0,
             selected_agent_index: 0,
             session_runs: Vec::new(),
+            display_items: Vec::new(),
             selected_run_index: 0,
             runs_session_id: None,
             selected_event_index: 0,
@@ -328,15 +369,91 @@ impl MonitorState {
         }
     }
 
-    fn selected_run(&self) -> Option<&GatewayRunSummary> {
-        self.session_runs.get(self.selected_run_index)
+    fn selected_display_item(&self) -> Option<&RunDisplayItem> {
+        self.display_items.get(self.selected_run_index)
     }
 
     fn sync_run_selection(&mut self) {
-        if self.session_runs.is_empty() {
+        if self.display_items.is_empty() {
             self.selected_run_index = 0;
-        } else if self.selected_run_index >= self.session_runs.len() {
-            self.selected_run_index = self.session_runs.len() - 1;
+        } else if self.selected_run_index >= self.display_items.len() {
+            self.selected_run_index = self.display_items.len() - 1;
+        }
+    }
+
+    /// Rebuild the tree-view display items from the raw session_runs list.
+    /// Groups runs that share a `schedule_group_id` under a common header row.
+    fn rebuild_display_items(&mut self) {
+        use std::collections::HashMap as Map;
+        self.display_items.clear();
+
+        // Partition into grouped (has schedule_group_id) and singletons.
+        let mut group_map: Map<String, Vec<GatewayRunSummary>> = Map::new();
+        let mut singletons: Vec<GatewayRunSummary> = Vec::new();
+
+        for run in &self.session_runs {
+            if let Some(ref gid) = run.schedule_group_id {
+                group_map.entry(gid.clone()).or_default().push(run.clone());
+            } else {
+                singletons.push(run.clone());
+            }
+        }
+
+        // Build group header + child rows, ordered by most-recent activity in the group.
+        let mut groups: Vec<(String, Vec<GatewayRunSummary>)> = group_map.into_iter().collect();
+        // Sort groups so the most recently active one comes first.
+        groups.sort_by(|(_, a), (_, b)| {
+            let ta = a.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
+            let tb = b.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
+            tb.cmp(ta)
+        });
+
+        for (group_id, mut instances) in groups {
+            let goal = instances.first().map(|r| r.goal.clone()).unwrap_or_default();
+            let schedule = instances
+                .first()
+                .and_then(|r| r.schedule.as_deref())
+                .unwrap_or("?")
+                .to_string();
+
+            let pending_run_id = instances
+                .iter()
+                .find(|r| r.state.contains("Scheduled"))
+                .map(|r| r.run_id.clone());
+            let next_run_at = instances
+                .iter()
+                .find(|r| r.state.contains("Scheduled"))
+                .and_then(|r| r.next_run_at.clone());
+
+            self.display_items.push(RunDisplayItem::ScheduleGroup {
+                group_id,
+                goal,
+                schedule,
+                instance_count: instances.len(),
+                next_run_at,
+                pending_run_id,
+            });
+
+            // Sort instances newest-first (RFC3339 strings sort lexicographically).
+            instances.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            let last = instances.len().saturating_sub(1);
+            for (idx, run) in instances.into_iter().enumerate() {
+                self.display_items.push(RunDisplayItem::RunInstance {
+                    run,
+                    grouped: true,
+                    is_last_in_group: idx == last,
+                });
+            }
+        }
+
+        // Append ungrouped (one-off / plain) runs, newest-first.
+        singletons.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        for run in singletons {
+            self.display_items.push(RunDisplayItem::RunInstance {
+                run,
+                grouped: false,
+                is_last_in_group: false,
+            });
         }
     }
 
@@ -902,8 +1019,9 @@ async fn main() -> anyhow::Result<()> {
                                         {
                                             Ok(_) => {
                                                 state.status_message = format!(
-                                                    "Loaded {} scheduled run(s) for selected session",
-                                                    state.session_runs.len()
+                                                    "Loaded {} run(s) for selected session ({} display rows)",
+                                                    state.session_runs.len(),
+                                                    state.display_items.len(),
                                                 );
                                             }
                                             Err(e) => {
@@ -915,14 +1033,14 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Char('c') => {
                                     if state.selected_tab == 4 {
-                                        if let Some(selected_run_id) =
-                                            state.selected_run().map(|run| run.run_id.clone())
+                                        if let Some(run_id_to_cancel) =
+                                            state.selected_display_item().and_then(|item| item.cancel_run_id())
                                         {
                                             match cancel_run(
                                                 &client,
                                                 &args.gateway_url,
                                                 &args.token,
-                                                &selected_run_id,
+                                                &run_id_to_cancel,
                                             )
                                             .await
                                             {
@@ -954,7 +1072,7 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         } else {
                                             state.status_message =
-                                                "No run selected to cancel".to_string();
+                                                "No run/schedule selected to cancel".to_string();
                                         }
                                     }
                                 }
@@ -1015,11 +1133,11 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         }
                                     } else if state.selected_tab == 4 {
-                                        if !state.session_runs.is_empty() {
+                                        if !state.display_items.is_empty() {
                                             if state.selected_run_index > 0 {
                                                 state.selected_run_index -= 1;
                                             } else {
-                                                state.selected_run_index = state.session_runs.len() - 1;
+                                                state.selected_run_index = state.display_items.len() - 1;
                                             }
                                         }
                                     }
@@ -1040,9 +1158,9 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         }
                                     } else if state.selected_tab == 4 {
-                                        if !state.session_runs.is_empty() {
+                                        if !state.display_items.is_empty() {
                                             state.selected_run_index =
-                                                (state.selected_run_index + 1) % state.session_runs.len();
+                                                (state.selected_run_index + 1) % state.display_items.len();
                                         }
                                     }
                                 }
@@ -1172,9 +1290,9 @@ async fn main() -> anyhow::Result<()> {
                                     && mouse.row < runs_area.y + runs_area.height;
 
                                 if in_runs_area {
-                                    let runs_count = state.session_runs.len();
+                                    let items_count = state.display_items.len();
 
-                                    if runs_count > 0 {
+                                    if items_count > 0 {
                                         match mouse.kind {
                                             MouseEventKind::ScrollUp => {
                                                 if state.selected_run_index > 0 {
@@ -1182,7 +1300,7 @@ async fn main() -> anyhow::Result<()> {
                                                 }
                                             }
                                             MouseEventKind::ScrollDown => {
-                                                if state.selected_run_index < runs_count - 1 {
+                                                if state.selected_run_index < items_count - 1 {
                                                     state.selected_run_index += 1;
                                                 }
                                             }
@@ -1195,14 +1313,14 @@ async fn main() -> anyhow::Result<()> {
 
                                                     if inner_row < viewport_height {
                                                         let max_offset =
-                                                            runs_count.saturating_sub(viewport_height);
+                                                            items_count.saturating_sub(viewport_height);
                                                         let scroll_offset = state
                                                             .selected_run_index
                                                             .saturating_sub(viewport_height / 2)
                                                             .min(max_offset);
                                                         let clicked_index = scroll_offset + inner_row;
 
-                                                        if clicked_index < runs_count {
+                                                        if clicked_index < items_count {
                                                             state.selected_run_index = clicked_index;
                                                         }
                                                     }
@@ -1776,11 +1894,9 @@ async fn refresh_runs_for_selected_session(
 
     let response = fetch_session_runs(client, gateway_url, token, &session_id).await?;
     state.runs_session_id = Some(response.session_id);
-    state.session_runs = response
-        .runs
-        .into_iter()
-        .filter(|run| run.state == "Scheduled" || run.next_run_at.is_some())
-        .collect();
+    // Store raw runs and rebuild the grouped tree view.
+    state.session_runs = response.runs;
+    state.rebuild_display_items();
     state.sync_run_selection();
     Ok(())
 }
@@ -2606,66 +2722,156 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 
     let loaded_for = state.runs_session_id.as_deref().unwrap_or("<none>");
     let title = format!(
-        "Scheduled Runs for {} (loaded: {}, [r] refresh, [c] cancel selected)",
+        "Runs for {} (loaded: {}) · [r] refresh  [c] cancel  [↑↓] navigate",
         session_id, loaded_for
     );
 
-    let header = Row::new(vec!["Run ID", "State", "Next Run", "Steps", "Elapsed", "Goal"])
-        .style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
+    if state.display_items.is_empty() {
+        let placeholder = Paragraph::new("No runs. Press [r] to refresh.")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().title(title).borders(Borders::ALL));
+        f.render_widget(placeholder, area);
+        return;
+    }
 
-    let rows: Vec<Row> = state
-        .session_runs
+    let items: Vec<ListItem> = state
+        .display_items
         .iter()
-        .enumerate()
-        .map(|(idx, run)| {
-            let is_selected = idx == state.selected_run_index;
-            let row_style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            let state_color = if run.next_run_at.is_some() || run.state.contains("Scheduled") {
-                Color::Green
-            } else if run.state.contains("Cancelled") || run.state.contains("Failed") {
-                Color::Red
-            } else {
-                Color::White
-            };
-
-            Row::new(vec![
-                Cell::from(run.run_id.clone()),
-                Cell::from(run.state.clone()).style(Style::default().fg(state_color)),
-                Cell::from(run.next_run_at.as_deref().unwrap_or("-")),
-                Cell::from(run.steps_taken.to_string()),
-                Cell::from(format!("{}s", run.elapsed_secs)),
-                Cell::from(single_line(&run.goal, 60)),
-            ])
-            .style(row_style)
+        .map(|item| match item {
+            RunDisplayItem::ScheduleGroup {
+                goal,
+                schedule,
+                instance_count,
+                next_run_at,
+                pending_run_id,
+                ..
+            } => {
+                let next_str = next_run_at
+                    .as_deref()
+                    .map(|s| {
+                        // Trim to short form: keep only time part of RFC3339 for compactness
+                        s.get(11..19).unwrap_or(s)
+                    })
+                    .unwrap_or("-");
+                let cancel_hint = if pending_run_id.is_some() {
+                    " [c=cancel]"
+                } else {
+                    " [completed]"
+                };
+                let line = Line::from(vec![
+                    Span::styled("📅 ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        single_line(goal, 40),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {}  ", schedule),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        format!("[{} runs]", instance_count),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("  next: {}", next_str),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::styled(
+                        cancel_hint.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+                ListItem::new(line)
+            }
+            RunDisplayItem::RunInstance {
+                run,
+                grouped,
+                is_last_in_group,
+            } => {
+                let prefix = if *grouped {
+                    if *is_last_in_group {
+                        "  └─ "
+                    } else {
+                        "  ├─ "
+                    }
+                } else {
+                    ""
+                };
+                let state_color = if run.state.contains("Active") {
+                    Color::Green
+                } else if run.state.contains("Done") {
+                    Color::DarkGray
+                } else if run.state.contains("Cancelled") || run.state.contains("Failed") {
+                    Color::Red
+                } else if run.state.contains("Scheduled") {
+                    Color::Cyan
+                } else if run.state.contains("Paused") {
+                    Color::Yellow
+                } else {
+                    Color::White
+                };
+                let short_id = run.run_id.get(4..12).unwrap_or(&run.run_id);
+                let mut spans = vec![
+                    Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        short_id.to_string(),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{:<20}", &run.state),
+                        Style::default().fg(state_color),
+                    ),
+                    Span::styled(
+                        format!("  {:>3}steps  {}s", run.steps_taken, run.elapsed_secs),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ];
+                if !*grouped {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(
+                        single_line(&run.goal, 40),
+                        Style::default().fg(Color::White),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            }
         })
         .collect();
 
-    let widths = [
-        Constraint::Ratio(2, 12),
-        Constraint::Ratio(2, 12),
-        Constraint::Ratio(3, 12),
-        Constraint::Ratio(1, 12),
-        Constraint::Ratio(1, 12),
-        Constraint::Ratio(3, 12),
-    ];
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let scroll_offset = state
+        .selected_run_index
+        .saturating_sub(viewport_height / 2)
+        .min(state.display_items.len().saturating_sub(viewport_height));
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL));
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.selected_run_index));
 
-    f.render_widget(table, area);
+    // ListState doesn't have direct offset control in all ratatui versions;
+    // clip the items to the viewport manually for correct scrolling.
+    let visible_items: Vec<ListItem> = items
+        .into_iter()
+        .skip(scroll_offset)
+        .take(viewport_height + 1)
+        .collect();
+    let adjusted_selected = state.selected_run_index.saturating_sub(scroll_offset);
+    let mut visible_state = ListState::default();
+    visible_state.select(Some(adjusted_selected));
+
+    let list = List::new(visible_items)
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut visible_state);
 }
 
 fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
