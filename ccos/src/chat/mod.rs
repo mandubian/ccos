@@ -324,6 +324,26 @@ pub fn record_chat_audit_event(
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("chat.audit.{}", event_type));
 
+    // For CapabilityCall actions, populate result from metadata so the monitor shows
+    // "ok"/"error" instead of "pending" and includes stdout in the result view.
+    let result = if action_type == ActionType::CapabilityCall {
+        let success = metadata
+            .get("success")
+            .and_then(|v| match v { Value::Boolean(b) => Some(*b), _ => None })
+            .unwrap_or(true);
+        let stdout_val = metadata
+            .get("stdout")
+            .cloned()
+            .unwrap_or(Value::Nil);
+        Some(crate::types::ExecutionResult {
+            success,
+            value: stdout_val,
+            metadata: std::collections::HashMap::new(),
+        })
+    } else {
+        None
+    };
+
     let action = Action {
         action_id: uuid::Uuid::new_v4().to_string(),
         parent_action_id: None,
@@ -333,7 +353,7 @@ pub fn record_chat_audit_event(
         action_type,
         function_name: Some(function_name),
         arguments: None,
-        result: None,
+        result,
         cost: None,
         duration_ms: None,
         timestamp: Utc::now().timestamp_millis() as u64,
