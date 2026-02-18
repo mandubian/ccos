@@ -656,16 +656,34 @@ impl AgentRuntime {
         let _heartbeat_handle = self.spawn_heartbeat_task();
 
         // Main event loop
+        // Scheduled-run agents (spawned with --run-id) are ephemeral: they handle
+        // exactly one kickoff event and then exit. Without this guard the process
+        // keeps polling, can steal the NEXT run's kickoff from the shared session
+        // inbox, and tries to execute it with the old (Done) run_id.
+        let is_scheduled_agent = self.args.run_id.is_some();
+        let mut scheduled_run_processed = false;
+
         loop {
             match self.poll_events().await {
                 Ok(events) => {
                     for event in events {
                         self.process_event(event).await?;
+                        // If this is a scheduled agent, mark that we've handled an event
+                        // so we can exit cleanly after it completes.
+                        if is_scheduled_agent {
+                            scheduled_run_processed = true;
+                        }
                     }
                 }
                 Err(e) => {
                     warn!("Failed to poll events: {}", e);
                 }
+            }
+
+            // Scheduled agents exit after processing their single kickoff event.
+            if is_scheduled_agent && scheduled_run_processed {
+                info!("[Agent] Scheduled run complete; exiting agent process.");
+                break;
             }
 
             // Periodically poll pending approvals so UI-only approvals resume
@@ -675,6 +693,7 @@ impl AgentRuntime {
             // Wait before next poll
             sleep(Duration::from_millis(self.args.poll_interval_ms)).await;
         }
+        Ok(())
     }
 
     async fn poll_pending_approvals_if_due(&mut self) -> anyhow::Result<()> {
