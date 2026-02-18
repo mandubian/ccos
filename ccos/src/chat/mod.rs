@@ -292,9 +292,14 @@ fn extract_field_labels(meta: &HashMap<String, Value>) -> HashMap<String, ChatDa
 }
 
 
-/// Records a chat audit event into the causal chain as an `InternalStep`.
+/// Records a chat audit event into the causal chain.
 ///
 /// This is the Phase 0 minimal enforcement backing `047-chat-audit-events.md`.
+///
+/// `action_type` controls how the event appears in the monitor: use
+/// `ActionType::CapabilityCall` for direct capability executions (visible by
+/// default) and `ActionType::InternalStep` for internal bookkeeping (hidden
+/// unless the monitor's "show internal steps" toggle is on).
 pub fn record_chat_audit_event(
     chain: &Arc<Mutex<CausalChain>>,
     plan_id: &str,
@@ -304,6 +309,7 @@ pub fn record_chat_audit_event(
     step_id: &str,
     event_type: &str,
     mut metadata: HashMap<String, Value>,
+    action_type: ActionType,
 ) -> RuntimeResult<()> {
     metadata.insert("event_type".to_string(), Value::String(event_type.to_string()));
     metadata.insert("session_id".to_string(), Value::String(session_id.to_string()));
@@ -316,7 +322,7 @@ pub fn record_chat_audit_event(
         session_id: Some(session_id.to_string()),
         plan_id: plan_id.to_string(),
         intent_id: intent_id.to_string(),
-        action_type: ActionType::InternalStep,
+        action_type,
         function_name: Some(format!("chat.audit.{}", event_type)),
         arguments: None,
         result: None,
@@ -437,6 +443,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "quarantine.access",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let bytes = quarantine.get_bytes(&pointer_id)?;
@@ -499,6 +506,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "transform.output",
                         out_meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let val = Value::Map(out);
@@ -550,6 +558,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "quarantine.access",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let bytes = quarantine.get_bytes(&pointer_id)?;
@@ -595,6 +604,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "transform.output",
                         out_meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     Ok(attach_label(Value::Map(out), ChatDataLabel::PiiRedacted, None))
@@ -645,6 +655,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "quarantine.access",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let bytes = quarantine.get_bytes(&pointer_id)?;
@@ -696,6 +707,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "transform.output",
                         out_meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     Ok(attach_label(Value::Map(out), ChatDataLabel::PiiRedacted, None))
@@ -766,6 +778,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "transform.output",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let mut out = HashMap::new();
@@ -872,6 +885,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "policy.decision",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let mut meta2 = HashMap::new();
@@ -888,6 +902,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "egress.attempt",
                         meta2,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     if !allowed {
@@ -1146,6 +1161,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "resource.ingest",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     let preview: String = content.chars().take(400).collect();
@@ -1251,6 +1267,7 @@ pub async fn register_chat_capabilities(
                         &step_id,
                         "resource.get",
                         meta,
+                        crate::types::ActionType::InternalStep,
                     )?;
 
                     Ok(Value::Map(HashMap::from([
@@ -3260,6 +3277,7 @@ pub async fn filter_mcp_tool_result(
         step_id,
         "policy.decision",
         meta,
+        crate::types::ActionType::InternalStep,
     )?;
 
     let mut meta2 = HashMap::new();
@@ -3279,6 +3297,7 @@ pub async fn filter_mcp_tool_result(
         step_id,
         "egress.attempt",
         meta2,
+        crate::types::ActionType::InternalStep,
     )?;
 
     if !allowed {

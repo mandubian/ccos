@@ -17,6 +17,8 @@ use ccos::chat::{
     request_chat_public_declassification, strip_ccos_meta, ChatDataLabel, InMemoryQuarantineStore,
     QuarantineStore,
 };
+use ccos::types::ActionType;
+
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::values::Value;
 
@@ -322,6 +324,7 @@ fn test_record_chat_audit_event_fields() {
         "step",
         "message.ingest",
         meta,
+        ActionType::InternalStep,
     )
     .expect("record");
 
