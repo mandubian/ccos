@@ -264,6 +264,10 @@ struct MonitorState {
     llm_consultations: Vec<(String, LlmConsultation)>, // (session_id, consultation)
     selected_tab: usize,
     selected_agent_index: usize,
+    /// All known session IDs (sorted) — used for Runs tab session navigation independent of active agents
+    ordered_session_ids: Vec<String>,
+    /// Selected index into ordered_session_ids for the Runs tab session picker
+    selected_runs_session_idx: usize,
     /// Runs loaded for currently selected session
     session_runs: Vec<GatewayRunSummary>,
     /// Flat tree-view items built from session_runs (groups + instances)
@@ -298,6 +302,8 @@ impl MonitorState {
             sessions: HashMap::new(),
             agents: HashMap::new(),
             agent_session_ids: Vec::new(),
+            ordered_session_ids: Vec::new(),
+            selected_runs_session_idx: 0,
             events: Vec::new(),
             llm_consultations: Vec::new(),
             selected_tab: 0,
@@ -355,6 +361,17 @@ impl MonitorState {
     fn get_selected_session_id(&self) -> Option<&str> {
         self.agent_session_ids
             .get(self.selected_agent_index)
+            .map(|s| s.as_str())
+    }
+
+    /// Returns the session ID to use for the Runs tab:
+    /// prefers the active agent selection, falls back to ordered_session_ids (all sessions).
+    fn get_runs_session_id(&self) -> Option<&str> {
+        if let Some(id) = self.agent_session_ids.get(self.selected_agent_index) {
+            return Some(id.as_str());
+        }
+        self.ordered_session_ids
+            .get(self.selected_runs_session_idx)
             .map(|s| s.as_str())
     }
 
@@ -1007,6 +1024,43 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     }
                                 }
+                                KeyCode::Char('s') => {
+                                    // Runs tab: cycle to next session in ordered_session_ids
+                                    if state.selected_tab == 4
+                                        && !state.ordered_session_ids.is_empty()
+                                    {
+                                        state.selected_runs_session_idx = (state
+                                            .selected_runs_session_idx
+                                            + 1)
+                                            % state.ordered_session_ids.len();
+                                        match refresh_runs_for_selected_session(
+                                            &mut state,
+                                            &client,
+                                            &args.gateway_url,
+                                            &args.token,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                state.status_message = format!(
+                                                    "Session {}/{}: {} ({} run(s))",
+                                                    state.selected_runs_session_idx + 1,
+                                                    state.ordered_session_ids.len(),
+                                                    state
+                                                        .ordered_session_ids
+                                                        .get(state.selected_runs_session_idx)
+                                                        .map(|s| s.as_str())
+                                                        .unwrap_or("-"),
+                                                    state.session_runs.len(),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                state.status_message =
+                                                    format!("Failed to load runs: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
                                 KeyCode::Char('r') => {
                                     if state.selected_tab == 4 {
                                         match refresh_runs_for_selected_session(
@@ -1343,6 +1397,16 @@ async fn main() -> anyhow::Result<()> {
                     state.sessions.clear();
                     state.agents.clear();
                     state.agent_session_ids.clear();
+
+                    // Rebuild ordered list of all session IDs for Runs tab navigation.
+                    let mut all_ids: Vec<String> =
+                        sessions.iter().map(|s| s.session_id.clone()).collect();
+                    all_ids.sort();
+                    state.ordered_session_ids = all_ids;
+                    if state.selected_runs_session_idx >= state.ordered_session_ids.len() {
+                        state.selected_runs_session_idx =
+                            state.ordered_session_ids.len().saturating_sub(1);
+                    }
 
                     for session in &sessions {
                         state
@@ -1885,7 +1949,8 @@ async fn refresh_runs_for_selected_session(
     gateway_url: &str,
     token: &str,
 ) -> anyhow::Result<()> {
-    let Some(session_id) = state.get_selected_session_id().map(|s| s.to_string()) else {
+    // Use get_runs_session_id() which falls back to all known sessions, not just active agents.
+    let Some(session_id) = state.get_runs_session_id().map(|s| s.to_string()) else {
         state.session_runs.clear();
         state.runs_session_id = None;
         state.selected_run_index = 0;
@@ -2707,11 +2772,11 @@ fn draw_agents_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 }
 
 fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let selected_session = state.get_selected_session_id().map(|s| s.to_string());
+    let selected_session = state.get_runs_session_id().map(|s| s.to_string());
 
     let Some(session_id) = selected_session else {
         let placeholder = Paragraph::new(
-            "No selected session with active agent. Use the Agents tab to select a session first.",
+            "No sessions available. Connect a session first.",
         )
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().title("Runs").borders(Borders::ALL))
@@ -2721,9 +2786,18 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
     };
 
     let loaded_for = state.runs_session_id.as_deref().unwrap_or("<none>");
+    let session_nav = if state.ordered_session_ids.len() > 1 {
+        format!(
+            "  [s] session {}/{}",
+            state.selected_runs_session_idx + 1,
+            state.ordered_session_ids.len()
+        )
+    } else {
+        String::new()
+    };
     let title = format!(
-        "Runs for {} (loaded: {}) · [r] refresh  [c] cancel  [↑↓] navigate",
-        session_id, loaded_for
+        "Runs for {} (loaded: {}) · [r] refresh  [c] cancel  [↑↓] navigate{}",
+        session_id, loaded_for, session_nav
     );
 
     if state.display_items.is_empty() {
