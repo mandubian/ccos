@@ -3564,9 +3564,10 @@ mod tests {
                              let secret = h_map.get(&MapKey::String("X-Internal-Secret".to_string())).unwrap().as_string().unwrap();
                              assert_eq!(secret, "mock-secret");
                              
+                             // Gateway serialises RunState via Debug, so "state" not "status"
                              let response_body = serde_json::json!({
                                  "run_id": "run-123",
-                                 "status": "scheduled"
+                                 "state": "Scheduled"
                              }).to_string();
                              
                              Ok(Value::Map(HashMap::from([
@@ -3610,7 +3611,146 @@ mod tests {
         
         let Value::Map(out) = result else { panic!("Expected map result") };
         assert_eq!(out.get(&MapKey::String("run_id".to_string())).unwrap().as_string().unwrap(), "run-123");
-        assert_eq!(out.get(&MapKey::String("status".to_string())).unwrap().as_string().unwrap(), "scheduled");
+        // Must return the "state" field value, not "unknown"
+        assert_eq!(out.get(&MapKey::String("status".to_string())).unwrap().as_string().unwrap(), "Scheduled");
+    }
+
+    /// Regression test: trigger_capability_id and trigger_inputs MUST be forwarded
+    /// in the POST /chat/run payload for stateful recurring Python capability runs.
+    /// Without them the gateway spawns an LLM agent instead of executing the code
+    /// directly, and state continuity is lost.
+    #[tokio::test]
+    async fn test_ccos_run_create_forwards_trigger_fields() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        let quarantine = Arc::new(InMemoryQuarantineStore::new());
+        let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
+        let resource_store = new_shared_resource_store();
+
+        let trigger_seen = Arc::new(AtomicBool::new(false));
+        let inputs_seen = Arc::new(AtomicBool::new(false));
+
+        {
+            let trigger_seen = Arc::clone(&trigger_seen);
+            let inputs_seen = Arc::clone(&inputs_seen);
+            let marketplace_clone = marketplace.clone();
+            let mut manifest = CapabilityManifest::new(
+                "ccos.network.http-fetch".to_string(),
+                "HTTP Fetch".to_string(),
+                "Mock HTTP fetch".to_string(),
+                ProviderType::Native(NativeCapability {
+                    handler: Arc::new(move |inputs: &Value| {
+                        let inputs = inputs.clone();
+                        let trigger_seen = Arc::clone(&trigger_seen);
+                        let inputs_seen = Arc::clone(&inputs_seen);
+                        Box::pin(async move {
+                            let Value::Map(map) = inputs else { panic!("Expected map") };
+                            let body_str = map
+                                .get(&MapKey::String("body".to_string()))
+                                .unwrap()
+                                .as_string()
+                                .unwrap();
+                            let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+                            // Assert trigger_capability_id is present
+                            if body.get("trigger_capability_id").and_then(|v| v.as_str())
+                                == Some("ccos.execute.python")
+                            {
+                                trigger_seen.store(true, Ordering::SeqCst);
+                            }
+                            // Assert trigger_inputs is present and contains the code key
+                            if let Some(ti) = body.get("trigger_inputs") {
+                                if ti.get("code").is_some() {
+                                    inputs_seen.store(true, Ordering::SeqCst);
+                                }
+                            }
+
+                            let response_body = serde_json::json!({
+                                "run_id": "run-trigger-test",
+                                "state": "Scheduled"
+                            })
+                            .to_string();
+                            Ok(Value::Map(HashMap::from([
+                                (MapKey::String("status".to_string()), Value::Integer(200)),
+                                (MapKey::String("body".to_string()), Value::String(response_body)),
+                            ])))
+                        })
+                    }),
+                    security_level: "low".to_string(),
+                    metadata: HashMap::new(),
+                }),
+                "1.0.0".to_string(),
+            );
+            manifest.approval_status =
+                crate::capability_marketplace::types::ApprovalStatus::AutoApproved;
+            marketplace_clone.register_capability_manifest(manifest).await.unwrap();
+        }
+
+        register_chat_capabilities(
+            marketplace.clone(),
+            quarantine,
+            chain,
+            None,
+            resource_store,
+            None,
+            None,
+            Some("http://localhost:9999".to_string()),
+            Some("mock-secret".to_string()),
+            crate::config::types::SandboxConfig::default(),
+            crate::config::types::CodingAgentsConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let trigger_inputs_val = Value::Map(HashMap::from([
+            (
+                MapKey::String("code".to_string()),
+                Value::String("import ccos_sdk; print('fib')".to_string()),
+            ),
+        ]));
+
+        let inputs = Value::Map(HashMap::from([
+            (MapKey::String("goal".to_string()), Value::String("Compute Fibonacci".to_string())),
+            (MapKey::String("session_id".to_string()), Value::String("session-fib".to_string())),
+            (MapKey::String("schedule".to_string()), Value::String("every 15s".to_string())),
+            (
+                MapKey::String("trigger_capability_id".to_string()),
+                Value::String("ccos.execute.python".to_string()),
+            ),
+            (MapKey::String("trigger_inputs".to_string()), trigger_inputs_val),
+        ]));
+
+        let result = marketplace
+            .execute_capability("ccos.run.create", &inputs)
+            .await
+            .unwrap();
+
+        let Value::Map(out) = result else { panic!("Expected map result") };
+        assert_eq!(
+            out.get(&MapKey::String("run_id".to_string()))
+                .unwrap()
+                .as_string()
+                .unwrap(),
+            "run-trigger-test"
+        );
+        assert_eq!(
+            out.get(&MapKey::String("status".to_string()))
+                .unwrap()
+                .as_string()
+                .unwrap(),
+            "Scheduled",
+            "status should be 'Scheduled' from the 'state' field, not 'unknown'"
+        );
+        assert!(
+            trigger_seen.load(Ordering::SeqCst),
+            "trigger_capability_id was not forwarded in the POST body"
+        );
+        assert!(
+            inputs_seen.load(Ordering::SeqCst),
+            "trigger_inputs was not forwarded in the POST body"
+        );
     }
 
     #[tokio::test]
