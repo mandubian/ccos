@@ -1761,6 +1761,7 @@ pub async fn register_chat_capabilities(
                         let schedule = get_str("schedule");
                         let next_run_at = get_str("next_run_at");
                         let max_run = get_int("max_run");
+                        let trigger_capability_id = get_str("trigger_capability_id");
 
                         // 2. Prepare payload for POST /chat/run
                         let session_id = get_str("session_id")
@@ -1784,6 +1785,14 @@ pub async fn register_chat_capabilities(
                         if let Some(b) = map.get(&MapKey::String("budget".to_string())) {
                              let json_structure = rtfs_value_to_json(b)?;
                              body_map.insert("budget".to_string(), json_to_rtfs_value(&json_structure)?);
+                        }
+                        if let Some(tcid) = trigger_capability_id {
+                            body_map.insert("trigger_capability_id".to_string(), Value::String(tcid));
+                        }
+                        if let Some(ti) = map.get(&MapKey::String("trigger_inputs".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("trigger_inputs".to_string()))))
+                        {
+                            body_map.insert("trigger_inputs".to_string(), ti.clone());
                         }
 
                         let body_json = rtfs_value_to_json(&Value::Map(body_map.into_iter().map(|(k,v)| (MapKey::String(k), v)).collect()))?;
@@ -1829,7 +1838,10 @@ pub async fn register_chat_capabilities(
                             .map_err(|e| RuntimeError::Generic(format!("Invalid JSON response: {}", e)))?;
                         
                         let run_id = json_val.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let run_status = json_val.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        // Gateway returns "state" (Debug of RunState enum), not "status"
+                        let run_status = json_val.get("state").and_then(|v| v.as_str())
+                            .or_else(|| json_val.get("status").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
 
                         Ok(Value::Map(HashMap::from([
                             (MapKey::String("run_id".to_string()), Value::String(run_id.to_string())),
