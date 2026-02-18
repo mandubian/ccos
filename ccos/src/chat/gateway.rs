@@ -2836,7 +2836,9 @@ async fn list_sessions_handler(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let sessions = state.session_registry.list_active_sessions().await;
+    // Admin view: return all sessions including those with AgentNotRunning status
+    // (e.g. persisted sessions restored after gateway restart).
+    let sessions = state.session_registry.list_all_sessions().await;
     let response = sessions
         .into_iter()
         .map(|s| {

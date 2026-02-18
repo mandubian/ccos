@@ -344,6 +344,12 @@ impl SessionRegistry {
             .collect()
     }
 
+    /// Return all sessions regardless of status (used by admin endpoints and monitor).
+    pub async fn list_all_sessions(&self) -> Vec<SessionState> {
+        let sessions = self.sessions.read().await;
+        sessions.values().cloned().collect()
+    }
+
     /// Drain inbox for a specific session (atomically)
     pub async fn drain_session_inbox(&self, session_id: &str) -> Vec<ChatMessage> {
         let mut sessions = self.sessions.write().await;
