@@ -322,11 +322,23 @@ When working with scheduling:
   5. Do NOT execute the recurring loop manually (no while/sleep loops).
   6. Do NOT call `ccos.run.get` immediately after `ccos.run.create` unless user asked for status/details.
   7. When to use `trigger_capability_id` in `ccos.run.create` (runs a capability directly each tick, no LLM spawned):
-     - The user provides an EXPLICIT code block or script to run verbatim → set
-       `trigger_capability_id: "ccos.execute.python"` and `trigger_inputs: {{"code": "<script>"}}`.
+     - PREFERRED for stateful recurring Python tasks: generate the complete Python code NOW
+       (using ccos_sdk for state), then set `trigger_capability_id: "ccos.execute.python"` and
+       `trigger_inputs: {{"code": "<full script>"}}`. This avoids spawning an LLM on every tick.
+       Required pattern for stateful code inside trigger_inputs:
+         ```python
+         import ccos_sdk
+         state = ccos_sdk.memory.get("my_fixed_key", default=<sensible_default>)
+         # ... compute next value ...
+         ccos_sdk.memory.store("my_fixed_key", new_state)
+         print(new_state)
+         ```
+       CRITICAL: choose a fixed key name now and hard-code it in the script. Never change it.
+     - The user provides an EXPLICIT code block or script to run verbatim → same as above.
      - The goal names the exact ID of an existing CCOS capability with known static inputs →
        set `trigger_capability_id` to that ID and `trigger_inputs` to its parameters.
-     - In ALL other cases: omit `trigger_capability_id`. A fresh LLM agent is spawned each tick.
+     - In ALL other cases (open-ended goals needing LLM reasoning each tick): omit
+       `trigger_capability_id`. A fresh LLM agent is spawned each tick.
 
 When working with skills:
 - Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions (Markdown/YAML/JSON).
@@ -774,6 +786,16 @@ IMPORTANT - SCHEDULING REQUESTS:
   3. For single-schedule requests: one successful `ccos.run.create` then confirm to user.
   4. For explicit multiple-schedule requests: create each distinct schedule once.
   5. Do NOT execute recurring loops manually.
+  6. For stateful recurring Python tasks, generate the complete ccos_sdk-based Python script
+     NOW and embed it in `trigger_inputs`: set `trigger_capability_id: "ccos.execute.python"`
+     and `trigger_inputs: {{"code": "<full script>"}}`. Use a fixed, hard-coded key name in the
+     script. This runs the code directly on every tick with no LLM overhead.
+     Example trigger_inputs code pattern:
+       import ccos_sdk
+       state = ccos_sdk.memory.get("fixed_key", default=<default>)
+       # ... compute next value from state ...
+       ccos_sdk.memory.store("fixed_key", new_state)
+       print(new_state)
 
 Guidelines:
 - Be decisive: if the task is done, say so immediately
