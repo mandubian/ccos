@@ -244,6 +244,15 @@ impl RunDisplayItem {
     }
 }
 
+/// A row in the Events tab session-grouped tree view.
+#[derive(Debug, Clone)]
+enum EventDisplayItem {
+    /// Session header row (non-selectable separator).
+    SessionHeader { session_id: String, event_count: usize },
+    /// An individual event entry (selectable).
+    EventEntry { event_idx: usize },
+}
+
 #[derive(Debug, Clone)]
 enum MonitorEvent {
     Input(Event),
@@ -261,6 +270,8 @@ struct MonitorState {
     /// Ordered list of session IDs for selection
     agent_session_ids: Vec<String>,
     events: Vec<SystemEvent>,
+    /// Session-grouped flat list built from events for the Events tab.
+    event_display_items: Vec<EventDisplayItem>,
     llm_consultations: Vec<(String, LlmConsultation)>, // (session_id, consultation)
     selected_tab: usize,
     selected_agent_index: usize,
@@ -305,6 +316,7 @@ impl MonitorState {
             ordered_session_ids: Vec::new(),
             selected_runs_session_idx: 0,
             events: Vec::new(),
+            event_display_items: Vec::new(),
             llm_consultations: Vec::new(),
             selected_tab: 0,
             selected_agent_index: 0,
@@ -474,6 +486,82 @@ impl MonitorState {
         }
     }
 
+    /// Rebuild the session-grouped display list from `self.events`.
+    /// Sessions are ordered by their most-recent event (newest first).
+    /// Events within each session are newest-first.
+    /// Respects the `show_internal_steps` flag.
+    fn rebuild_event_display_items(&mut self) {
+        self.event_display_items.clear();
+        let show_internal = self.show_internal_steps;
+
+        // Determine session display order + collect per-session event indices.
+        // Iterate events in reverse (newest first) to get newest-session-first ordering.
+        let mut session_order: Vec<String> = Vec::new();
+        let mut session_map: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+
+        for (idx, event) in self.events.iter().enumerate().rev() {
+            if !show_internal && is_internal_step_event(event) {
+                continue;
+            }
+            let entry = session_map.entry(event.session_id.clone()).or_insert_with(Vec::new);
+            entry.push(idx); // already in newest-first order (reversed iteration)
+            if !session_order.contains(&event.session_id) {
+                session_order.push(event.session_id.clone());
+            }
+        }
+
+        for session_id in &session_order {
+            if let Some(indices) = session_map.get(session_id) {
+                self.event_display_items.push(EventDisplayItem::SessionHeader {
+                    session_id: session_id.clone(),
+                    event_count: indices.len(),
+                });
+                for &idx in indices {
+                    self.event_display_items
+                        .push(EventDisplayItem::EventEntry { event_idx: idx });
+                }
+            }
+        }
+    }
+
+    /// Count visible EventEntry items in event_display_items.
+    fn event_entry_count(&self) -> usize {
+        self.event_display_items
+            .iter()
+            .filter(|i| matches!(i, EventDisplayItem::EventEntry { .. }))
+            .count()
+    }
+
+    /// Navigate event selection by `delta` steps, skipping SessionHeader rows.
+    fn navigate_event_selection(&mut self, delta: i32) {
+        let len = self.event_display_items.len();
+        if len == 0 {
+            return;
+        }
+        let len_i = len as i32;
+        let dir = if delta >= 0 { 1i32 } else { -1i32 };
+        let mut remaining = delta.abs();
+        let mut idx = self.selected_event_index as i32;
+
+        while remaining > 0 {
+            idx = (idx + dir).rem_euclid(len_i);
+            // Skip any SessionHeader rows in the direction of travel.
+            let mut guard = 0usize;
+            while guard < len
+                && matches!(
+                    self.event_display_items.get(idx as usize),
+                    Some(EventDisplayItem::SessionHeader { .. })
+                )
+            {
+                idx = (idx + dir).rem_euclid(len_i);
+                guard += 1;
+            }
+            remaining -= 1;
+        }
+        self.selected_event_index = idx as usize;
+    }
+
     /// Get filtered event indices for selection navigation
     fn get_filtered_event_indices(&self) -> Vec<usize> {
         let event_visible = |event: &SystemEvent| {
@@ -532,6 +620,7 @@ impl MonitorState {
                 self.selected_event_index -= 1;
             }
         }
+        self.rebuild_event_display_items();
     }
 
     fn add_action_event(
@@ -605,57 +694,76 @@ impl MonitorState {
         if let Some(selected_id) = self.selected_event_id {
             return self.events.iter().find(|e| e.id == selected_id);
         }
-
-        let filtered_indices = self.get_filtered_event_indices();
-        filtered_indices
-            .iter()
-            .rev()
-            .nth(self.selected_event_index)
-            .and_then(|&idx| self.events.get(idx))
+        match self.event_display_items.get(self.selected_event_index) {
+            Some(EventDisplayItem::EventEntry { event_idx }) => self.events.get(*event_idx),
+            _ => None,
+        }
     }
 
     fn event_id_for_display_index(&self, display_idx: usize) -> Option<u64> {
-        let filtered_indices = self.get_filtered_event_indices();
-        filtered_indices
-            .iter()
-            .rev()
-            .nth(display_idx)
-            .and_then(|&idx| self.events.get(idx))
-            .map(|event| event.id)
+        match self.event_display_items.get(display_idx) {
+            Some(EventDisplayItem::EventEntry { event_idx }) => {
+                self.events.get(*event_idx).map(|e| e.id)
+            }
+            _ => None,
+        }
     }
 
     fn sync_event_selection(&mut self) {
-        let filtered_indices = self.get_filtered_event_indices();
-        if filtered_indices.is_empty() {
+        if self.event_display_items.is_empty() {
             self.selected_event_index = 0;
             self.selected_event_id = None;
             self.show_event_detail = false;
             return;
         }
 
-        // Keep popup content stable across incoming events by anchoring on event ID
-        // only while detail popup is open.
+        // Keep popup content stable by anchoring on event ID.
         if self.show_event_detail {
             if let Some(selected_id) = self.selected_event_id {
-                if let Some((display_idx, _)) = filtered_indices
-                    .iter()
-                    .rev()
-                    .enumerate()
-                    .find(|(_, &idx)| self.events.get(idx).map(|e| e.id) == Some(selected_id))
-                {
-                    self.selected_event_index = display_idx;
+                if let Some(idx) = self.event_display_items.iter().position(|item| {
+                    if let EventDisplayItem::EventEntry { event_idx } = item {
+                        self.events.get(*event_idx).map(|e| e.id) == Some(selected_id)
+                    } else {
+                        false
+                    }
+                }) {
+                    self.selected_event_index = idx;
                     return;
                 }
-
-                // Selected event disappeared (rotation/filter change) - drop popup anchor.
+                // Selected event was rotated out of the buffer.
                 self.selected_event_id = None;
                 self.show_event_detail = false;
             }
         }
 
-        // Index-driven selection mode (keyboard/mouse hover without popup).
-        if self.selected_event_index >= filtered_indices.len() {
-            self.selected_event_index = filtered_indices.len() - 1;
+        // Clamp selected_event_index.
+        let len = self.event_display_items.len();
+        if self.selected_event_index >= len {
+            // Jump to last EventEntry.
+            self.selected_event_index = self
+                .event_display_items
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+        }
+        // If on a header, advance to the next EventEntry.
+        if matches!(
+            self.event_display_items.get(self.selected_event_index),
+            Some(EventDisplayItem::SessionHeader { .. })
+        ) {
+            if let Some(idx) = self
+                .event_display_items
+                .iter()
+                .enumerate()
+                .skip(self.selected_event_index + 1)
+                .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                .map(|(idx, _)| idx)
+            {
+                self.selected_event_index = idx;
+            }
         }
         self.selected_event_id = self.event_id_for_display_index(self.selected_event_index);
     }
@@ -1016,12 +1124,8 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Char('i') => {
                                     if state.selected_tab == 2 {
                                         state.show_internal_steps = !state.show_internal_steps;
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count == 0 {
-                                            state.selected_event_index = 0;
-                                        } else if state.selected_event_index >= filtered_count {
-                                            state.selected_event_index = filtered_count - 1;
-                                        }
+                                        state.rebuild_event_display_items();
+                                        state.sync_event_selection();
                                     }
                                 }
                                 KeyCode::Char('s') => {
@@ -1177,15 +1281,7 @@ async fn main() -> anyhow::Result<()> {
                                                 state.agent_session_ids.len() - 1;
                                         }
                                     } else if state.selected_tab == 2 {
-                                        // Navigate events in display order (top to bottom)
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count > 0 {
-                                            if state.selected_event_index > 0 {
-                                                state.selected_event_index -= 1;
-                                            } else {
-                                                state.selected_event_index = filtered_count - 1;
-                                            }
-                                        }
+                                        state.navigate_event_selection(-1);
                                     } else if state.selected_tab == 4 {
                                         if !state.display_items.is_empty() {
                                             if state.selected_run_index > 0 {
@@ -1202,15 +1298,7 @@ async fn main() -> anyhow::Result<()> {
                                         state.selected_agent_index = (state.selected_agent_index + 1)
                                             % state.agent_session_ids.len();
                                     } else if state.selected_tab == 2 {
-                                        // Navigate events in display order (top to bottom)
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count > 0 {
-                                            if state.selected_event_index < filtered_count - 1 {
-                                                state.selected_event_index += 1;
-                                            } else {
-                                                state.selected_event_index = 0;
-                                            }
-                                        }
+                                        state.navigate_event_selection(1);
                                     } else if state.selected_tab == 4 {
                                         if !state.display_items.is_empty() {
                                             state.selected_run_index =
@@ -1220,46 +1308,49 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::PageUp => {
                                     if state.selected_tab == 2 {
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count > 0 {
-                                            let events_area = get_events_tab_area(terminal.size()?);
-                                            let page_size = events_area.height.saturating_sub(2).max(1) as usize;
-                                            state.selected_event_index =
-                                                state.selected_event_index.saturating_sub(page_size);
-                                        }
+                                        let events_area = get_events_tab_area(terminal.size()?);
+                                        let page_size = events_area.height.saturating_sub(2).max(1) as i32;
+                                        state.navigate_event_selection(-page_size);
                                     }
                                 }
                                 KeyCode::PageDown => {
                                     if state.selected_tab == 2 {
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count > 0 {
-                                            let events_area = get_events_tab_area(terminal.size()?);
-                                            let page_size = events_area.height.saturating_sub(2).max(1) as usize;
-                                            state.selected_event_index = (state.selected_event_index + page_size)
-                                                .min(filtered_count - 1);
-                                        }
+                                        let events_area = get_events_tab_area(terminal.size()?);
+                                        let page_size = events_area.height.saturating_sub(2).max(1) as i32;
+                                        state.navigate_event_selection(page_size);
                                     }
                                 }
                                 KeyCode::Home => {
                                     if state.selected_tab == 2 {
-                                        if !state.get_filtered_event_indices().is_empty() {
-                                            state.selected_event_index = 0;
+                                        // Jump to first EventEntry.
+                                        if let Some((idx, _)) = state
+                                            .event_display_items
+                                            .iter()
+                                            .enumerate()
+                                            .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                                        {
+                                            state.selected_event_index = idx;
                                         }
                                     }
                                 }
                                 KeyCode::End => {
                                     if state.selected_tab == 2 {
-                                        let filtered_count = state.get_filtered_event_indices().len();
-                                        if filtered_count > 0 {
-                                            state.selected_event_index = filtered_count - 1;
+                                        // Jump to last EventEntry.
+                                        if let Some((idx, _)) = state
+                                            .event_display_items
+                                            .iter()
+                                            .enumerate()
+                                            .rev()
+                                            .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                                        {
+                                            state.selected_event_index = idx;
                                         }
                                     }
                                 }
                                 KeyCode::Enter => {
                                     // Show event detail in Events tab
                                     if state.selected_tab == 2 {
-                                        let filtered_indices = state.get_filtered_event_indices();
-                                        if !filtered_indices.is_empty() {
+                                        if state.get_selected_event().is_some() {
                                             state.selected_event_id =
                                                 state.event_id_for_display_index(state.selected_event_index);
                                             state.show_event_detail = true;
@@ -1287,46 +1378,42 @@ async fn main() -> anyhow::Result<()> {
                                     && mouse.row < events_area.y + events_area.height;
 
                                 if in_events_area {
-                                    let filtered_count = state.get_filtered_event_indices().len();
-
-                                    if filtered_count > 0 {
+                                    let display_count = state.event_display_items.len();
+                                    if display_count > 0 {
                                         match mouse.kind {
                                             MouseEventKind::ScrollUp => {
-                                                if state.selected_event_index > 0 {
-                                                    state.selected_event_index -= 1;
-                                                }
+                                                state.navigate_event_selection(-1);
                                             }
                                             MouseEventKind::ScrollDown => {
-                                                if state.selected_event_index < filtered_count - 1 {
-                                                    state.selected_event_index += 1;
-                                                }
+                                                state.navigate_event_selection(1);
                                             }
                                             MouseEventKind::Down(MouseButton::Left) => {
-                                                // Select clicked row inside the list viewport (inside block borders)
+                                                // Select clicked row inside the list viewport
                                                 if events_area.height > 2 && mouse.row > events_area.y {
                                                     let viewport_height = events_area.height.saturating_sub(2) as usize;
                                                     let inner_row = mouse.row.saturating_sub(events_area.y + 1) as usize;
-
                                                     if inner_row < viewport_height {
-                                                        let (_, scroll_offset) = compute_events_viewport(
-                                                            filtered_count,
-                                                            state.selected_event_index,
-                                                            viewport_height,
-                                                        );
-                                                        let clicked_display_idx = scroll_offset + inner_row;
-                                                        if clicked_display_idx < filtered_count {
-                                                            let clicked_event_id =
-                                                                state.event_id_for_display_index(clicked_display_idx);
-                                                            if state.show_event_detail
-                                                                && state.selected_event_id == clicked_event_id
-                                                                && clicked_event_id.is_some()
-                                                                && state.show_event_detail
-                                                            {
-                                                                state.show_event_detail = false;
-                                                            } else {
-                                                                state.selected_event_index = clicked_display_idx;
-                                                                state.selected_event_id = clicked_event_id;
-                                                                state.show_event_detail = true;
+                                                        let scroll_offset = state.selected_event_index
+                                                            .saturating_sub(viewport_height / 2)
+                                                            .min(display_count.saturating_sub(viewport_height));
+                                                        let clicked_idx = scroll_offset + inner_row;
+                                                        if clicked_idx < display_count {
+                                                            // Only select EventEntry items, not headers.
+                                                            if matches!(
+                                                                state.event_display_items.get(clicked_idx),
+                                                                Some(EventDisplayItem::EventEntry { .. })
+                                                            ) {
+                                                                let clicked_event_id = state.event_id_for_display_index(clicked_idx);
+                                                                if state.show_event_detail
+                                                                    && state.selected_event_id == clicked_event_id
+                                                                    && clicked_event_id.is_some()
+                                                                {
+                                                                    state.show_event_detail = false;
+                                                                } else {
+                                                                    state.selected_event_index = clicked_idx;
+                                                                    state.selected_event_id = clicked_event_id;
+                                                                    state.show_event_detail = true;
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -2269,26 +2356,6 @@ fn get_runs_tab_area(screen: Rect) -> Rect {
     main_chunks[1]
 }
 
-fn compute_events_viewport(
-    filtered_count: usize,
-    selected_event_index: usize,
-    viewport_height: usize,
-) -> (usize, usize) {
-    let selected_display_idx = if filtered_count == 0 {
-        0
-    } else {
-        selected_event_index.min(filtered_count - 1)
-    };
-
-    let scroll_offset = if viewport_height == 0 {
-        0
-    } else {
-        selected_display_idx.saturating_sub(viewport_height.saturating_sub(1))
-    };
-
-    (selected_display_idx, scroll_offset)
-}
-
 fn single_line(text: &str, max_chars: usize) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() > max_chars {
@@ -2949,103 +3016,120 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 }
 
 fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let filtered_indices = state.get_filtered_event_indices();
-    let filtered_count = filtered_indices.len();
-    let viewport_height = area.height.saturating_sub(2) as usize;
-    let (selected_display_idx, scroll_offset) =
-        compute_events_viewport(filtered_count, state.selected_event_index, viewport_height);
-
-    let text: Vec<Line> = filtered_indices
+    let display_items = &state.event_display_items;
+    let total_count = display_items.len();
+    let entry_count = state.event_entry_count();
+    let session_count = display_items
         .iter()
-        .rev()
+        .filter(|i| matches!(i, EventDisplayItem::SessionHeader { .. }))
+        .count();
+
+    let viewport_height = area.height.saturating_sub(2) as usize;
+
+    // Keep selected item in the visible window (centred).
+    let scroll_offset = if total_count == 0 {
+        0
+    } else {
+        state
+            .selected_event_index
+            .min(total_count.saturating_sub(1))
+            .saturating_sub(viewport_height / 2)
+            .min(total_count.saturating_sub(viewport_height))
+    };
+
+    let visible_items: Vec<Line> = display_items
+        .iter()
         .enumerate()
-        .map(|(display_idx, &event_idx)| {
-            let event = &state.events[event_idx];
-            let elapsed = event.timestamp.elapsed().as_secs();
-            let time_str = if elapsed < 60 {
-                format!("{}s ago", elapsed)
-            } else {
-                format!("{}m ago", elapsed / 60)
-            };
-
-            let color = match event.event_type.as_str() {
-                "CRASH" => Color::Red,
-                "ACTION" => Color::Cyan,
-                "STATE" => Color::Green,
-                "LLM" => Color::Magenta,
-                _ => Color::Gray,
-            };
-
-            // Calculate the actual selected index in reversed list
-            let is_selected = display_idx == selected_display_idx;
-
-            let base_style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            let prefix = format!("[{}] [{}] ", time_str, event.event_type);
-            let max_detail_chars = area.width.saturating_sub(prefix.len() as u16 + 4) as usize;
-            let detail_text = single_line(
-                &format!("{}: {}", event.session_id, event.details),
-                max_detail_chars.max(20),
-            );
-
-            Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", time_str),
-                    if is_selected {
-                        base_style
+        .skip(scroll_offset)
+        .take(viewport_height + 1)
+        .map(|(display_idx, item)| {
+            let is_selected = display_idx == state.selected_event_index;
+            match item {
+                EventDisplayItem::SessionHeader { session_id, event_count } => {
+                    let hdr_style = Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
+                    Line::from(vec![
+                        Span::styled("┌─ ", hdr_style),
+                        Span::styled(session_id.clone(), hdr_style),
+                        Span::styled(
+                            format!("  {} event(s)", event_count),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])
+                }
+                EventDisplayItem::EventEntry { event_idx } => {
+                    let event = &state.events[*event_idx];
+                    let elapsed = event.timestamp.elapsed().as_secs();
+                    let time_str = if elapsed < 60 {
+                        format!("{:>3}s", elapsed)
                     } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-                Span::styled(
-                    format!("[{}] ", event.event_type),
-                    if is_selected {
-                        base_style
+                        format!("{:>3}m", elapsed / 60)
+                    };
+                    let color = match event.event_type.as_str() {
+                        "CRASH" => Color::Red,
+                        "ACTION" => Color::Cyan,
+                        "STATE" => Color::Green,
+                        "LLM" => Color::Magenta,
+                        _ => Color::Gray,
+                    };
+                    let base_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(color)
-                    },
-                ),
-                Span::styled(detail_text, base_style),
-            ])
+                        Style::default()
+                    };
+                    let max_detail = area.width.saturating_sub(20) as usize;
+                    let detail_text = single_line(&event.details, max_detail.max(20));
+                    Line::from(vec![
+                        Span::styled(
+                            "│ ",
+                            if is_selected {
+                                base_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                        Span::styled(
+                            format!("[{}] ", time_str),
+                            if is_selected {
+                                base_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                        Span::styled(
+                            format!("[{:<6}] ", &event.event_type),
+                            if is_selected {
+                                base_style
+                            } else {
+                                Style::default().fg(color)
+                            },
+                        ),
+                        Span::styled(detail_text, base_style),
+                    ])
+                }
+            }
         })
         .collect();
 
-    let title = if state.get_selected_session_id().is_some() {
-        format!(
-            "Recent Events (filtered: {}) - ↑↓ PgUp/PgDn Home/End Enter | i: {}",
-            filtered_count,
-            if state.show_internal_steps {
-                "hide internal"
-            } else {
-                "show internal"
-            }
-        )
-    } else {
-        format!(
-            "Recent Events ({}) - ↑↓ PgUp/PgDn Home/End Enter | i: {}",
-            filtered_count,
-            if state.show_internal_steps {
-                "hide internal"
-            } else {
-                "show internal"
-            }
-        )
-    };
+    let title = format!(
+        "Events ({} entries, {} sessions) · ↑↓ PgUp/PgDn Home/End Enter | i: {}",
+        entry_count,
+        session_count,
+        if state.show_internal_steps {
+            "hide internal"
+        } else {
+            "show internal"
+        }
+    );
 
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .scroll((scroll_offset as u16, 0));
-
+    let paragraph = Paragraph::new(visible_items)
+        .block(Block::default().title(title).borders(Borders::ALL));
     f.render_widget(paragraph, area);
 
-    // Draw event detail popup if enabled
     if state.show_event_detail {
         if let Some(selected_event) = state.get_selected_event() {
             draw_event_detail_popup(f, area, selected_event, state.detail_scroll);
