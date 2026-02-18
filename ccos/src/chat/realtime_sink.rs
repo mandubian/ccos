@@ -147,20 +147,19 @@ impl From<&Action> for ActionView {
             }
         }
 
-        // Create a human-readable summary
-        let mut summary = format!(
-            "{:?} - {} - {}",
-            action.action_type,
-            action.function_name.as_deref().unwrap_or("unknown"),
+        // Create a human-readable summary.
+        // The monitor already shows function_name and a status label separately,
+        // so the summary only carries the result preview (or a short status word
+        // as a fallback when there is no result value to show).
+        let summary = if let Some(ref preview) = result_preview {
+            format!("result={}", preview)
+        } else {
             match success {
-                Some(true) => "success",
-                Some(false) => "failed",
-                None => "pending",
+                Some(true) => "success".to_string(),
+                Some(false) => "failed".to_string(),
+                None => String::new(),
             }
-        );
-        if let Some(preview) = result_preview {
-            summary = format!("{} | result={}", summary, preview);
-        }
+        };
 
         let metadata_json = if json_map.is_empty() {
             None
