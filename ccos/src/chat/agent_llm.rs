@@ -189,7 +189,29 @@ impl AgentLlmClient {
         }
 
         let response_json: serde_json::Value = response.json().await?;
-        let content = extract_openai_assistant_content(&response_json);
+        let mut content = extract_openai_assistant_content(&response_json);
+
+        // On empty body (rate-limit / transient error) retry once after a short delay
+        // rather than failing immediately, so the recurring schedule stays alive.
+        if content.trim().is_empty() && extract_openai_tool_calls(&response_json).is_empty() {
+            warn!("LLM returned empty body on first attempt; retrying after 4 s");
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            let retry_response = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+            if !retry_response.status().is_success() {
+                let error_text = retry_response.text().await?;
+                anyhow::bail!("OpenAI API error (retry): {}", error_text);
+            }
+            let retry_json: serde_json::Value = retry_response.json().await?;
+            content = extract_openai_assistant_content(&retry_json);
+            // If the retry also came back empty we bail below via the hard-fail guard.
+        }
 
         let tool_calls = extract_openai_tool_calls(&response_json);
         if !tool_calls.is_empty() {
@@ -945,7 +967,29 @@ Preferred response mode:
         }
 
         let response_json: serde_json::Value = response.json().await?;
-        let content = extract_openai_assistant_content(&response_json);
+        let mut content = extract_openai_assistant_content(&response_json);
+
+        // On empty body (rate-limit / transient error) retry once after a short delay
+        // rather than failing immediately, so the recurring schedule stays alive.
+        if content.trim().is_empty() && extract_openai_tool_calls(&response_json).is_empty() {
+            warn!("LLM returned empty body on iterative attempt; retrying after 4 s");
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            let retry_response = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+            if !retry_response.status().is_success() {
+                let error_text = retry_response.text().await?;
+                anyhow::bail!("OpenAI API error (retry): {}", error_text);
+            }
+            let retry_json: serde_json::Value = retry_response.json().await?;
+            content = extract_openai_assistant_content(&retry_json);
+            // If the retry also came back empty we bail below via the hard-fail guard.
+        }
 
         let tool_calls = extract_openai_tool_calls(&response_json);
         if !tool_calls.is_empty() {
