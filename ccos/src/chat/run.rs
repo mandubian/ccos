@@ -28,6 +28,8 @@ pub enum RunState {
     Failed { error: String },
     /// Run is scheduled to run in the future
     Scheduled,
+    /// Run is scheduled but manually paused – the scheduler will skip it until resumed
+    PausedSchedule { reason: String },
     /// Run was cancelled
     Cancelled,
 }
@@ -49,6 +51,11 @@ impl RunState {
         )
     }
 
+    /// Returns true when this is a scheduled task that has been manually paused.
+    pub fn is_schedule_paused(&self) -> bool {
+        matches!(self, RunState::PausedSchedule { .. })
+    }
+
     pub fn is_busy(&self) -> bool {
         matches!(self, RunState::Active) || self.is_paused()
     }
@@ -59,6 +66,9 @@ impl RunState {
             "Done" => Some(RunState::Done),
             "Scheduled" => Some(RunState::Scheduled),
             "Cancelled" => Some(RunState::Cancelled),
+            s if s.starts_with("PausedSchedule") => Some(RunState::PausedSchedule {
+                reason: "Restored from chain".to_string(),
+            }),
             s if s.starts_with("PausedApproval") => {
                 // Simplified: assuming format "PausedApproval { reason: \"...\" }" or similar
                 // For now, let's just use a default reason if we can't parse it perfectly
@@ -704,6 +714,54 @@ impl RunStore {
 
     pub fn cancel_run(&mut self, run_id: &str) -> bool {
         self.update_run_state(run_id, RunState::Cancelled)
+    }
+
+    /// Pause a `Scheduled` run so the scheduler skips it until it is explicitly resumed.
+    /// Returns `true` if the transition succeeded (run existed and was in `Scheduled` state).
+    pub fn pause_scheduled_run(&mut self, run_id: &str, reason: String) -> bool {
+        if let Some(run) = self.runs.get(run_id) {
+            if !matches!(run.state, RunState::Scheduled) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        self.update_run_state(run_id, RunState::PausedSchedule { reason })
+    }
+
+    /// Resume a `PausedSchedule` run back to `Scheduled`, recalculating `next_run_at`.
+    /// Returns `true` if the transition succeeded.
+    pub fn resume_scheduled_run(
+        &mut self,
+        run_id: &str,
+        calculate_next: impl Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        let schedule = {
+            if let Some(run) = self.runs.get(run_id) {
+                if !matches!(run.state, RunState::PausedSchedule { .. }) {
+                    return false;
+                }
+                run.schedule.clone()
+            } else {
+                return false;
+            }
+        };
+
+        let next_run_at = schedule.as_deref().and_then(calculate_next);
+
+        if let Some(run) = self.runs.get_mut(run_id) {
+            run.next_run_at = next_run_at;
+            run.transition(RunState::Scheduled);
+            log::info!(
+                "[RunStore] Resumed scheduled run {} back to Scheduled (next_run_at: {:?})",
+                run_id,
+                run.next_run_at,
+            );
+            self.save_to_disk();
+            true
+        } else {
+            false
+        }
     }
 
     /// Complete a run and create the next recurring run if applicable.
