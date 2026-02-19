@@ -211,20 +211,30 @@ struct GatewayCancelRunResponse {
     previous_state: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GatewayPauseRunResponse {
+    run_id: String,
+    paused: bool,
+    previous_state: String,
+}
+
 /// A row in the Runs tab tree view.
 #[derive(Debug, Clone)]
 enum RunDisplayItem {
     /// Header row for a group of runs sharing the same recurring schedule.
     ScheduleGroup {
-        #[allow(dead_code)]
         group_id: String,
         goal: String,
         schedule: String,
         instance_count: usize,
         next_run_at: Option<String>,
-        /// Run ID of the currently-`Scheduled` run in this group.
+        /// Run ID of the currently-`Scheduled` or `PausedSchedule` run in this group.
         /// Cancelling the group cancels this run, stopping future firings.
         pending_run_id: Option<String>,
+        /// True when the pending run is in `PausedSchedule` state (rather than `Scheduled`).
+        is_schedule_paused: bool,
+        /// True when the children are hidden (collapsed).
+        collapsed: bool,
     },
     /// An individual run instance (child under a group or standalone).
     RunInstance {
@@ -242,15 +252,63 @@ impl RunDisplayItem {
             RunDisplayItem::RunInstance { run, .. } => Some(run.run_id.clone()),
         }
     }
+
+    /// Run ID to pause when the user presses `z` on this item.
+    /// Works on a `ScheduleGroup` header (non-paused) and on a `RunInstance` that is
+    /// currently in `Scheduled` state, so the key works regardless of which row is selected.
+    fn pause_run_id(&self) -> Option<String> {
+        match self {
+            RunDisplayItem::ScheduleGroup {
+                pending_run_id,
+                is_schedule_paused,
+                ..
+            } if !is_schedule_paused => pending_run_id.clone(),
+            RunDisplayItem::RunInstance { run, .. }
+                if run.state.contains("Scheduled")
+                    && !run.state.contains("PausedSchedule") =>
+            {
+                Some(run.run_id.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Run ID to unpause (resume) when the user presses `u` on this item.
+    /// Works on a `ScheduleGroup` header (paused) and on a `RunInstance` that is in
+    /// `PausedSchedule` state.
+    fn unpause_run_id(&self) -> Option<String> {
+        match self {
+            RunDisplayItem::ScheduleGroup {
+                pending_run_id,
+                is_schedule_paused,
+                ..
+            } if *is_schedule_paused => pending_run_id.clone(),
+            RunDisplayItem::RunInstance { run, .. }
+                if run.state.contains("PausedSchedule") =>
+            {
+                Some(run.run_id.clone())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A row in the Events tab session-grouped tree view.
 #[derive(Debug, Clone)]
 enum EventDisplayItem {
-    /// Session header row (non-selectable separator).
-    SessionHeader { session_id: String, event_count: usize },
+    /// Session header row (selectable; pressing Enter toggles collapse).
+    SessionHeader { session_id: String, event_count: usize, collapsed: bool },
     /// An individual event entry (selectable).
     EventEntry { event_idx: usize },
+}
+
+/// A row in the LLM tab session-grouped tree view.
+#[derive(Debug, Clone)]
+enum LlmDisplayItem {
+    /// Session header (selectable; Enter toggles collapse).
+    SessionHeader { session_id: String, count: usize, collapsed: bool },
+    /// A single LLM consultation entry (one row per call).
+    ConsultationEntry { consultation_idx: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +363,21 @@ struct MonitorState {
     active_spawn_llm_profile: Option<String>,
     should_quit: bool,
     status_message: String,
+    /// Collapsed state per schedule group_id (true = collapsed).
+    /// Set to default on first encounter; preserved after manual toggle.
+    run_group_collapsed: HashMap<String, bool>,
+    /// Collapsed state per event session_id (true = collapsed).
+    event_session_collapsed: HashMap<String, bool>,
+    /// Flat list of LLM display items (session headers + consultation entries).
+    llm_display_items: Vec<LlmDisplayItem>,
+    /// Currently selected row in the LLM tab.
+    selected_llm_index: usize,
+    /// Collapsed state per LLM session_id (true = collapsed).
+    llm_session_collapsed: HashMap<String, bool>,
+    /// Whether the LLM detail popup is shown.
+    show_llm_detail: bool,
+    /// Scroll offset for the LLM detail popup.
+    llm_detail_scroll: u16,
 }
 
 impl MonitorState {
@@ -337,6 +410,13 @@ impl MonitorState {
             active_spawn_llm_profile,
             should_quit: false,
             status_message: "Connected to gateway".to_string(),
+            run_group_collapsed: HashMap::new(),
+            event_session_collapsed: HashMap::new(),
+            llm_display_items: Vec::new(),
+            selected_llm_index: 0,
+            llm_session_collapsed: HashMap::new(),
+            show_llm_detail: false,
+            llm_detail_scroll: 0,
         }
     }
 
@@ -351,6 +431,118 @@ impl MonitorState {
             self.available_llm_profiles
                 .get(self.selected_profile_index - 1)
                 .cloned()
+        }
+    }
+
+    /// Rebuild the LLM display items from llm_consultations, grouped by session.
+    fn rebuild_llm_display_items(&mut self) {
+        self.llm_display_items.clear();
+
+        // Collect sessions in newest-first order with their consultation indices.
+        let mut session_order: Vec<String> = Vec::new();
+        let mut session_map: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+
+        // Iterate in reverse so newest sessions appear first.
+        for (idx, (session_id, _)) in self.llm_consultations.iter().enumerate().rev() {
+            let entry = session_map.entry(session_id.clone()).or_insert_with(Vec::new);
+            entry.push(idx);
+            if !session_order.contains(session_id) {
+                session_order.push(session_id.clone());
+            }
+        }
+
+        for session_id in &session_order {
+            if let Some(indices) = session_map.get(session_id) {
+                let is_active = self.agents.contains_key(session_id);
+                let collapsed = *self
+                    .llm_session_collapsed
+                    .entry(session_id.clone())
+                    .or_insert(!is_active);
+
+                self.llm_display_items.push(LlmDisplayItem::SessionHeader {
+                    session_id: session_id.clone(),
+                    count: indices.len(),
+                    collapsed,
+                });
+                if !collapsed {
+                    for &idx in indices {
+                        self.llm_display_items
+                            .push(LlmDisplayItem::ConsultationEntry { consultation_idx: idx });
+                    }
+                }
+            }
+        }
+    }
+
+    fn navigate_llm_selection(&mut self, delta: i32) {
+        let len = self.llm_display_items.len();
+        if len == 0 {
+            return;
+        }
+        let len_i = len as i32;
+        let dir = if delta >= 0 { 1i32 } else { -1i32 };
+        let mut remaining = delta.abs();
+        let mut idx = self.selected_llm_index as i32;
+        while remaining > 0 {
+            idx = (idx + dir).rem_euclid(len_i);
+            remaining -= 1;
+        }
+        self.selected_llm_index = idx as usize;
+    }
+
+    fn sync_llm_selection(&mut self) {
+        let len = self.llm_display_items.len();
+        if self.selected_llm_index >= len {
+            self.selected_llm_index = len.saturating_sub(1);
+        }
+        // Close the detail popup if the selected entry disappeared (e.g. session collapsed).
+        if self.show_llm_detail {
+            if !matches!(
+                self.llm_display_items.get(self.selected_llm_index),
+                Some(LlmDisplayItem::ConsultationEntry { .. })
+            ) {
+                self.show_llm_detail = false;
+            }
+        }
+    }
+
+    /// Toggle collapse for the currently selected LLM session header.
+    fn toggle_selected_llm_session_collapse(&mut self) {
+        if let Some(LlmDisplayItem::SessionHeader { session_id, collapsed, .. }) =
+            self.llm_display_items.get(self.selected_llm_index)
+        {
+            let new_collapsed = !collapsed;
+            let sid = session_id.clone();
+            self.llm_session_collapsed.insert(sid, new_collapsed);
+            self.rebuild_llm_display_items();
+            self.sync_llm_selection();
+        }
+    }
+
+    /// Toggle collapse for the currently selected run group (if a ScheduleGroup is selected).
+    fn toggle_selected_run_group_collapse(&mut self) {
+        if let Some(RunDisplayItem::ScheduleGroup { group_id, collapsed, .. }) =
+            self.display_items.get(self.selected_run_index)
+        {
+            let new_collapsed = !collapsed;
+            let gid = group_id.clone();
+            self.run_group_collapsed.insert(gid, new_collapsed);
+            self.rebuild_display_items();
+            self.sync_run_selection();
+        }
+    }
+
+    /// Toggle collapse for the currently selected event session (if a SessionHeader is selected).
+    fn toggle_selected_event_session_collapse(&mut self) {
+        if let Some(EventDisplayItem::SessionHeader { session_id, collapsed, .. }) =
+            self.event_display_items.get(self.selected_event_index)
+        {
+            let new_collapsed = !collapsed;
+            let sid = session_id.clone();
+            self.event_session_collapsed.insert(sid, new_collapsed);
+            self.rebuild_event_display_items();
+            self.sync_event_selection();
         }
     }
 
@@ -385,17 +577,6 @@ impl MonitorState {
         self.ordered_session_ids
             .get(self.selected_runs_session_idx)
             .map(|s| s.as_str())
-    }
-
-    fn get_filtered_llm_consultations(&self) -> Vec<&(String, LlmConsultation)> {
-        if let Some(selected_id) = self.get_selected_session_id() {
-            self.llm_consultations
-                .iter()
-                .filter(|(session_id, _)| session_id == selected_id)
-                .collect()
-        } else {
-            self.llm_consultations.iter().collect()
-        }
     }
 
     fn selected_display_item(&self) -> Option<&RunDisplayItem> {
@@ -445,14 +626,25 @@ impl MonitorState {
                 .unwrap_or("?")
                 .to_string();
 
-            let pending_run_id = instances
+            // Find the run that is either waiting to fire (Scheduled) or manually paused (PausedSchedule).
+            let pending = instances
                 .iter()
-                .find(|r| r.state.contains("Scheduled"))
-                .map(|r| r.run_id.clone());
-            let next_run_at = instances
-                .iter()
-                .find(|r| r.state.contains("Scheduled"))
-                .and_then(|r| r.next_run_at.clone());
+                .find(|r| r.state.contains("Scheduled") || r.state.contains("PausedSchedule"));
+            let pending_run_id = pending.map(|r| r.run_id.clone());
+            let is_schedule_paused = pending
+                .map(|r| r.state.contains("PausedSchedule"))
+                .unwrap_or(false);
+            let next_run_at = pending.and_then(|r| r.next_run_at.clone());
+
+            // Default: expand if any run is Active or paused-while-running; collapse if all are terminal/scheduled.
+            let has_active = instances.iter().any(|r| {
+                r.state.contains("Active")
+                    || (r.state.contains("Paused") && !r.state.contains("PausedSchedule"))
+            });
+            let collapsed = *self
+                .run_group_collapsed
+                .entry(group_id.clone())
+                .or_insert(!has_active);
 
             self.display_items.push(RunDisplayItem::ScheduleGroup {
                 group_id,
@@ -461,17 +653,21 @@ impl MonitorState {
                 instance_count: instances.len(),
                 next_run_at,
                 pending_run_id,
+                is_schedule_paused,
+                collapsed,
             });
 
-            // Sort instances newest-first (RFC3339 strings sort lexicographically).
-            instances.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            let last = instances.len().saturating_sub(1);
-            for (idx, run) in instances.into_iter().enumerate() {
-                self.display_items.push(RunDisplayItem::RunInstance {
-                    run,
-                    grouped: true,
-                    is_last_in_group: idx == last,
-                });
+            if !collapsed {
+                // Sort instances newest-first (RFC3339 strings sort lexicographically).
+                instances.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                let last = instances.len().saturating_sub(1);
+                for (idx, run) in instances.into_iter().enumerate() {
+                    self.display_items.push(RunDisplayItem::RunInstance {
+                        run,
+                        grouped: true,
+                        is_last_in_group: idx == last,
+                    });
+                }
             }
         }
 
@@ -513,13 +709,23 @@ impl MonitorState {
 
         for session_id in &session_order {
             if let Some(indices) = session_map.get(session_id) {
+                // Default: expand if session has an active agent, collapse otherwise.
+                let is_active = self.agents.contains_key(session_id);
+                let collapsed = *self
+                    .event_session_collapsed
+                    .entry(session_id.clone())
+                    .or_insert(!is_active);
+
                 self.event_display_items.push(EventDisplayItem::SessionHeader {
                     session_id: session_id.clone(),
                     event_count: indices.len(),
+                    collapsed,
                 });
-                for &idx in indices {
-                    self.event_display_items
-                        .push(EventDisplayItem::EventEntry { event_idx: idx });
+                if !collapsed {
+                    for &idx in indices {
+                        self.event_display_items
+                            .push(EventDisplayItem::EventEntry { event_idx: idx });
+                    }
                 }
             }
         }
@@ -533,7 +739,8 @@ impl MonitorState {
             .count()
     }
 
-    /// Navigate event selection by `delta` steps, skipping SessionHeader rows.
+    /// Navigate event selection by `delta` steps.
+    /// SessionHeader rows are selectable (pressing Enter on one toggles collapse).
     fn navigate_event_selection(&mut self, delta: i32) {
         let len = self.event_display_items.len();
         if len == 0 {
@@ -546,17 +753,6 @@ impl MonitorState {
 
         while remaining > 0 {
             idx = (idx + dir).rem_euclid(len_i);
-            // Skip any SessionHeader rows in the direction of travel.
-            let mut guard = 0usize;
-            while guard < len
-                && matches!(
-                    self.event_display_items.get(idx as usize),
-                    Some(EventDisplayItem::SessionHeader { .. })
-                )
-            {
-                idx = (idx + dir).rem_euclid(len_i);
-                guard += 1;
-            }
             remaining -= 1;
         }
         self.selected_event_index = idx as usize;
@@ -736,35 +932,12 @@ impl MonitorState {
             }
         }
 
-        // Clamp selected_event_index.
+        // Clamp selected_event_index to valid range.
         let len = self.event_display_items.len();
         if self.selected_event_index >= len {
-            // Jump to last EventEntry.
-            self.selected_event_index = self
-                .event_display_items
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
+            self.selected_event_index = len.saturating_sub(1);
         }
-        // If on a header, advance to the next EventEntry.
-        if matches!(
-            self.event_display_items.get(self.selected_event_index),
-            Some(EventDisplayItem::SessionHeader { .. })
-        ) {
-            if let Some(idx) = self
-                .event_display_items
-                .iter()
-                .enumerate()
-                .skip(self.selected_event_index + 1)
-                .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
-                .map(|(idx, _)| idx)
-            {
-                self.selected_event_index = idx;
-            }
-        }
+        // Update the stable event ID from the (possibly new) index position.
         self.selected_event_id = self.event_id_for_display_index(self.selected_event_index);
     }
 
@@ -865,6 +1038,9 @@ impl MonitorState {
         if self.llm_consultations.len() > 50 {
             self.llm_consultations.remove(0);
         }
+
+        self.rebuild_llm_display_items();
+        self.sync_llm_selection();
     }
 }
 
@@ -1083,7 +1259,31 @@ async fn main() -> anyhow::Result<()> {
                                 continue;
                             }
 
-                            // Handle keys while detail popup is open
+                            // Handle keys while LLM detail popup is open
+                            if state.show_llm_detail {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') => {
+                                        state.show_llm_detail = false;
+                                        state.llm_detail_scroll = 0;
+                                    }
+                                    KeyCode::Up => {
+                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_sub(1);
+                                    }
+                                    KeyCode::Down => {
+                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_add(1);
+                                    }
+                                    KeyCode::PageUp => {
+                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_sub(10);
+                                    }
+                                    KeyCode::PageDown => {
+                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_add(10);
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
+
+                            // Handle keys while event detail popup is open
                             if state.show_event_detail {
                                 match key.code {
                                     KeyCode::Esc => {
@@ -1234,6 +1434,94 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     }
                                 }
+                                KeyCode::Char('z') => {
+                                    if state.selected_tab == 4 {
+                                        if let Some(run_id_to_pause) =
+                                            state.selected_display_item().and_then(|item| item.pause_run_id())
+                                        {
+                                            match pause_scheduled_run(
+                                                &client,
+                                                &args.gateway_url,
+                                                &args.token,
+                                                &run_id_to_pause,
+                                            )
+                                            .await
+                                            {
+                                                Ok(result) => {
+                                                    state.status_message = format!(
+                                                        "Run {} paused={} (was {})",
+                                                        result.run_id,
+                                                        result.paused,
+                                                        result.previous_state
+                                                    );
+                                                    if let Err(e) = refresh_runs_for_selected_session(
+                                                        &mut state,
+                                                        &client,
+                                                        &args.gateway_url,
+                                                        &args.token,
+                                                    )
+                                                    .await
+                                                    {
+                                                        state.status_message = format!(
+                                                            "Run paused, refresh failed: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    state.status_message =
+                                                        format!("Failed to pause run: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            state.status_message =
+                                                "No active scheduled run selected to pause".to_string();
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('u') => {
+                                    if state.selected_tab == 4 {
+                                        if let Some(run_id_to_unpause) =
+                                            state.selected_display_item().and_then(|item| item.unpause_run_id())
+                                        {
+                                            match resume_scheduled_run(
+                                                &client,
+                                                &args.gateway_url,
+                                                &args.token,
+                                                &run_id_to_unpause,
+                                            )
+                                            .await
+                                            {
+                                                Ok(()) => {
+                                                    state.status_message = format!(
+                                                        "Scheduled run {} unpaused",
+                                                        run_id_to_unpause
+                                                    );
+                                                    if let Err(e) = refresh_runs_for_selected_session(
+                                                        &mut state,
+                                                        &client,
+                                                        &args.gateway_url,
+                                                        &args.token,
+                                                    )
+                                                    .await
+                                                    {
+                                                        state.status_message = format!(
+                                                            "Run unpaused, refresh failed: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    state.status_message =
+                                                        format!("Failed to unpause run: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            state.status_message =
+                                                "No paused scheduled run selected to unpause".to_string();
+                                        }
+                                    }
+                                }
                                 KeyCode::Tab => {
                                     state.selected_tab = (state.selected_tab + 1) % 5;
                                     if state.selected_tab == 4 {
@@ -1282,6 +1570,8 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     } else if state.selected_tab == 2 {
                                         state.navigate_event_selection(-1);
+                                    } else if state.selected_tab == 3 {
+                                        state.navigate_llm_selection(-1);
                                     } else if state.selected_tab == 4 {
                                         if !state.display_items.is_empty() {
                                             if state.selected_run_index > 0 {
@@ -1299,6 +1589,8 @@ async fn main() -> anyhow::Result<()> {
                                             % state.agent_session_ids.len();
                                     } else if state.selected_tab == 2 {
                                         state.navigate_event_selection(1);
+                                    } else if state.selected_tab == 3 {
+                                        state.navigate_llm_selection(1);
                                     } else if state.selected_tab == 4 {
                                         if !state.display_items.is_empty() {
                                             state.selected_run_index =
@@ -1311,6 +1603,8 @@ async fn main() -> anyhow::Result<()> {
                                         let events_area = get_events_tab_area(terminal.size()?);
                                         let page_size = events_area.height.saturating_sub(2).max(1) as i32;
                                         state.navigate_event_selection(-page_size);
+                                    } else if state.selected_tab == 3 {
+                                        state.navigate_llm_selection(-10);
                                     }
                                 }
                                 KeyCode::PageDown => {
@@ -1318,6 +1612,8 @@ async fn main() -> anyhow::Result<()> {
                                         let events_area = get_events_tab_area(terminal.size()?);
                                         let page_size = events_area.height.saturating_sub(2).max(1) as i32;
                                         state.navigate_event_selection(page_size);
+                                    } else if state.selected_tab == 3 {
+                                        state.navigate_llm_selection(10);
                                     }
                                 }
                                 KeyCode::Home => {
@@ -1331,6 +1627,8 @@ async fn main() -> anyhow::Result<()> {
                                         {
                                             state.selected_event_index = idx;
                                         }
+                                    } else if state.selected_tab == 3 {
+                                        state.selected_llm_index = 0;
                                     }
                                 }
                                 KeyCode::End => {
@@ -1345,17 +1643,44 @@ async fn main() -> anyhow::Result<()> {
                                         {
                                             state.selected_event_index = idx;
                                         }
+                                    } else if state.selected_tab == 3 {
+                                        let last = state.llm_display_items.len().saturating_sub(1);
+                                        state.selected_llm_index = last;
                                     }
                                 }
-                                KeyCode::Enter => {
-                                    // Show event detail in Events tab
-                                    if state.selected_tab == 2 {
-                                        if state.get_selected_event().is_some() {
+                                KeyCode::Enter | KeyCode::Char(' ') => {
+                                    if state.selected_tab == 4 {
+                                        // Toggle collapse on a ScheduleGroup header.
+                                        state.toggle_selected_run_group_collapse();
+                                    } else if state.selected_tab == 2 {
+                                        // Toggle collapse on a SessionHeader; show detail on EventEntry.
+                                        if matches!(
+                                            state.event_display_items.get(state.selected_event_index),
+                                            Some(EventDisplayItem::SessionHeader { .. })
+                                        ) {
+                                            state.toggle_selected_event_session_collapse();
+                                        } else if state.get_selected_event().is_some() {
                                             state.selected_event_id =
                                                 state.event_id_for_display_index(state.selected_event_index);
                                             state.show_event_detail = true;
                                             state.detail_scroll = 0;
                                         }
+                                    } else if state.selected_tab == 3 {
+                                        match state.llm_display_items.get(state.selected_llm_index) {
+                                            Some(LlmDisplayItem::SessionHeader { .. }) => {
+                                                state.toggle_selected_llm_session_collapse();
+                                            }
+                                            Some(LlmDisplayItem::ConsultationEntry { .. }) => {
+                                                state.show_llm_detail = !state.show_llm_detail;
+                                                state.llm_detail_scroll = 0;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc => {
+                                    if state.show_llm_detail {
+                                        state.show_llm_detail = false;
                                     }
                                 }
                                 _ => {}
@@ -1398,22 +1723,85 @@ async fn main() -> anyhow::Result<()> {
                                                             .min(display_count.saturating_sub(viewport_height));
                                                         let clicked_idx = scroll_offset + inner_row;
                                                         if clicked_idx < display_count {
-                                                            // Only select EventEntry items, not headers.
-                                                            if matches!(
-                                                                state.event_display_items.get(clicked_idx),
-                                                                Some(EventDisplayItem::EventEntry { .. })
-                                                            ) {
-                                                                let clicked_event_id = state.event_id_for_display_index(clicked_idx);
-                                                                if state.show_event_detail
-                                                                    && state.selected_event_id == clicked_event_id
-                                                                    && clicked_event_id.is_some()
-                                                                {
-                                                                    state.show_event_detail = false;
-                                                                } else {
-                                                                    state.selected_event_index = clicked_idx;
-                                                                    state.selected_event_id = clicked_event_id;
-                                                                    state.show_event_detail = true;
+                                                            match state.event_display_items.get(clicked_idx) {
+                                                                Some(EventDisplayItem::SessionHeader { .. }) => {
+                                                                    // Click on header: select it, second click toggles collapse.
+                                                                    if clicked_idx == state.selected_event_index {
+                                                                        state.toggle_selected_event_session_collapse();
+                                                                    } else {
+                                                                        state.selected_event_index = clicked_idx;
+                                                                    }
                                                                 }
+                                                                Some(EventDisplayItem::EventEntry { .. }) => {
+                                                                    let clicked_event_id = state.event_id_for_display_index(clicked_idx);
+                                                                    if state.show_event_detail
+                                                                        && state.selected_event_id == clicked_event_id
+                                                                        && clicked_event_id.is_some()
+                                                                    {
+                                                                        state.show_event_detail = false;
+                                                                    } else {
+                                                                        state.selected_event_index = clicked_idx;
+                                                                        state.selected_event_id = clicked_event_id;
+                                                                        state.show_event_detail = true;
+                                                                    }
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            } else if state.selected_tab == 3 {
+                                let llm_area = get_llm_tab_area(terminal.size()?);
+                                let in_llm_area = mouse.column >= llm_area.x
+                                    && mouse.column < llm_area.x + llm_area.width
+                                    && mouse.row >= llm_area.y
+                                    && mouse.row < llm_area.y + llm_area.height;
+
+                                if in_llm_area {
+                                    let items_count = state.llm_display_items.len();
+                                    if items_count > 0 {
+                                        match mouse.kind {
+                                            MouseEventKind::ScrollUp => {
+                                                state.navigate_llm_selection(-1);
+                                            }
+                                            MouseEventKind::ScrollDown => {
+                                                state.navigate_llm_selection(1);
+                                            }
+                                            MouseEventKind::Down(MouseButton::Left) => {
+                                                if llm_area.height > 2 && mouse.row > llm_area.y {
+                                                    let viewport_height =
+                                                        llm_area.height.saturating_sub(2) as usize;
+                                                    let inner_row =
+                                                        mouse.row.saturating_sub(llm_area.y + 1) as usize;
+                                                    if inner_row < viewport_height {
+                                                        let scroll_offset = state
+                                                            .selected_llm_index
+                                                            .saturating_sub(viewport_height / 2)
+                                                            .min(items_count.saturating_sub(viewport_height));
+                                                        let clicked_idx = scroll_offset + inner_row;
+                                                        if clicked_idx < items_count {
+                                                            match state.llm_display_items.get(clicked_idx) {
+                                                                Some(LlmDisplayItem::SessionHeader { .. }) => {
+                                                                    if clicked_idx == state.selected_llm_index {
+                                                                        state.toggle_selected_llm_session_collapse();
+                                                                    } else {
+                                                                        state.selected_llm_index = clicked_idx;
+                                                                    }
+                                                                }
+                                                                Some(LlmDisplayItem::ConsultationEntry { .. }) => {
+                                                                    if clicked_idx == state.selected_llm_index {
+                                                                        state.show_llm_detail = !state.show_llm_detail;
+                                                                        state.llm_detail_scroll = 0;
+                                                                    } else {
+                                                                        state.selected_llm_index = clicked_idx;
+                                                                    }
+                                                                }
+                                                                _ => {}
                                                             }
                                                         }
                                                     }
@@ -1462,7 +1850,18 @@ async fn main() -> anyhow::Result<()> {
                                                         let clicked_index = scroll_offset + inner_row;
 
                                                         if clicked_index < items_count {
-                                                            state.selected_run_index = clicked_index;
+                                                            // If clicking an already-selected ScheduleGroup, toggle collapse.
+                                                            // Otherwise just select it.
+                                                            if clicked_index == state.selected_run_index
+                                                                && matches!(
+                                                                    state.display_items.get(clicked_index),
+                                                                    Some(RunDisplayItem::ScheduleGroup { .. })
+                                                                )
+                                                            {
+                                                                state.toggle_selected_run_group_collapse();
+                                                            } else {
+                                                                state.selected_run_index = clicked_index;
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2030,6 +2429,55 @@ async fn cancel_run(
     Ok(body)
 }
 
+async fn pause_scheduled_run(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+    run_id: &str,
+) -> anyhow::Result<GatewayPauseRunResponse> {
+    let url = format!("{}/chat/run/{}/pause", gateway_url, run_id);
+    let resp = client
+        .post(&url)
+        .header("X-Agent-Token", token)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to pause run {}: HTTP {}",
+            run_id,
+            resp.status()
+        ));
+    }
+
+    let body = resp.json::<GatewayPauseRunResponse>().await?;
+    Ok(body)
+}
+
+async fn resume_scheduled_run(
+    client: &Client,
+    gateway_url: &str,
+    token: &str,
+    run_id: &str,
+) -> anyhow::Result<()> {
+    let url = format!("{}/chat/run/{}/resume", gateway_url, run_id);
+    let resp = client
+        .post(&url)
+        .header("X-Agent-Token", token)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to resume scheduled run {}: HTTP {}",
+            run_id,
+            resp.status()
+        ));
+    }
+
+    Ok(())
+}
+
 async fn refresh_runs_for_selected_session(
     state: &mut MonitorState,
     client: &Client,
@@ -2319,6 +2767,25 @@ async fn connect_to_session_stream(
 }
 
 fn get_events_tab_area(screen: Rect) -> Rect {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
+        ])
+        .split(screen);
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(10)])
+        .split(chunks[1]);
+
+    main_chunks[1]
+}
+
+fn get_llm_tab_area(screen: Rect) -> Rect {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -2863,7 +3330,7 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         String::new()
     };
     let title = format!(
-        "Runs for {} (loaded: {}) · [r] refresh  [c] cancel  [↑↓] navigate{}",
+        "Runs for {} (loaded: {}) · [r] refresh  [↵/⎵] expand  [c] cancel  [↑↓] navigate{}",
         session_id, loaded_for, session_nav
     );
 
@@ -2885,6 +3352,8 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                 instance_count,
                 next_run_at,
                 pending_run_id,
+                is_schedule_paused,
+                collapsed,
                 ..
             } => {
                 let next_str = next_run_at
@@ -2894,13 +3363,24 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                         s.get(11..19).unwrap_or(s)
                     })
                     .unwrap_or("-");
-                let cancel_hint = if pending_run_id.is_some() {
-                    " [c=cancel]"
+                let action_hint = if pending_run_id.is_some() {
+                    if *is_schedule_paused {
+                        " [u=unpause c=cancel]"
+                    } else {
+                        " [z=pause c=cancel]"
+                    }
                 } else {
                     " [completed]"
                 };
+                let (sched_icon, schedule_color, next_label) = if *is_schedule_paused {
+                    ("⏸ ", Color::Yellow, "paused")
+                } else {
+                    ("📅 ", Color::Cyan, "next")
+                };
+                let collapse_icon = if *collapsed { "▶ " } else { "▼ " };
                 let line = Line::from(vec![
-                    Span::styled("📅 ", Style::default().fg(Color::Yellow)),
+                    Span::styled(collapse_icon, Style::default().fg(Color::DarkGray)),
+                    Span::styled(sched_icon, Style::default().fg(schedule_color)),
                     Span::styled(
                         single_line(goal, 40),
                         Style::default()
@@ -2909,18 +3389,22 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                     ),
                     Span::styled(
                         format!("  {}  ", schedule),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(schedule_color),
                     ),
                     Span::styled(
                         format!("[{} runs]", instance_count),
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(
-                        format!("  next: {}", next_str),
-                        Style::default().fg(Color::Green),
+                        format!("  {}: {}", next_label, next_str),
+                        Style::default().fg(if *is_schedule_paused {
+                            Color::Yellow
+                        } else {
+                            Color::Green
+                        }),
                     ),
                     Span::styled(
-                        cancel_hint.to_string(),
+                        action_hint.to_string(),
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]);
@@ -2946,6 +3430,8 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                     Color::DarkGray
                 } else if run.state.contains("Cancelled") || run.state.contains("Failed") {
                     Color::Red
+                } else if run.state.contains("PausedSchedule") {
+                    Color::Yellow
                 } else if run.state.contains("Scheduled") {
                     Color::Cyan
                 } else if run.state.contains("Paused") {
@@ -3045,16 +3531,36 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .map(|(display_idx, item)| {
             let is_selected = display_idx == state.selected_event_index;
             match item {
-                EventDisplayItem::SessionHeader { session_id, event_count } => {
-                    let hdr_style = Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD);
+                EventDisplayItem::SessionHeader { session_id, event_count, collapsed } => {
+                    let hdr_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    let collapse_icon = if *collapsed { "▶─ " } else { "▼─ " };
                     Line::from(vec![
-                        Span::styled("┌─ ", hdr_style),
+                        Span::styled(collapse_icon, hdr_style),
                         Span::styled(session_id.clone(), hdr_style),
                         Span::styled(
                             format!("  {} event(s)", event_count),
-                            Style::default().fg(Color::DarkGray),
+                            if is_selected {
+                                hdr_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                        Span::styled(
+                            if *collapsed { "  [↵ expand]" } else { "  [↵ collapse]" },
+                            if is_selected {
+                                hdr_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
                         ),
                     ])
                 }
@@ -3116,7 +3622,7 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .collect();
 
     let title = format!(
-        "Events ({} entries, {} sessions) · ↑↓ PgUp/PgDn Home/End Enter | i: {}",
+        "Events ({} entries, {} sessions) · ↑↓ navigate  ↵/⎵ expand/detail | i: {}",
         entry_count,
         session_count,
         if state.show_internal_steps {
@@ -3629,19 +4135,19 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let filtered_consultations = state.get_filtered_llm_consultations();
+    let display_items = &state.llm_display_items;
 
-    if filtered_consultations.is_empty() {
+    if display_items.is_empty() {
         let message = if state.llm_consultations.is_empty() {
             "No LLM consultations yet.\n\nAgent LLM consultations will appear here when the agent is running in autonomous mode."
         } else {
-            "No LLM consultations for selected agent.\n\nSelect an agent in the Agents tab to filter consultations."
+            "No LLM consultations to display."
         };
         let empty = Paragraph::new(message)
             .style(Style::default().fg(Color::DarkGray))
             .block(
                 Block::default()
-                    .title("LLM Consultations")
+                    .title("LLM Consultations · ↑↓ navigate  ↵/⎵ expand/detail")
                     .borders(Borders::ALL),
             )
             .wrap(Wrap { trim: true });
@@ -3649,133 +4155,274 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         return;
     }
 
-    let text: Vec<Line> = filtered_consultations
+    let total_count = display_items.len();
+    let session_count = display_items
         .iter()
-        .rev()
-        .flat_map(|(session_id, consultation)| {
-            let complete_icon = if consultation.task_complete {
-                "✓"
-            } else {
-                "→"
-            };
-            let complete_color = if consultation.task_complete {
-                Color::Green
-            } else {
-                Color::Yellow
-            };
-            let init_str = if consultation.is_initial {
-                "initial"
-            } else {
-                "follow-up"
-            };
-            let model_str = consultation.model.as_deref().unwrap_or("unknown");
-            let caps_str = if consultation.planned_capabilities.is_empty() {
-                "none".to_string()
-            } else {
-                consultation.planned_capabilities.join(", ")
-            };
+        .filter(|i| matches!(i, LlmDisplayItem::SessionHeader { .. }))
+        .count();
+    let entry_count = display_items
+        .iter()
+        .filter(|i| matches!(i, LlmDisplayItem::ConsultationEntry { .. }))
+        .count();
 
-            // Truncate understanding and reasoning if too long
-            let understanding: String = if consultation.understanding.len() > 100 {
-                format!("{}...", &consultation.understanding[..97])
-            } else {
-                consultation.understanding.clone()
-            };
-            let reasoning: String = if consultation.reasoning.len() > 100 {
-                format!("{}...", &consultation.reasoning[..97])
-            } else {
-                consultation.reasoning.clone()
-            };
-            let prompt_preview = consultation.prompt.as_ref().map(|p| {
-                if p.len() > 100 {
-                    format!("{}...", &p[..97])
-                } else {
-                    p.clone()
-                }
-            });
-            let response_preview = consultation.response.as_ref().map(|r| {
-                if r.len() > 100 {
-                    format!("{}...", &r[..97])
-                } else {
-                    r.clone()
-                }
-            });
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let scroll_offset = state
+        .selected_llm_index
+        .min(total_count.saturating_sub(1))
+        .saturating_sub(viewport_height / 2)
+        .min(total_count.saturating_sub(viewport_height));
 
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("[Iter {}] ", consultation.iteration),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::styled(
-                        format!("[{}] ", complete_icon),
-                        Style::default().fg(complete_color),
-                    ),
-                    Span::styled(
-                        format!("[{}] ", init_str),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(session_id.clone(), Style::default().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Model: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(model_str.to_string(), Style::default().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Understanding: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(understanding, Style::default().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Reasoning: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(reasoning, Style::default().fg(Color::White)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Planned: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(caps_str, Style::default().fg(Color::Cyan)),
-                ]),
-            ];
-            if let Some(ref p) = prompt_preview {
-                lines.push(Line::from(vec![
-                    Span::styled("  Prompt: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(p.clone(), Style::default().fg(Color::White)),
-                ]));
-            }
-            if let Some(ref r) = response_preview {
-                lines.push(Line::from(vec![
-                    Span::styled("  Response: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(r.clone(), Style::default().fg(Color::White)),
-                ]));
-            }
-            if let Some(ref usage) = consultation.token_usage {
-                lines.push(Line::from(vec![
-                    Span::styled("  Tokens: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        format!(
-                            "prompt={} completion={} total={}",
-                            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+    let visible_items: Vec<Line> = display_items
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(viewport_height + 1)
+        .map(|(display_idx, item)| {
+            let is_selected = display_idx == state.selected_llm_index;
+            match item {
+                LlmDisplayItem::SessionHeader { session_id, count, collapsed } => {
+                    let hdr_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    let collapse_icon = if *collapsed { "▶─ " } else { "▼─ " };
+                    let action = if *collapsed { "  [↵ expand]" } else { "  [↵ collapse]" };
+                    Line::from(vec![
+                        Span::styled(collapse_icon, hdr_style),
+                        Span::styled(session_id.clone(), hdr_style),
+                        Span::styled(
+                            format!("  {} call(s)", count),
+                            if is_selected { hdr_style } else { Style::default().fg(Color::DarkGray) },
                         ),
-                        Style::default().fg(Color::White),
-                    ),
-                ]));
+                        Span::styled(
+                            action,
+                            if is_selected { hdr_style } else { Style::default().fg(Color::DarkGray) },
+                        ),
+                    ])
+                }
+                LlmDisplayItem::ConsultationEntry { consultation_idx } => {
+                    let (session_id, consultation) = &state.llm_consultations[*consultation_idx];
+                    let complete_icon = if consultation.task_complete { "✓" } else { "→" };
+                    let complete_color = if consultation.task_complete { Color::Green } else { Color::Yellow };
+                    let init_str = if consultation.is_initial { "init" } else { "fup " };
+                    let model_str = consultation
+                        .model
+                        .as_deref()
+                        .unwrap_or("?")
+                        .split('/')
+                        .last()
+                        .unwrap_or("?");
+                    let caps_str = if consultation.planned_capabilities.is_empty() {
+                        "-".to_string()
+                    } else {
+                        consultation.planned_capabilities.join(", ")
+                    };
+                    let understanding_preview = single_line(&consultation.understanding, 35);
+                    let base = if is_selected {
+                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    let _ = session_id; // grouped under header; not repeated per row
+                    Line::from(vec![
+                        Span::styled(
+                            "│ ",
+                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
+                        ),
+                        Span::styled(
+                            format!("[{:>3}] ", consultation.iteration),
+                            if is_selected { base } else { Style::default().fg(Color::Cyan) },
+                        ),
+                        Span::styled(
+                            format!("[{}] ", complete_icon),
+                            if is_selected { base } else { Style::default().fg(complete_color) },
+                        ),
+                        Span::styled(
+                            format!("[{}] ", init_str),
+                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
+                        ),
+                        Span::styled(
+                            format!("{:<16} ", model_str),
+                            if is_selected { base } else { Style::default().fg(Color::White) },
+                        ),
+                        Span::styled(
+                            understanding_preview,
+                            if is_selected { base } else { Style::default().fg(Color::White) },
+                        ),
+                        Span::styled(
+                            format!("  caps: {}", single_line(&caps_str, 25)),
+                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
+                        ),
+                    ])
+                }
             }
-            lines.push(Line::from(""));
-            lines
         })
         .collect();
 
-    let title = if state.get_selected_session_id().is_some() {
-        format!(
-            "LLM Consultations (filtered: {}/{})",
-            filtered_consultations.len(),
-            state.llm_consultations.len()
-        )
-    } else {
-        format!("LLM Consultations ({})", state.llm_consultations.len())
-    };
+    let title = format!(
+        "LLM Consultations ({} calls, {} sessions) · ↑↓ navigate  ↵/⎵ expand/detail",
+        entry_count, session_count
+    );
 
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
-
+    let paragraph = Paragraph::new(visible_items)
+        .block(Block::default().title(title).borders(Borders::ALL));
     f.render_widget(paragraph, area);
+
+    // Detail popup for the selected consultation
+    if state.show_llm_detail {
+        if let Some(LlmDisplayItem::ConsultationEntry { consultation_idx }) =
+            state.llm_display_items.get(state.selected_llm_index)
+        {
+            let (session_id, consultation) = &state.llm_consultations[*consultation_idx];
+            draw_llm_detail_popup(f, area, session_id, consultation, state.llm_detail_scroll);
+        }
+    }
+}
+
+fn draw_llm_detail_popup(
+    f: &mut Frame,
+    area: Rect,
+    session_id: &str,
+    consultation: &LlmConsultation,
+    scroll: u16,
+) {
+    let popup_area = centered_rect(85, 85, area);
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    let label_style = Style::default().fg(Color::Yellow);
+    let value_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    lines.push(Line::from(vec![Span::styled(
+        "LLM Consultation Detail",
+        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(vec![
+        Span::styled("Session:    ", label_style),
+        Span::styled(session_id, value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Iteration:  ", label_style),
+        Span::styled(format!("{}", consultation.iteration), value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Type:       ", label_style),
+        Span::styled(
+            if consultation.is_initial { "initial" } else { "follow-up" },
+            value_style,
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Complete:   ", label_style),
+        Span::styled(
+            if consultation.task_complete { "yes ✓" } else { "no →" },
+            if consultation.task_complete {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Yellow)
+            },
+        ),
+    ]));
+    if let Some(ref model) = consultation.model {
+        lines.push(Line::from(vec![
+            Span::styled("Model:      ", label_style),
+            Span::styled(model.as_str(), value_style),
+        ]));
+    }
+    if let Some(ref usage) = consultation.token_usage {
+        lines.push(Line::from(vec![
+            Span::styled("Tokens:     ", label_style),
+            Span::styled(
+                format!(
+                    "prompt={} completion={} total={}",
+                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+                ),
+                value_style,
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+
+    // Planned capabilities
+    if !consultation.planned_capabilities.is_empty() {
+        lines.push(Line::from(vec![Span::styled("Planned capabilities:", label_style)]));
+        for cap in &consultation.planned_capabilities {
+            lines.push(Line::from(vec![
+                Span::styled("  • ", dim_style),
+                Span::styled(cap.as_str(), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Understanding
+    lines.push(Line::from(vec![Span::styled("Understanding:", label_style)]));
+    for line in consultation.understanding.lines() {
+        lines.push(Line::from(vec![
+            Span::styled("  ", dim_style),
+            Span::styled(line, value_style),
+        ]));
+    }
+    lines.push(Line::from(""));
+
+    // Reasoning
+    lines.push(Line::from(vec![Span::styled("Reasoning:", label_style)]));
+    for line in consultation.reasoning.lines() {
+        lines.push(Line::from(vec![
+            Span::styled("  ", dim_style),
+            Span::styled(line, value_style),
+        ]));
+    }
+    lines.push(Line::from(""));
+
+    // Prompt (full)
+    if let Some(ref prompt) = consultation.prompt {
+        lines.push(Line::from(vec![Span::styled("Prompt:", label_style)]));
+        for line in prompt.lines() {
+            lines.push(Line::from(vec![
+                Span::styled("  ", dim_style),
+                Span::styled(line, dim_style),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Response (full)
+    if let Some(ref response) = consultation.response {
+        lines.push(Line::from(vec![Span::styled("Response:", label_style)]));
+        for line in response.lines() {
+            lines.push(Line::from(vec![
+                Span::styled("  ", dim_style),
+                Span::styled(line, value_style),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![Span::styled(
+        "─── Esc / Enter / Space to close ───",
+        dim_style,
+    )]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title("LLM Detail  [↑↓/PgUp/PgDn to scroll]")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        )
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, popup_area);
 }

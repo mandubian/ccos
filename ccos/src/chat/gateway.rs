@@ -1070,6 +1070,7 @@ impl ChatGateway {
             .route("/chat/run/:run_id", get(get_run_handler))
             .route("/chat/run/:run_id/actions", get(list_run_actions_handler))
             .route("/chat/run/:run_id/cancel", post(cancel_run_handler))
+            .route("/chat/run/:run_id/pause", post(pause_run_handler))
             .route("/chat/run/:run_id/transition", post(transition_run_handler))
             .route("/chat/run/:run_id/resume", post(resume_run_handler))
             .route("/chat/run/:run_id/checkpoint", post(checkpoint_run_handler))
@@ -3504,118 +3505,189 @@ async fn create_run_handler(
     }))
 }
 
-/// Resume a paused run from checkpoint
+/// Resume a paused run.
+///
+/// Handles two distinct pause kinds:
+/// - `PausedCheckpoint`: loads the checkpoint, transitions to `Active`, and re-spawns the agent.
+/// - `PausedSchedule`:   recalculates `next_run_at` and transitions back to `Scheduled`.
 async fn resume_run_handler(
     State(state): State<Arc<GatewayState>>,
     headers: axum::http::HeaderMap,
     axum::extract::Path(run_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    // 1. Auth check
-    let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
-    let maybe_secret = headers
-        .get("X-Internal-Secret")
-        .and_then(|v| v.to_str().ok());
+    // 1. Auth check (admin, agent token, or internal secret)
+    let is_admin = is_admin_request(&state, &headers);
+    if !is_admin {
+        let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+        let maybe_secret = headers
+            .get("X-Internal-Secret")
+            .and_then(|v| v.to_str().ok());
 
-    match (maybe_token, maybe_secret) {
-        (Some(token), _) => {
-            let session_id = {
-                let store = state
-                    .run_store
-                    .lock()
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
-                run.session_id.clone()
-            };
+        match (maybe_token, maybe_secret) {
+            (Some(token), _) => {
+                let session_id = {
+                    let store = state
+                        .run_store
+                        .lock()
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+                    run.session_id.clone()
+                };
 
-            let _session = state
-                .session_registry
-                .validate_token(&session_id, token)
-                .await
-                .ok_or(StatusCode::UNAUTHORIZED)?;
-        }
-        (_, Some(secret)) => {
-            // Validate internal secret
-            if secret != state.internal_api_secret {
-                return Err(StatusCode::UNAUTHORIZED);
+                let _session = state
+                    .session_registry
+                    .validate_token(&session_id, token)
+                    .await
+                    .ok_or(StatusCode::UNAUTHORIZED)?;
             }
+            (_, Some(secret)) => {
+                if secret != state.internal_api_secret {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
+            _ => return Err(StatusCode::UNAUTHORIZED),
         }
-        _ => return Err(StatusCode::UNAUTHORIZED),
     }
 
-    let (session_id, budget, checkpoint_id) = {
+    // 2. Inspect current state to decide which resume path to take
+    let current_state = {
         let store = state
             .run_store
             .lock()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
-
-        if !matches!(run.state, RunState::PausedCheckpoint { .. }) {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-
-        (
-            run.session_id.clone(),
-            run.budget.clone(),
-            run.latest_checkpoint_id.clone(),
-        )
+        run.state.clone()
     };
 
-    SheriffLogger::log_run(
-        "RESUME",
-        &run_id,
-        &session_id,
-        &format!("Resuming from checkpoint {:?}", checkpoint_id),
-    );
+    match current_state {
+        // ── PausedSchedule: simply unfreeze the scheduler entry ──────────────
+        RunState::PausedSchedule { .. } => {
+            let session_id = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                store
+                    .get_run(&run_id)
+                    .ok_or(StatusCode::NOT_FOUND)?
+                    .session_id
+                    .clone()
+            };
 
-    // 2. Load checkpoint
-    let ckpt_id = checkpoint_id.ok_or(StatusCode::BAD_REQUEST)?;
-    let ckpt = state
-        .checkpoint_store
-        .get_checkpoint(&ckpt_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+            SheriffLogger::log_run(
+                "RESUME_SCHEDULE",
+                &run_id,
+                &session_id,
+                "Resuming paused scheduled run",
+            );
 
-    // 3. Update state to Active
-    {
-        let mut store = state
-            .run_store
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store.update_run_state(&run_id, RunState::Active);
+            let resumed = {
+                let mut store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                store.resume_scheduled_run(&run_id, |sched| {
+                    crate::chat::Scheduler::calculate_next_run(sched)
+                })
+            };
+
+            if !resumed {
+                return Err(StatusCode::CONFLICT);
+            }
+
+            let _ = record_chat_audit_event(
+                &state.chain,
+                "chat",
+                "chat",
+                &session_id,
+                &run_id,
+                "run.resume_schedule",
+                "run.resume_schedule",
+                {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "rule_id".to_string(),
+                        Value::String("chat.run.resume_schedule".to_string()),
+                    );
+                    m
+                },
+                crate::types::ActionType::InternalStep,
+            );
+
+            Ok(StatusCode::OK)
+        }
+
+        // ── PausedCheckpoint: reload checkpoint and re-spawn agent ────────────
+        RunState::PausedCheckpoint { .. } => {
+            let (session_id, budget, checkpoint_id) = {
+                let store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+                (
+                    run.session_id.clone(),
+                    run.budget.clone(),
+                    run.latest_checkpoint_id.clone(),
+                )
+            };
+
+            SheriffLogger::log_run(
+                "RESUME",
+                &run_id,
+                &session_id,
+                &format!("Resuming from checkpoint {:?}", checkpoint_id),
+            );
+
+            let ckpt_id = checkpoint_id.ok_or(StatusCode::BAD_REQUEST)?;
+            let ckpt = state
+                .checkpoint_store
+                .get_checkpoint(&ckpt_id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .ok_or(StatusCode::NOT_FOUND)?;
+
+            {
+                let mut store = state
+                    .run_store
+                    .lock()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                store.update_run_state(&run_id, RunState::Active);
+            }
+
+            if let Err(e) = state
+                .spawn_agent_for_run(&session_id, &run_id, Some(budget))
+                .await
+            {
+                log::error!(
+                    "[Gateway] Failed to spawn agent for resume {}: {}",
+                    run_id,
+                    e
+                );
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+
+            let channel_id = session_id
+                .split(':')
+                .nth(1)
+                .unwrap_or("default")
+                .to_string();
+            let resume_msg = format!("Resuming run {}. Checkpoint: {}", run_id, ckpt.id);
+            let _ = state
+                .session_registry
+                .push_message_to_session(
+                    &session_id,
+                    channel_id,
+                    resume_msg,
+                    "system".to_string(),
+                    Some(run_id),
+                )
+                .await;
+
+            Ok(StatusCode::OK)
+        }
+
+        _ => Err(StatusCode::BAD_REQUEST),
     }
-
-    // 4. Trigger resume in agent
-    if let Err(e) = state
-        .spawn_agent_for_run(&session_id, &run_id, Some(budget))
-        .await
-    {
-        log::error!(
-            "[Gateway] Failed to spawn agent for resume {}: {}",
-            run_id,
-            e
-        );
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    // Push resume message
-    let channel_id = session_id
-        .split(':')
-        .nth(1)
-        .unwrap_or("default")
-        .to_string();
-    let resume_msg = format!("Resuming run {}. Checkpoint: {}", run_id, ckpt.id);
-    let _ = state
-        .session_registry
-        .push_message_to_session(
-            &session_id,
-            channel_id,
-            resume_msg,
-            "system".to_string(),
-            Some(run_id),
-        )
-        .await;
-
-    Ok(StatusCode::OK)
 }
 
 /// Create a checkpoint for an active run
@@ -4157,6 +4229,94 @@ async fn cancel_run_handler(
     Ok(Json(CancelRunResponse {
         run_id,
         cancelled,
+        previous_state,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct PauseRunResponse {
+    run_id: String,
+    paused: bool,
+    previous_state: String,
+}
+
+/// Pause a `Scheduled` run so the scheduler skips it until it is explicitly resumed.
+/// Only runs in `Scheduled` state can be paused.
+async fn pause_run_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(run_id): axum::extract::Path<String>,
+) -> Result<Json<PauseRunResponse>, StatusCode> {
+    let (previous_state, session_id) = {
+        let store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let run = store.get_run(&run_id).ok_or(StatusCode::NOT_FOUND)?;
+        (format!("{:?}", run.state), run.session_id.clone())
+    };
+
+    // Auth: admin token, agent token, or internal secret
+    if !is_admin_request(&state, &headers) {
+        let maybe_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+        let maybe_secret = headers
+            .get("X-Internal-Secret")
+            .and_then(|v| v.to_str().ok());
+
+        match (maybe_token, maybe_secret) {
+            (Some(token), _) => {
+                let _session = state
+                    .session_registry
+                    .validate_token(&session_id, token)
+                    .await
+                    .ok_or(StatusCode::UNAUTHORIZED)?;
+            }
+            (_, Some(secret)) => {
+                if secret != state.internal_api_secret {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    let paused = {
+        let mut store = state
+            .run_store
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store.pause_scheduled_run(&run_id, "Paused via API".to_string())
+    };
+
+    SheriffLogger::log_run("PAUSED_SCHEDULE", &run_id, &session_id, "Run paused via API");
+
+    {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "previous_state".to_string(),
+            Value::String(previous_state.clone()),
+        );
+        meta.insert("paused".to_string(), Value::Boolean(paused));
+        meta.insert(
+            "rule_id".to_string(),
+            Value::String("chat.run.pause_schedule".to_string()),
+        );
+        let _ = record_chat_audit_event(
+            &state.chain,
+            "chat",
+            "chat",
+            &session_id,
+            &run_id,
+            "run.pause_schedule",
+            "run.pause_schedule",
+            meta,
+            crate::types::ActionType::InternalStep,
+        );
+    }
+
+    Ok(Json(PauseRunResponse {
+        run_id,
+        paused,
         previous_state,
     }))
 }
