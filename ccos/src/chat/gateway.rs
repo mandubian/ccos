@@ -168,10 +168,27 @@ impl ApprovalConsumer for GatewayState {
             .await;
 
             if request.status.is_approved() {
-                // First, try to find and resume a paused run
+                // First, try to find and resume a paused run.
+                // Priority: 1) run_id in approval metadata (most reliable, set by scheduler)
+                //           2) latest PausedApproval run for the session (fallback)
                 let paused_run_id = {
                     let store = self.run_store.lock().unwrap();
-                    store.get_latest_paused_approval_run_id_for_session(session_id)
+                    // Try run_id from metadata first
+                    if let Some(run_id) = request.metadata.get("run_id") {
+                        if let Some(run) = store.get_run(run_id) {
+                            if run.state.is_paused() {
+                                Some(run_id.clone())
+                            } else {
+                                // run_id found but not paused, fall back to session lookup
+                                store.get_latest_paused_approval_run_id_for_session(session_id)
+                            }
+                        } else {
+                            // run_id not found in store, fall back to session lookup
+                            store.get_latest_paused_approval_run_id_for_session(session_id)
+                        }
+                    } else {
+                        store.get_latest_paused_approval_run_id_for_session(session_id)
+                    }
                 };
 
                 if let Some(run_id) = paused_run_id {
