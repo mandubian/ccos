@@ -90,7 +90,7 @@ RUST_LOG=ccos=debug "$SCRIPT_DIR/../target/debug/ccos-chat-gateway" serve \
     --connector-secret "demo-secret" \
     --admin-tokens "${DEMO_ADMIN_TOKEN}" \
     --allow-senders "user1" \
-    --allow-channels "general" \
+    --allow-channels "*" \
     --http-allow-hosts api.coingecko.com \
     --min-send-interval-ms 0 \
     --mentions "@agent" > /tmp/gateway.log 2>&1 &

@@ -166,6 +166,8 @@ The LLM returns plans in this JSON structure:
 | **Skill Loading** | Fetches skill definitions from URLs |
 | **Markdown Parsing** | Parses `###` headers and code blocks |
 | **YAML Support** | Structured skill definitions |
+| **Local Discovery** | Auto-loads `.md`/`.yaml` skills from local `skills/` directory at startup |
+| **Semantic Search** | Agents can use `ccos.skill.search` to find skills without knowing exact URLs |
 | **Onboarding Tracking** | Maintains onboarding state |
 | **State Machine** | NOT_LOADED → LOADED → NEEDS_SETUP → OPERATIONAL |
 | **Human Action Requests** | Creates approval requests for human steps |
@@ -338,6 +340,7 @@ Every action recorded in Causal Chain:
 | **HumanActionRequest** | Human intervention | Yes (human must act) |
 | **ChatPolicyException** | Override policy | Yes |
 | **EffectApproval** | Side-effect operations | Configurable |
+| **SandboxNetwork** | Network access within Python sandboxes | Yes (Requires exact domain allowlist) |
 
 ---
 
@@ -426,6 +429,7 @@ NOT_LOADED → LOADED → NEEDS_SETUP → PENDING_HUMAN_ACTION → OPERATIONAL
 | `ccos.approval.complete` | Complete human action | No |
 | `ccos.skill.load` | Load skill definition | No |
 | `ccos.skill.execute` | Execute skill operation | Per-skill |
+| `ccos.skill.search` | Semantic search over local loaded skills | No |
 
 ### Chat Capabilities
 
@@ -641,7 +645,7 @@ A standalone monitoring tool (`ccos-gateway-monitor`) provides real-time dashboa
 **Features**:
 - Live session list with health indicators
 - Agent monitoring (PID, step, memory, health)
-- Real-time event stream
+- Real-time event stream (events are hierarchically grouped by Session ID)
 - Three tab views: Sessions, Agents, Events
 - Automatic reconnection
 
