@@ -290,6 +290,7 @@ fn default_auto_approved_packages() -> Vec<String> {
         "seaborn".to_string(),
         "scipy".to_string(),
         "scikit-learn".to_string(),
+        "ccos_sdk".to_string(),
         // JavaScript packages
         "lodash".to_string(),
         "axios".to_string(),
