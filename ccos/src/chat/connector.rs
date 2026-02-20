@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -8,10 +8,7 @@ use async_trait::async_trait;
 use axum::extract::{Json, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::{
-    routing::{get, post},
-    Router,
-};
+use axum::{routing::{get, post}, Router};
 use base64::Engine as _;
 use chrono::Utc;
 use reqwest::Client;
@@ -95,7 +92,9 @@ pub struct ConnectionHandle {
 }
 
 pub type EnvelopeCallback = Arc<
-    dyn Fn(MessageEnvelope) -> futures::future::BoxFuture<'static, RuntimeResult<()>> + Send + Sync,
+    dyn Fn(MessageEnvelope) -> futures::future::BoxFuture<'static, RuntimeResult<()>>
+        + Send
+        + Sync,
 >;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,14 +110,14 @@ impl ActivationRules {
         if self.allowed_senders.is_empty() {
             return false;
         }
-        self.allowed_senders.iter().any(|s| s == sender_id)
+        self.allowed_senders.iter().any(|s| s == "*" || s == sender_id)
     }
 
     pub fn is_allowed_channel(&self, channel_id: &str) -> bool {
         if self.allowed_channels.is_empty() {
             return false;
         }
-        self.allowed_channels.iter().any(|c| c == channel_id)
+        self.allowed_channels.iter().any(|c| c == "*" || c == channel_id)
     }
 
     pub fn match_trigger(&self, text: &str) -> Option<String> {
@@ -150,16 +149,9 @@ pub struct LoopbackConnectorConfig {
 pub trait ChatConnector: Send + Sync {
     async fn connect(&self) -> RuntimeResult<ConnectionHandle>;
     async fn disconnect(&self, handle: &ConnectionHandle) -> RuntimeResult<()>;
-    async fn subscribe(
-        &self,
-        handle: &ConnectionHandle,
-        callback: EnvelopeCallback,
-    ) -> RuntimeResult<()>;
-    async fn send(
-        &self,
-        handle: &ConnectionHandle,
-        outbound: OutboundRequest,
-    ) -> RuntimeResult<SendResult>;
+    async fn subscribe(&self, handle: &ConnectionHandle, callback: EnvelopeCallback)
+        -> RuntimeResult<()>;
+    async fn send(&self, handle: &ConnectionHandle, outbound: OutboundRequest) -> RuntimeResult<SendResult>;
     async fn health(&self, handle: &ConnectionHandle) -> RuntimeResult<HealthStatus>;
 }
 
@@ -167,7 +159,8 @@ struct LoopbackConnectorState {
     config: LoopbackConnectorConfig,
     quarantine: Arc<dyn QuarantineStore>,
     callback: RwLock<Option<EnvelopeCallback>>,
-    postbox: Mutex<VecDeque<OutboundRequest>>,
+    /// In-memory outbound queue keyed by channel_id (used when outbound_url is None)
+    outbound_queue: StdMutex<HashMap<String, Vec<OutboundRequest>>>,
 }
 
 #[derive(Clone)]
@@ -185,7 +178,7 @@ impl LoopbackWebhookConnector {
             config,
             quarantine,
             callback: RwLock::new(None),
-            postbox: Mutex::new(VecDeque::new()),
+            outbound_queue: StdMutex::new(HashMap::new()),
         };
         Self {
             state: Arc::new(state),
@@ -205,7 +198,7 @@ impl LoopbackWebhookConnector {
         let state = self.state.clone();
         let router = Router::new()
             .route("/connector/loopback/inbound", post(inbound_handler))
-            .route("/connector/loopback/outbound", get(outbound_handler))
+            .route("/connector/loopback/outbound", get(outbound_poll_handler))
             .with_state(state);
 
         let addr: SocketAddr = self
@@ -218,10 +211,11 @@ impl LoopbackWebhookConnector {
         let listener = TcpListener::bind(addr)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to bind connector: {}", e)))?;
-        let server =
-            axum::serve(listener, router.into_make_service()).with_graceful_shutdown(async move {
+        let server = axum::serve(listener, router.into_make_service()).with_graceful_shutdown(
+            async move {
                 let _ = shutdown_rx.await;
-            });
+            },
+        );
 
         let handle = tokio::spawn(async move {
             let _ = server.await;
@@ -233,9 +227,6 @@ impl LoopbackWebhookConnector {
     }
 
     fn enforce_rate_limit(&self) -> RuntimeResult<()> {
-        if self.state.config.min_send_interval_ms == 0 {
-            return Ok(());
-        }
         let mut guard = self
             .last_send_at
             .lock()
@@ -245,9 +236,7 @@ impl LoopbackWebhookConnector {
             let elapsed = now.duration_since(last);
             let min_interval = StdDuration::from_millis(self.state.config.min_send_interval_ms);
             if elapsed < min_interval {
-                return Err(RuntimeError::Generic(
-                    "Outbound rate limit exceeded".to_string(),
-                ));
+                return Err(RuntimeError::Generic("Outbound rate limit exceeded".to_string()));
             }
         }
         *guard = Some(now);
@@ -283,13 +272,10 @@ impl ChatConnector for LoopbackWebhookConnector {
         Ok(())
     }
 
-    async fn send(
-        &self,
-        _handle: &ConnectionHandle,
-        outbound: OutboundRequest,
-    ) -> RuntimeResult<SendResult> {
+    async fn send(&self, _handle: &ConnectionHandle, outbound: OutboundRequest) -> RuntimeResult<SendResult> {
         self.enforce_rate_limit()?;
-
+        // If outbound_url is configured, push via HTTP POST.
+        // Otherwise, enqueue for polling via GET /connector/loopback/outbound.
         if let Some(outbound_url) = &self.state.config.outbound_url {
             let resp = self
                 .client
@@ -307,14 +293,11 @@ impl ChatConnector for LoopbackWebhookConnector {
                 });
             }
         } else {
-            // Direct mode: Push to postbox
-            let mut box_guard = self.state.postbox.lock().await;
-            box_guard.push_back(outbound);
-
-            // Keep size limited
-            if box_guard.len() > 1000 {
-                box_guard.pop_front();
-            }
+            // Queue for poll-based delivery
+            let channel = outbound.channel_id.clone();
+            let mut queue = self.state.outbound_queue.lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock outbound queue".to_string()))?;
+            queue.entry(channel).or_default().push(outbound);
         }
 
         Ok(SendResult {
@@ -367,7 +350,6 @@ async fn inbound_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if secret != state.config.shared_secret {
-        log::warn!("[Connector] Unauthorized inbound request (secret mismatch)");
         return (
             StatusCode::UNAUTHORIZED,
             Json(LoopbackInboundResponse {
@@ -378,58 +360,53 @@ async fn inbound_handler(
         );
     }
 
-    if !state
-        .config
-        .activation
-        .is_allowed_sender(&payload.sender_id)
-        || !state
-            .config
-            .activation
-            .is_allowed_channel(&payload.channel_id)
-    {
-        log::debug!(
-            "[Connector] Message from {} in {} rejected by activation rules",
-            payload.sender_id,
-            payload.channel_id
-        );
+    if !state.config.activation.is_allowed_sender(&payload.sender_id) {
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
                 accepted: false,
                 message_id: None,
-                error: None,
+                error: Some(format!(
+                    "Sender '{}' not in allowed senders list. Allowed: {:?}",
+                    payload.sender_id, state.config.activation.allowed_senders
+                )),
             }),
         );
     }
 
-    // Skip trigger check for slash commands (they are gateway commands, not agent messages)
-    let trigger = if payload.text.trim_start().starts_with('/') {
-        Some("slash_command".to_string())
-    } else {
-        state.config.activation.match_trigger(&payload.text)
-    };
-    if trigger.is_none() {
-        log::debug!(
-            "[Connector] Message from {} in {} ignored (no mention or keyword match)",
-            payload.sender_id,
-            payload.channel_id
-        );
+    if !state.config.activation.is_allowed_channel(&payload.channel_id) {
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
                 accepted: false,
                 message_id: None,
-                error: None,
+                error: Some(format!(
+                    "Channel '{}' not in allowed channels list. Allowed: {:?}. Use --allow-channels '*' to allow all channels.",
+                    payload.channel_id, state.config.activation.allowed_channels
+                )),
+            }),
+        );
+    }
+
+    let trigger = state.config.activation.match_trigger(&payload.text);
+    if trigger.is_none() {
+        return (
+            StatusCode::OK,
+            Json(LoopbackInboundResponse {
+                accepted: false,
+                message_id: None,
+                error: Some(format!(
+                    "Message did not match any trigger. Required mentions: {:?}, required keywords: {:?}",
+                    state.config.activation.required_mentions,
+                    state.config.activation.required_keywords
+                )),
             }),
         );
     }
 
     let ttl = chrono::Duration::seconds(state.config.default_ttl_seconds);
     let content_ref = match state.quarantine.put_bytes(payload.text.into_bytes(), ttl) {
-        Ok(pointer) => {
-            log::debug!("[Connector] Message text quarantined: ref={}", pointer);
-            pointer
-        }
+        Ok(pointer) => pointer,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -471,7 +448,9 @@ async fn inbound_handler(
     }
 
     let message_id = Uuid::new_v4().to_string();
-    let timestamp = payload.timestamp.unwrap_or_else(|| Utc::now().to_rfc3339());
+    let timestamp = payload
+        .timestamp
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
     let envelope = MessageEnvelope {
         id: message_id.clone(),
         channel_id: payload.channel_id,
@@ -514,50 +493,29 @@ async fn inbound_handler(
         }),
     )
 }
-
 #[derive(Debug, Deserialize)]
-struct OutboundPollParams {
+struct OutboundPollQuery {
     channel_id: Option<String>,
 }
 
-async fn outbound_handler(
+async fn outbound_poll_handler(
     State(state): State<Arc<LoopbackConnectorState>>,
-    Query(params): Query<OutboundPollParams>,
     headers: HeaderMap,
+    Query(query): Query<OutboundPollQuery>,
 ) -> impl IntoResponse {
     let secret = headers
         .get("x-ccos-connector-secret")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-
     if secret != state.config.shared_secret {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(Vec::<OutboundRequest>::new()),
-        );
+        return (StatusCode::UNAUTHORIZED, Json(Vec::<OutboundRequest>::new()));
     }
 
-    let mut box_guard = state.postbox.lock().await;
+    let channel_id = query.channel_id.unwrap_or_default();
+    let messages = match state.outbound_queue.lock() {
+        Ok(mut queue) => queue.remove(&channel_id).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
 
-    // Simple implementation: Drain all messages matching criteria
-    // In production, this would use a cursor or offset
-    let mut matching = Vec::new();
-    let mut remaining = VecDeque::new();
-
-    while let Some(msg) = box_guard.pop_front() {
-        let match_channel = params
-            .channel_id
-            .as_ref()
-            .map_or(true, |c| c == &msg.channel_id);
-
-        if match_channel {
-            matching.push(msg);
-        } else {
-            remaining.push_back(msg);
-        }
-    }
-
-    *box_guard = remaining;
-
-    (StatusCode::OK, Json(matching))
+    (StatusCode::OK, Json(messages))
 }

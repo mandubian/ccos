@@ -5,7 +5,9 @@
 
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseButton, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -221,6 +223,12 @@ struct GatewayPauseRunResponse {
 /// A row in the Runs tab tree view.
 #[derive(Debug, Clone)]
 enum RunDisplayItem {
+    /// Session header row (selectable; pressing Enter toggles collapse).
+    SessionHeader {
+        session_id: String,
+        run_count: usize,
+        collapsed: bool,
+    },
     /// Header row for a group of runs sharing the same recurring schedule.
     ScheduleGroup {
         group_id: String,
@@ -250,6 +258,7 @@ impl RunDisplayItem {
         match self {
             RunDisplayItem::ScheduleGroup { pending_run_id, .. } => pending_run_id.clone(),
             RunDisplayItem::RunInstance { run, .. } => Some(run.run_id.clone()),
+            RunDisplayItem::SessionHeader { .. } => None,
         }
     }
 
@@ -264,11 +273,11 @@ impl RunDisplayItem {
                 ..
             } if !is_schedule_paused => pending_run_id.clone(),
             RunDisplayItem::RunInstance { run, .. }
-                if run.state.contains("Scheduled")
-                    && !run.state.contains("PausedSchedule") =>
+                if run.state.contains("Scheduled") && !run.state.contains("PausedSchedule") =>
             {
                 Some(run.run_id.clone())
             }
+            RunDisplayItem::SessionHeader { .. } => None,
             _ => None,
         }
     }
@@ -283,11 +292,10 @@ impl RunDisplayItem {
                 is_schedule_paused,
                 ..
             } if *is_schedule_paused => pending_run_id.clone(),
-            RunDisplayItem::RunInstance { run, .. }
-                if run.state.contains("PausedSchedule") =>
-            {
+            RunDisplayItem::RunInstance { run, .. } if run.state.contains("PausedSchedule") => {
                 Some(run.run_id.clone())
             }
+            RunDisplayItem::SessionHeader { .. } => None,
             _ => None,
         }
     }
@@ -297,7 +305,11 @@ impl RunDisplayItem {
 #[derive(Debug, Clone)]
 enum EventDisplayItem {
     /// Session header row (selectable; pressing Enter toggles collapse).
-    SessionHeader { session_id: String, event_count: usize, collapsed: bool },
+    SessionHeader {
+        session_id: String,
+        event_count: usize,
+        collapsed: bool,
+    },
     /// An individual event entry (selectable).
     EventEntry { event_idx: usize },
 }
@@ -306,7 +318,11 @@ enum EventDisplayItem {
 #[derive(Debug, Clone)]
 enum LlmDisplayItem {
     /// Session header (selectable; Enter toggles collapse).
-    SessionHeader { session_id: String, count: usize, collapsed: bool },
+    SessionHeader {
+        session_id: String,
+        count: usize,
+        collapsed: bool,
+    },
     /// A single LLM consultation entry (one row per call).
     ConsultationEntry { consultation_idx: usize },
 }
@@ -330,19 +346,17 @@ struct MonitorState {
     events: Vec<SystemEvent>,
     /// Session-grouped flat list built from events for the Events tab.
     event_display_items: Vec<EventDisplayItem>,
-    llm_consultations: Vec<(String, LlmConsultation)>, // (session_id, consultation)
+    /// LLM Consultations per session
+    llm_consultations: HashMap<String, Vec<LlmConsultation>>,
     selected_tab: usize,
     selected_agent_index: usize,
-    /// All known session IDs (sorted) — used for Runs tab session navigation independent of active agents
+    /// All known session IDs (sorted) — used for session navigation independent of active agents
     ordered_session_ids: Vec<String>,
-    /// Selected index into ordered_session_ids for the Runs tab session picker
-    selected_runs_session_idx: usize,
-    /// Runs loaded for currently selected session
-    session_runs: Vec<GatewayRunSummary>,
-    /// Flat tree-view items built from session_runs (groups + instances)
+    /// Runs loaded mapped by session
+    runs_by_session: HashMap<String, Vec<GatewayRunSummary>>,
+    /// Flat tree-view items built from runs_by_session (session headers + groups + instances)
     display_items: Vec<RunDisplayItem>,
     selected_run_index: usize,
-    runs_session_id: Option<String>,
     /// Selected event index in Events tab
     selected_event_index: usize,
     /// Stable selected event ID (prevents selection drift when new events arrive)
@@ -368,6 +382,8 @@ struct MonitorState {
     run_group_collapsed: HashMap<String, bool>,
     /// Collapsed state per event session_id (true = collapsed).
     event_session_collapsed: HashMap<String, bool>,
+    /// Collapsed state per run session_id (true = collapsed).
+    run_session_collapsed: HashMap<String, bool>,
     /// Flat list of LLM display items (session headers + consultation entries).
     llm_display_items: Vec<LlmDisplayItem>,
     /// Currently selected row in the LLM tab.
@@ -387,16 +403,14 @@ impl MonitorState {
             agents: HashMap::new(),
             agent_session_ids: Vec::new(),
             ordered_session_ids: Vec::new(),
-            selected_runs_session_idx: 0,
             events: Vec::new(),
             event_display_items: Vec::new(),
-            llm_consultations: Vec::new(),
+            llm_consultations: HashMap::new(),
             selected_tab: 0,
             selected_agent_index: 0,
-            session_runs: Vec::new(),
+            runs_by_session: HashMap::new(),
             display_items: Vec::new(),
             selected_run_index: 0,
-            runs_session_id: None,
             selected_event_index: 0,
             selected_event_id: None,
             next_event_id: 1,
@@ -412,6 +426,7 @@ impl MonitorState {
             status_message: "Connected to gateway".to_string(),
             run_group_collapsed: HashMap::new(),
             event_session_collapsed: HashMap::new(),
+            run_session_collapsed: HashMap::new(),
             llm_display_items: Vec::new(),
             selected_llm_index: 0,
             llm_session_collapsed: HashMap::new(),
@@ -438,23 +453,15 @@ impl MonitorState {
     fn rebuild_llm_display_items(&mut self) {
         self.llm_display_items.clear();
 
-        // Collect sessions in newest-first order with their consultation indices.
-        let mut session_order: Vec<String> = Vec::new();
-        let mut session_map: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
+        // ordered_session_ids contains all sessions we have seen
+        for session_id in &self.ordered_session_ids {
+            if let Some(consultations) = self.llm_consultations.get(session_id) {
+                if consultations.is_empty() {
+                    continue;
+                }
 
-        // Iterate in reverse so newest sessions appear first.
-        for (idx, (session_id, _)) in self.llm_consultations.iter().enumerate().rev() {
-            let entry = session_map.entry(session_id.clone()).or_insert_with(Vec::new);
-            entry.push(idx);
-            if !session_order.contains(session_id) {
-                session_order.push(session_id.clone());
-            }
-        }
-
-        for session_id in &session_order {
-            if let Some(indices) = session_map.get(session_id) {
                 let is_active = self.agents.contains_key(session_id);
+                // Default to collapsed for inactive sessions
                 let collapsed = *self
                     .llm_session_collapsed
                     .entry(session_id.clone())
@@ -462,13 +469,16 @@ impl MonitorState {
 
                 self.llm_display_items.push(LlmDisplayItem::SessionHeader {
                     session_id: session_id.clone(),
-                    count: indices.len(),
+                    count: consultations.len(),
                     collapsed,
                 });
                 if !collapsed {
-                    for &idx in indices {
+                    // Iterate backwards so newest consultations show first
+                    for (idx, _) in consultations.iter().enumerate().rev() {
                         self.llm_display_items
-                            .push(LlmDisplayItem::ConsultationEntry { consultation_idx: idx });
+                            .push(LlmDisplayItem::ConsultationEntry {
+                                consultation_idx: idx,
+                            });
                     }
                 }
             }
@@ -509,8 +519,11 @@ impl MonitorState {
 
     /// Toggle collapse for the currently selected LLM session header.
     fn toggle_selected_llm_session_collapse(&mut self) {
-        if let Some(LlmDisplayItem::SessionHeader { session_id, collapsed, .. }) =
-            self.llm_display_items.get(self.selected_llm_index)
+        if let Some(LlmDisplayItem::SessionHeader {
+            session_id,
+            collapsed,
+            ..
+        }) = self.llm_display_items.get(self.selected_llm_index)
         {
             let new_collapsed = !collapsed;
             let sid = session_id.clone();
@@ -522,8 +535,11 @@ impl MonitorState {
 
     /// Toggle collapse for the currently selected run group (if a ScheduleGroup is selected).
     fn toggle_selected_run_group_collapse(&mut self) {
-        if let Some(RunDisplayItem::ScheduleGroup { group_id, collapsed, .. }) =
-            self.display_items.get(self.selected_run_index)
+        if let Some(RunDisplayItem::ScheduleGroup {
+            group_id,
+            collapsed,
+            ..
+        }) = self.display_items.get(self.selected_run_index)
         {
             let new_collapsed = !collapsed;
             let gid = group_id.clone();
@@ -535,14 +551,33 @@ impl MonitorState {
 
     /// Toggle collapse for the currently selected event session (if a SessionHeader is selected).
     fn toggle_selected_event_session_collapse(&mut self) {
-        if let Some(EventDisplayItem::SessionHeader { session_id, collapsed, .. }) =
-            self.event_display_items.get(self.selected_event_index)
+        if let Some(EventDisplayItem::SessionHeader {
+            session_id,
+            collapsed,
+            ..
+        }) = self.event_display_items.get(self.selected_event_index)
         {
             let new_collapsed = !collapsed;
             let sid = session_id.clone();
             self.event_session_collapsed.insert(sid, new_collapsed);
             self.rebuild_event_display_items();
             self.sync_event_selection();
+        }
+    }
+
+    /// Toggle collapse for the currently selected run session header (if a SessionHeader is selected).
+    fn toggle_selected_run_session_collapse(&mut self) {
+        if let Some(RunDisplayItem::SessionHeader {
+            session_id,
+            collapsed,
+            ..
+        }) = self.display_items.get(self.selected_run_index)
+        {
+            let new_collapsed = !collapsed;
+            let sid = session_id.clone();
+            self.run_session_collapsed.insert(sid, new_collapsed);
+            self.rebuild_display_items();
+            self.sync_run_selection();
         }
     }
 
@@ -568,17 +603,6 @@ impl MonitorState {
             .map(|s| s.as_str())
     }
 
-    /// Returns the session ID to use for the Runs tab:
-    /// prefers the active agent selection, falls back to ordered_session_ids (all sessions).
-    fn get_runs_session_id(&self) -> Option<&str> {
-        if let Some(id) = self.agent_session_ids.get(self.selected_agent_index) {
-            return Some(id.as_str());
-        }
-        self.ordered_session_ids
-            .get(self.selected_runs_session_idx)
-            .map(|s| s.as_str())
-    }
-
     fn selected_display_item(&self) -> Option<&RunDisplayItem> {
         self.display_items.get(self.selected_run_index)
     }
@@ -591,94 +615,123 @@ impl MonitorState {
         }
     }
 
-    /// Rebuild the tree-view display items from the raw session_runs list.
-    /// Groups runs that share a `schedule_group_id` under a common header row.
+    /// Rebuild the tree-view display items from the raw `runs_by_session` map.
+    /// Groups runs by session, and then runs that share a `schedule_group_id` under a common header row.
     fn rebuild_display_items(&mut self) {
         use std::collections::HashMap as Map;
         self.display_items.clear();
 
-        // Partition into grouped (has schedule_group_id) and singletons.
-        let mut group_map: Map<String, Vec<GatewayRunSummary>> = Map::new();
-        let mut singletons: Vec<GatewayRunSummary> = Vec::new();
+        for session_id in &self.ordered_session_ids {
+            if let Some(session_runs) = self.runs_by_session.get(session_id) {
+                if session_runs.is_empty() {
+                    continue;
+                }
 
-        for run in &self.session_runs {
-            if let Some(ref gid) = run.schedule_group_id {
-                group_map.entry(gid.clone()).or_default().push(run.clone());
-            } else {
-                singletons.push(run.clone());
-            }
-        }
+                let is_active = self.agents.contains_key(session_id);
+                // Default to collapsed for inactive sessions
+                let session_collapsed = *self
+                    .run_session_collapsed
+                    .entry(session_id.clone())
+                    .or_insert(!is_active);
 
-        // Build group header + child rows, ordered by most-recent activity in the group.
-        let mut groups: Vec<(String, Vec<GatewayRunSummary>)> = group_map.into_iter().collect();
-        // Sort groups so the most recently active one comes first.
-        groups.sort_by(|(_, a), (_, b)| {
-            let ta = a.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
-            let tb = b.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
-            tb.cmp(ta)
-        });
+                self.display_items.push(RunDisplayItem::SessionHeader {
+                    session_id: session_id.clone(),
+                    run_count: session_runs.len(),
+                    collapsed: session_collapsed,
+                });
 
-        for (group_id, mut instances) in groups {
-            let goal = instances.first().map(|r| r.goal.clone()).unwrap_or_default();
-            let schedule = instances
-                .first()
-                .and_then(|r| r.schedule.as_deref())
-                .unwrap_or("?")
-                .to_string();
+                if session_collapsed {
+                    continue;
+                }
 
-            // Find the run that is either waiting to fire (Scheduled) or manually paused (PausedSchedule).
-            let pending = instances
-                .iter()
-                .find(|r| r.state.contains("Scheduled") || r.state.contains("PausedSchedule"));
-            let pending_run_id = pending.map(|r| r.run_id.clone());
-            let is_schedule_paused = pending
-                .map(|r| r.state.contains("PausedSchedule"))
-                .unwrap_or(false);
-            let next_run_at = pending.and_then(|r| r.next_run_at.clone());
+                // Partition into grouped (has schedule_group_id) and singletons.
+                let mut group_map: Map<String, Vec<GatewayRunSummary>> = Map::new();
+                let mut singletons: Vec<GatewayRunSummary> = Vec::new();
 
-            // Default: expand if any run is Active or paused-while-running; collapse if all are terminal/scheduled.
-            let has_active = instances.iter().any(|r| {
-                r.state.contains("Active")
-                    || (r.state.contains("Paused") && !r.state.contains("PausedSchedule"))
-            });
-            let collapsed = *self
-                .run_group_collapsed
-                .entry(group_id.clone())
-                .or_insert(!has_active);
+                for run in session_runs {
+                    if let Some(ref gid) = run.schedule_group_id {
+                        group_map.entry(gid.clone()).or_default().push(run.clone());
+                    } else {
+                        singletons.push(run.clone());
+                    }
+                }
 
-            self.display_items.push(RunDisplayItem::ScheduleGroup {
-                group_id,
-                goal,
-                schedule,
-                instance_count: instances.len(),
-                next_run_at,
-                pending_run_id,
-                is_schedule_paused,
-                collapsed,
-            });
+                // Build group header + child rows, ordered by most-recent activity in the group.
+                let mut groups: Vec<(String, Vec<GatewayRunSummary>)> =
+                    group_map.into_iter().collect();
+                // Sort groups so the most recently active one comes first.
+                groups.sort_by(|(_, a), (_, b)| {
+                    let ta = a.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
+                    let tb = b.iter().map(|r| r.created_at.as_str()).max().unwrap_or("");
+                    tb.cmp(ta)
+                });
 
-            if !collapsed {
-                // Sort instances newest-first (RFC3339 strings sort lexicographically).
-                instances.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                let last = instances.len().saturating_sub(1);
-                for (idx, run) in instances.into_iter().enumerate() {
+                for (group_id, mut instances) in groups {
+                    let goal = instances
+                        .first()
+                        .map(|r| r.goal.clone())
+                        .unwrap_or_default();
+                    let schedule = instances
+                        .first()
+                        .and_then(|r| r.schedule.as_deref())
+                        .unwrap_or("?")
+                        .to_string();
+
+                    // Find the run that is either waiting to fire (Scheduled) or manually paused (PausedSchedule).
+                    let pending = instances.iter().find(|r| {
+                        r.state.contains("Scheduled") || r.state.contains("PausedSchedule")
+                    });
+                    let pending_run_id = pending.map(|r| r.run_id.clone());
+                    let is_schedule_paused = pending
+                        .map(|r| r.state.contains("PausedSchedule"))
+                        .unwrap_or(false);
+                    let next_run_at = pending.and_then(|r| r.next_run_at.clone());
+
+                    // Default: expand if any run is Active or paused-while-running; collapse if all are terminal/scheduled.
+                    let has_active = instances.iter().any(|r| {
+                        r.state.contains("Active")
+                            || (r.state.contains("Paused") && !r.state.contains("PausedSchedule"))
+                    });
+                    let collapsed = *self
+                        .run_group_collapsed
+                        .entry(group_id.clone())
+                        .or_insert(!has_active);
+
+                    self.display_items.push(RunDisplayItem::ScheduleGroup {
+                        group_id,
+                        goal,
+                        schedule,
+                        instance_count: instances.len(),
+                        next_run_at,
+                        pending_run_id,
+                        is_schedule_paused,
+                        collapsed,
+                    });
+
+                    if !collapsed {
+                        // Sort instances newest-first (RFC3339 strings sort lexicographically).
+                        instances.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                        let last = instances.len().saturating_sub(1);
+                        for (idx, run) in instances.into_iter().enumerate() {
+                            self.display_items.push(RunDisplayItem::RunInstance {
+                                run,
+                                grouped: true,
+                                is_last_in_group: idx == last,
+                            });
+                        }
+                    }
+                }
+
+                // Append ungrouped (one-off / plain) runs, newest-first.
+                singletons.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                for run in singletons {
                     self.display_items.push(RunDisplayItem::RunInstance {
                         run,
-                        grouped: true,
-                        is_last_in_group: idx == last,
+                        grouped: false,
+                        is_last_in_group: false,
                     });
                 }
             }
-        }
-
-        // Append ungrouped (one-off / plain) runs, newest-first.
-        singletons.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        for run in singletons {
-            self.display_items.push(RunDisplayItem::RunInstance {
-                run,
-                grouped: false,
-                is_last_in_group: false,
-            });
         }
     }
 
@@ -692,7 +745,7 @@ impl MonitorState {
 
         // Determine session display order + collect per-session event indices.
         // Iterate events in reverse (newest first) to get newest-session-first ordering.
-        let mut session_order: Vec<String> = Vec::new();
+        let mut session_order: Vec<String> = self.ordered_session_ids.clone();
         let mut session_map: std::collections::HashMap<String, Vec<usize>> =
             std::collections::HashMap::new();
 
@@ -700,7 +753,9 @@ impl MonitorState {
             if !show_internal && is_internal_step_event(event) {
                 continue;
             }
-            let entry = session_map.entry(event.session_id.clone()).or_insert_with(Vec::new);
+            let entry = session_map
+                .entry(event.session_id.clone())
+                .or_insert_with(Vec::new);
             entry.push(idx); // already in newest-first order (reversed iteration)
             if !session_order.contains(&event.session_id) {
                 session_order.push(event.session_id.clone());
@@ -716,11 +771,12 @@ impl MonitorState {
                     .entry(session_id.clone())
                     .or_insert(!is_active);
 
-                self.event_display_items.push(EventDisplayItem::SessionHeader {
-                    session_id: session_id.clone(),
-                    event_count: indices.len(),
-                    collapsed,
-                });
+                self.event_display_items
+                    .push(EventDisplayItem::SessionHeader {
+                        session_id: session_id.clone(),
+                        event_count: indices.len(),
+                        collapsed,
+                    });
                 if !collapsed {
                     for &idx in indices {
                         self.event_display_items
@@ -760,9 +816,8 @@ impl MonitorState {
 
     /// Get filtered event indices for selection navigation
     fn get_filtered_event_indices(&self) -> Vec<usize> {
-        let event_visible = |event: &SystemEvent| {
-            self.show_internal_steps || !is_internal_step_event(event)
-        };
+        let event_visible =
+            |event: &SystemEvent| self.show_internal_steps || !is_internal_step_event(event);
 
         if let Some(selected_id) = self.get_selected_session_id() {
             self.events
@@ -996,8 +1051,14 @@ impl MonitorState {
         let full_details = full_lines.join("\n");
 
         let mut metadata_map = serde_json::Map::new();
-        metadata_map.insert("iteration".to_string(), serde_json::Value::from(consultation.iteration));
-        metadata_map.insert("is_initial".to_string(), serde_json::Value::from(consultation.is_initial));
+        metadata_map.insert(
+            "iteration".to_string(),
+            serde_json::Value::from(consultation.iteration),
+        );
+        metadata_map.insert(
+            "is_initial".to_string(),
+            serde_json::Value::from(consultation.is_initial),
+        );
         metadata_map.insert(
             "task_complete".to_string(),
             serde_json::Value::from(consultation.task_complete),
@@ -1031,12 +1092,17 @@ impl MonitorState {
             Some(serde_json::Value::Object(metadata_map)),
         );
 
-        // Store full consultation for LLM tab
-        self.llm_consultations.push((session_id, consultation));
+        // Store full consultation for LLM tab per session
+        let session_consultations = self
+            .llm_consultations
+            .entry(session_id.clone())
+            .or_insert_with(Vec::new);
 
-        // Keep only last 50 consultations
-        if self.llm_consultations.len() > 50 {
-            self.llm_consultations.remove(0);
+        session_consultations.push(consultation);
+
+        // Keep only last 50 consultations per session
+        if session_consultations.len() > 50 {
+            session_consultations.remove(0);
         }
 
         self.rebuild_llm_display_items();
@@ -1071,25 +1137,29 @@ async fn main() -> anyhow::Result<()> {
 
     let available_profiles = load_available_llm_profiles(&args.config_path);
     let client = Client::new();
-    let active_spawn_llm_profile =
-        match fetch_gateway_llm_profile_with_retry(&client, &args.gateway_url, &args.token).await
-        {
-            Ok(profile) => profile,
-            Err(e) => {
-                let hint = if e.to_string().contains("503") {
-                    " (503 usually means: gateway not ready yet, wrong --gateway-url, or a proxy; ensure ccos-chat-gateway is running and --token matches --admin-tokens)"
-                } else if e.to_string().contains("401") {
-                    " (401: ensure --token matches the gateway's --admin-tokens / CCOS_ADMIN_TOKENS)"
-                } else {
-                    ""
-                };
-                warn!(
-                    "Failed to fetch current gateway spawn profile (continuing): {}{}",
-                    e, hint
-                );
-                None
-            }
-        };
+    let active_spawn_llm_profile = match fetch_gateway_llm_profile_with_retry(
+        &client,
+        &args.gateway_url,
+        &args.token,
+    )
+    .await
+    {
+        Ok(profile) => profile,
+        Err(e) => {
+            let hint = if e.to_string().contains("503") {
+                " (503 usually means: gateway not ready yet, wrong --gateway-url, or a proxy; ensure ccos-chat-gateway is running and --token matches --admin-tokens)"
+            } else if e.to_string().contains("401") {
+                " (401: ensure --token matches the gateway's --admin-tokens / CCOS_ADMIN_TOKENS)"
+            } else {
+                ""
+            };
+            warn!(
+                "Failed to fetch current gateway spawn profile (continuing): {}{}",
+                e, hint
+            );
+            None
+        }
+    };
 
     // Setup terminal
     enable_raw_mode()?;
@@ -1246,10 +1316,8 @@ async fn main() -> anyhow::Result<()> {
                                                 };
                                             }
                                             Err(e) => {
-                                                state.status_message = format!(
-                                                    "Failed to set spawn profile: {}",
-                                                    e
-                                                );
+                                                state.status_message =
+                                                    format!("Failed to set spawn profile: {}", e);
                                             }
                                         }
                                         state.show_profile_selector = false;
@@ -1267,16 +1335,20 @@ async fn main() -> anyhow::Result<()> {
                                         state.llm_detail_scroll = 0;
                                     }
                                     KeyCode::Up => {
-                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_sub(1);
+                                        state.llm_detail_scroll =
+                                            state.llm_detail_scroll.saturating_sub(1);
                                     }
                                     KeyCode::Down => {
-                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_add(1);
+                                        state.llm_detail_scroll =
+                                            state.llm_detail_scroll.saturating_add(1);
                                     }
                                     KeyCode::PageUp => {
-                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_sub(10);
+                                        state.llm_detail_scroll =
+                                            state.llm_detail_scroll.saturating_sub(10);
                                     }
                                     KeyCode::PageDown => {
-                                        state.llm_detail_scroll = state.llm_detail_scroll.saturating_add(10);
+                                        state.llm_detail_scroll =
+                                            state.llm_detail_scroll.saturating_add(10);
                                     }
                                     _ => {}
                                 }
@@ -1297,17 +1369,29 @@ async fn main() -> anyhow::Result<()> {
                                         state.detail_scroll = state.detail_scroll.saturating_add(1);
                                     }
                                     KeyCode::PageUp => {
-                                        state.detail_scroll = state.detail_scroll.saturating_sub(10);
+                                        state.detail_scroll =
+                                            state.detail_scroll.saturating_sub(10);
                                     }
                                     KeyCode::PageDown => {
-                                        state.detail_scroll = state.detail_scroll.saturating_add(10);
+                                        state.detail_scroll =
+                                            state.detail_scroll.saturating_add(10);
                                     }
                                     KeyCode::Char('y') | KeyCode::Char('c') => {
                                         if let Some(event) = state.get_selected_event() {
                                             let content = build_copy_text(event);
-                                            match std::fs::write("/tmp/ccos-monitor-copy.txt", &content) {
-                                                Ok(_) => state.status_message = "Copied to /tmp/ccos-monitor-copy.txt".to_string(),
-                                                Err(e) => state.status_message = format!("Copy failed: {}", e),
+                                            match std::fs::write(
+                                                "/tmp/ccos-monitor-copy.txt",
+                                                &content,
+                                            ) {
+                                                Ok(_) => {
+                                                    state.status_message =
+                                                        "Copied to /tmp/ccos-monitor-copy.txt"
+                                                            .to_string()
+                                                }
+                                                Err(e) => {
+                                                    state.status_message =
+                                                        format!("Copy failed: {}", e)
+                                                }
                                             }
                                         }
                                     }
@@ -1328,57 +1412,23 @@ async fn main() -> anyhow::Result<()> {
                                         state.sync_event_selection();
                                     }
                                 }
-                                KeyCode::Char('s') => {
-                                    // Runs tab: cycle to next session in ordered_session_ids
-                                    if state.selected_tab == 4
-                                        && !state.ordered_session_ids.is_empty()
-                                    {
-                                        state.selected_runs_session_idx = (state
-                                            .selected_runs_session_idx
-                                            + 1)
-                                            % state.ordered_session_ids.len();
-                                        match refresh_runs_for_selected_session(
-                                            &mut state,
-                                            &client,
-                                            &args.gateway_url,
-                                            &args.token,
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => {
-                                                state.status_message = format!(
-                                                    "Session {}/{}: {} ({} run(s))",
-                                                    state.selected_runs_session_idx + 1,
-                                                    state.ordered_session_ids.len(),
-                                                    state
-                                                        .ordered_session_ids
-                                                        .get(state.selected_runs_session_idx)
-                                                        .map(|s| s.as_str())
-                                                        .unwrap_or("-"),
-                                                    state.session_runs.len(),
-                                                );
-                                            }
-                                            Err(e) => {
-                                                state.status_message =
-                                                    format!("Failed to load runs: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
+                                // Removed 's' keybind since sessions are grouped natively
                                 KeyCode::Char('r') => {
                                     if state.selected_tab == 4 {
+                                        let session_ids = state.ordered_session_ids.clone();
                                         match refresh_runs_for_selected_session(
                                             &mut state,
                                             &client,
                                             &args.gateway_url,
                                             &args.token,
+                                            &session_ids,
                                         )
                                         .await
                                         {
                                             Ok(_) => {
                                                 state.status_message = format!(
-                                                    "Loaded {} run(s) for selected session ({} display rows)",
-                                                    state.session_runs.len(),
+                                                    "Loaded runs for {} session(s) ({} display rows)",
+                                                    state.ordered_session_ids.len(),
                                                     state.display_items.len(),
                                                 );
                                             }
@@ -1391,8 +1441,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Char('c') => {
                                     if state.selected_tab == 4 {
-                                        if let Some(run_id_to_cancel) =
-                                            state.selected_display_item().and_then(|item| item.cancel_run_id())
+                                        if let Some(run_id_to_cancel) = state
+                                            .selected_display_item()
+                                            .and_then(|item| item.cancel_run_id())
                                         {
                                             match cancel_run(
                                                 &client,
@@ -1409,13 +1460,17 @@ async fn main() -> anyhow::Result<()> {
                                                         result.cancelled,
                                                         result.previous_state
                                                     );
-                                                    if let Err(e) = refresh_runs_for_selected_session(
-                                                        &mut state,
-                                                        &client,
-                                                        &args.gateway_url,
-                                                        &args.token,
-                                                    )
-                                                    .await
+                                                    let session_ids =
+                                                        state.ordered_session_ids.clone();
+                                                    if let Err(e) =
+                                                        refresh_runs_for_selected_session(
+                                                            &mut state,
+                                                            &client,
+                                                            &args.gateway_url,
+                                                            &args.token,
+                                                            &session_ids,
+                                                        )
+                                                        .await
                                                     {
                                                         state.status_message = format!(
                                                             "Run cancelled, refresh failed: {}",
@@ -1436,8 +1491,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Char('z') => {
                                     if state.selected_tab == 4 {
-                                        if let Some(run_id_to_pause) =
-                                            state.selected_display_item().and_then(|item| item.pause_run_id())
+                                        if let Some(run_id_to_pause) = state
+                                            .selected_display_item()
+                                            .and_then(|item| item.pause_run_id())
                                         {
                                             match pause_scheduled_run(
                                                 &client,
@@ -1454,13 +1510,17 @@ async fn main() -> anyhow::Result<()> {
                                                         result.paused,
                                                         result.previous_state
                                                     );
-                                                    if let Err(e) = refresh_runs_for_selected_session(
-                                                        &mut state,
-                                                        &client,
-                                                        &args.gateway_url,
-                                                        &args.token,
-                                                    )
-                                                    .await
+                                                    let session_ids =
+                                                        state.ordered_session_ids.clone();
+                                                    if let Err(e) =
+                                                        refresh_runs_for_selected_session(
+                                                            &mut state,
+                                                            &client,
+                                                            &args.gateway_url,
+                                                            &args.token,
+                                                            &session_ids,
+                                                        )
+                                                        .await
                                                     {
                                                         state.status_message = format!(
                                                             "Run paused, refresh failed: {}",
@@ -1475,14 +1535,16 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         } else {
                                             state.status_message =
-                                                "No active scheduled run selected to pause".to_string();
+                                                "No active scheduled run selected to pause"
+                                                    .to_string();
                                         }
                                     }
                                 }
                                 KeyCode::Char('u') => {
                                     if state.selected_tab == 4 {
-                                        if let Some(run_id_to_unpause) =
-                                            state.selected_display_item().and_then(|item| item.unpause_run_id())
+                                        if let Some(run_id_to_unpause) = state
+                                            .selected_display_item()
+                                            .and_then(|item| item.unpause_run_id())
                                         {
                                             match resume_scheduled_run(
                                                 &client,
@@ -1497,13 +1559,17 @@ async fn main() -> anyhow::Result<()> {
                                                         "Scheduled run {} unpaused",
                                                         run_id_to_unpause
                                                     );
-                                                    if let Err(e) = refresh_runs_for_selected_session(
-                                                        &mut state,
-                                                        &client,
-                                                        &args.gateway_url,
-                                                        &args.token,
-                                                    )
-                                                    .await
+                                                    let session_ids =
+                                                        state.ordered_session_ids.clone();
+                                                    if let Err(e) =
+                                                        refresh_runs_for_selected_session(
+                                                            &mut state,
+                                                            &client,
+                                                            &args.gateway_url,
+                                                            &args.token,
+                                                            &session_ids,
+                                                        )
+                                                        .await
                                                     {
                                                         state.status_message = format!(
                                                             "Run unpaused, refresh failed: {}",
@@ -1518,18 +1584,21 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         } else {
                                             state.status_message =
-                                                "No paused scheduled run selected to unpause".to_string();
+                                                "No paused scheduled run selected to unpause"
+                                                    .to_string();
                                         }
                                     }
                                 }
                                 KeyCode::Tab => {
                                     state.selected_tab = (state.selected_tab + 1) % 5;
                                     if state.selected_tab == 4 {
+                                        let session_ids = state.ordered_session_ids.clone();
                                         if let Err(e) = refresh_runs_for_selected_session(
                                             &mut state,
                                             &client,
                                             &args.gateway_url,
                                             &args.token,
+                                            &session_ids,
                                         )
                                         .await
                                         {
@@ -1546,11 +1615,13 @@ async fn main() -> anyhow::Result<()> {
                                     };
 
                                     if state.selected_tab == 4 {
+                                        let session_ids = state.ordered_session_ids.clone();
                                         if let Err(e) = refresh_runs_for_selected_session(
                                             &mut state,
                                             &client,
                                             &args.gateway_url,
                                             &args.token,
+                                            &session_ids,
                                         )
                                         .await
                                         {
@@ -1561,7 +1632,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Up => {
                                     // Navigate agents in Agents tab or events in Events tab
-                                    if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
+                                    if state.selected_tab == 1
+                                        && !state.agent_session_ids.is_empty()
+                                    {
                                         if state.selected_agent_index > 0 {
                                             state.selected_agent_index -= 1;
                                         } else {
@@ -1577,15 +1650,19 @@ async fn main() -> anyhow::Result<()> {
                                             if state.selected_run_index > 0 {
                                                 state.selected_run_index -= 1;
                                             } else {
-                                                state.selected_run_index = state.display_items.len() - 1;
+                                                state.selected_run_index =
+                                                    state.display_items.len() - 1;
                                             }
                                         }
                                     }
                                 }
                                 KeyCode::Down => {
                                     // Navigate agents in Agents tab or events in Events tab
-                                    if state.selected_tab == 1 && !state.agent_session_ids.is_empty() {
-                                        state.selected_agent_index = (state.selected_agent_index + 1)
+                                    if state.selected_tab == 1
+                                        && !state.agent_session_ids.is_empty()
+                                    {
+                                        state.selected_agent_index = (state.selected_agent_index
+                                            + 1)
                                             % state.agent_session_ids.len();
                                     } else if state.selected_tab == 2 {
                                         state.navigate_event_selection(1);
@@ -1593,15 +1670,17 @@ async fn main() -> anyhow::Result<()> {
                                         state.navigate_llm_selection(1);
                                     } else if state.selected_tab == 4 {
                                         if !state.display_items.is_empty() {
-                                            state.selected_run_index =
-                                                (state.selected_run_index + 1) % state.display_items.len();
+                                            state.selected_run_index = (state.selected_run_index
+                                                + 1)
+                                                % state.display_items.len();
                                         }
                                     }
                                 }
                                 KeyCode::PageUp => {
                                     if state.selected_tab == 2 {
                                         let events_area = get_events_tab_area(terminal.size()?);
-                                        let page_size = events_area.height.saturating_sub(2).max(1) as i32;
+                                        let page_size =
+                                            events_area.height.saturating_sub(2).max(1) as i32;
                                         state.navigate_event_selection(-page_size);
                                     } else if state.selected_tab == 3 {
                                         state.navigate_llm_selection(-10);
@@ -1610,7 +1689,8 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::PageDown => {
                                     if state.selected_tab == 2 {
                                         let events_area = get_events_tab_area(terminal.size()?);
-                                        let page_size = events_area.height.saturating_sub(2).max(1) as i32;
+                                        let page_size =
+                                            events_area.height.saturating_sub(2).max(1) as i32;
                                         state.navigate_event_selection(page_size);
                                     } else if state.selected_tab == 3 {
                                         state.navigate_llm_selection(10);
@@ -1619,11 +1699,12 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::Home => {
                                     if state.selected_tab == 2 {
                                         // Jump to first EventEntry.
-                                        if let Some((idx, _)) = state
-                                            .event_display_items
-                                            .iter()
-                                            .enumerate()
-                                            .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                                        if let Some((idx, _)) =
+                                            state.event_display_items.iter().enumerate().find(
+                                                |(_, i)| {
+                                                    matches!(i, EventDisplayItem::EventEntry { .. })
+                                                },
+                                            )
                                         {
                                             state.selected_event_index = idx;
                                         }
@@ -1634,12 +1715,12 @@ async fn main() -> anyhow::Result<()> {
                                 KeyCode::End => {
                                     if state.selected_tab == 2 {
                                         // Jump to last EventEntry.
-                                        if let Some((idx, _)) = state
-                                            .event_display_items
-                                            .iter()
-                                            .enumerate()
-                                            .rev()
-                                            .find(|(_, i)| matches!(i, EventDisplayItem::EventEntry { .. }))
+                                        if let Some((idx, _)) =
+                                            state.event_display_items.iter().enumerate().rev().find(
+                                                |(_, i)| {
+                                                    matches!(i, EventDisplayItem::EventEntry { .. })
+                                                },
+                                            )
                                         {
                                             state.selected_event_index = idx;
                                         }
@@ -1650,23 +1731,36 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 KeyCode::Enter | KeyCode::Char(' ') => {
                                     if state.selected_tab == 4 {
-                                        // Toggle collapse on a ScheduleGroup header.
-                                        state.toggle_selected_run_group_collapse();
+                                        // Toggle collapse on a ScheduleGroup header or SessionHeader.
+                                        match state.display_items.get(state.selected_run_index) {
+                                            Some(RunDisplayItem::SessionHeader { .. }) => {
+                                                state.toggle_selected_run_session_collapse();
+                                            }
+                                            Some(RunDisplayItem::ScheduleGroup { .. }) => {
+                                                state.toggle_selected_run_group_collapse();
+                                            }
+                                            _ => {}
+                                        }
                                     } else if state.selected_tab == 2 {
                                         // Toggle collapse on a SessionHeader; show detail on EventEntry.
                                         if matches!(
-                                            state.event_display_items.get(state.selected_event_index),
+                                            state
+                                                .event_display_items
+                                                .get(state.selected_event_index),
                                             Some(EventDisplayItem::SessionHeader { .. })
                                         ) {
                                             state.toggle_selected_event_session_collapse();
                                         } else if state.get_selected_event().is_some() {
-                                            state.selected_event_id =
-                                                state.event_id_for_display_index(state.selected_event_index);
+                                            state.selected_event_id = state
+                                                .event_id_for_display_index(
+                                                    state.selected_event_index,
+                                                );
                                             state.show_event_detail = true;
                                             state.detail_scroll = 0;
                                         }
                                     } else if state.selected_tab == 3 {
-                                        match state.llm_display_items.get(state.selected_llm_index) {
+                                        match state.llm_display_items.get(state.selected_llm_index)
+                                        {
                                             Some(LlmDisplayItem::SessionHeader { .. }) => {
                                                 state.toggle_selected_llm_session_collapse();
                                             }
@@ -1714,13 +1808,23 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                             MouseEventKind::Down(MouseButton::Left) => {
                                                 // Select clicked row inside the list viewport
-                                                if events_area.height > 2 && mouse.row > events_area.y {
-                                                    let viewport_height = events_area.height.saturating_sub(2) as usize;
-                                                    let inner_row = mouse.row.saturating_sub(events_area.y + 1) as usize;
+                                                if events_area.height > 2
+                                                    && mouse.row > events_area.y
+                                                {
+                                                    let viewport_height =
+                                                        events_area.height.saturating_sub(2)
+                                                            as usize;
+                                                    let inner_row =
+                                                        mouse.row.saturating_sub(events_area.y + 1)
+                                                            as usize;
                                                     if inner_row < viewport_height {
-                                                        let scroll_offset = state.selected_event_index
-                                                            .saturating_sub(viewport_height / 2)
-                                                            .min(display_count.saturating_sub(viewport_height));
+                                                        let scroll_offset =
+                                                            state
+                                                                .selected_event_index
+                                                                .saturating_sub(viewport_height / 2)
+                                                                .min(display_count.saturating_sub(
+                                                                    viewport_height,
+                                                                ));
                                                         let clicked_idx = scroll_offset + inner_row;
                                                         if clicked_idx < display_count {
                                                             match state.event_display_items.get(clicked_idx) {
@@ -1777,12 +1881,16 @@ async fn main() -> anyhow::Result<()> {
                                                     let viewport_height =
                                                         llm_area.height.saturating_sub(2) as usize;
                                                     let inner_row =
-                                                        mouse.row.saturating_sub(llm_area.y + 1) as usize;
+                                                        mouse.row.saturating_sub(llm_area.y + 1)
+                                                            as usize;
                                                     if inner_row < viewport_height {
-                                                        let scroll_offset = state
-                                                            .selected_llm_index
-                                                            .saturating_sub(viewport_height / 2)
-                                                            .min(items_count.saturating_sub(viewport_height));
+                                                        let scroll_offset =
+                                                            state
+                                                                .selected_llm_index
+                                                                .saturating_sub(viewport_height / 2)
+                                                                .min(items_count.saturating_sub(
+                                                                    viewport_height,
+                                                                ));
                                                         let clicked_idx = scroll_offset + inner_row;
                                                         if clicked_idx < items_count {
                                                             match state.llm_display_items.get(clicked_idx) {
@@ -1838,16 +1946,18 @@ async fn main() -> anyhow::Result<()> {
                                                     let viewport_height =
                                                         runs_area.height.saturating_sub(2) as usize;
                                                     let inner_row =
-                                                        mouse.row.saturating_sub(runs_area.y + 1) as usize;
+                                                        mouse.row.saturating_sub(runs_area.y + 1)
+                                                            as usize;
 
                                                     if inner_row < viewport_height {
-                                                        let max_offset =
-                                                            items_count.saturating_sub(viewport_height);
+                                                        let max_offset = items_count
+                                                            .saturating_sub(viewport_height);
                                                         let scroll_offset = state
                                                             .selected_run_index
                                                             .saturating_sub(viewport_height / 2)
                                                             .min(max_offset);
-                                                        let clicked_index = scroll_offset + inner_row;
+                                                        let clicked_index =
+                                                            scroll_offset + inner_row;
 
                                                         if clicked_index < items_count {
                                                             // If clicking an already-selected ScheduleGroup, toggle collapse.
@@ -1888,11 +1998,6 @@ async fn main() -> anyhow::Result<()> {
                     let mut all_ids: Vec<String> =
                         sessions.iter().map(|s| s.session_id.clone()).collect();
                     all_ids.sort();
-                    state.ordered_session_ids = all_ids;
-                    if state.selected_runs_session_idx >= state.ordered_session_ids.len() {
-                        state.selected_runs_session_idx =
-                            state.ordered_session_ids.len().saturating_sub(1);
-                    }
 
                     for session in &sessions {
                         state
@@ -1946,6 +2051,7 @@ async fn main() -> anyhow::Result<()> {
                         &client,
                         &args.gateway_url,
                         &args.token,
+                        &all_ids, // Pass all_ids to refresh all sessions
                     )
                     .await
                     {
@@ -2028,20 +2134,24 @@ async fn main() -> anyhow::Result<()> {
                         .and_then(extract_memory_operation_details);
 
                     if let Some(program) = run_create_program.as_ref() {
-                        let program_summary = single_line(&format_run_create_program_summary(program), 120);
+                        let program_summary =
+                            single_line(&format_run_create_program_summary(program), 120);
                         if result_summary.is_empty() {
                             result_summary = format!("program: {}", program_summary);
                         } else {
-                            result_summary = format!("{} | program: {}", result_summary, program_summary);
+                            result_summary =
+                                format!("{} | program: {}", result_summary, program_summary);
                         }
                     }
 
                     if let Some(memory) = memory_operation.as_ref() {
-                        let memory_summary = single_line(&format_memory_operation_summary(memory), 120);
+                        let memory_summary =
+                            single_line(&format_memory_operation_summary(memory), 120);
                         if result_summary.is_empty() {
                             result_summary = format!("memory: {}", memory_summary);
                         } else {
-                            result_summary = format!("{} | memory: {}", result_summary, memory_summary);
+                            result_summary =
+                                format!("{} | memory: {}", result_summary, memory_summary);
                         }
                     }
 
@@ -2100,7 +2210,8 @@ async fn main() -> anyhow::Result<()> {
                             program.execution_mode.as_deref().unwrap_or("llm_agent")
                         ));
                         if let Some(trigger_capability_id) = &program.trigger_capability_id {
-                            full_lines.push(format!("  Trigger Capability: {}", trigger_capability_id));
+                            full_lines
+                                .push(format!("  Trigger Capability: {}", trigger_capability_id));
                         }
                         if let Some(trigger_inputs) = &program.trigger_inputs {
                             full_lines.push(format!("  Trigger Inputs: {}", trigger_inputs));
@@ -2318,7 +2429,11 @@ async fn fetch_gateway_llm_profile(
     token: &str,
 ) -> anyhow::Result<Option<String>> {
     let url = format!("{}/chat/admin/llm-profile", gateway_url);
-    let resp = client.get(&url).header("X-Admin-Token", token).send().await?;
+    let resp = client
+        .get(&url)
+        .header("X-Admin-Token", token)
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         return Err(anyhow::anyhow!(
@@ -2483,19 +2598,25 @@ async fn refresh_runs_for_selected_session(
     client: &Client,
     gateway_url: &str,
     token: &str,
+    session_ids: &[String], // Now takes a slice of all session IDs
 ) -> anyhow::Result<()> {
-    // Use get_runs_session_id() which falls back to all known sessions, not just active agents.
-    let Some(session_id) = state.get_runs_session_id().map(|s| s.to_string()) else {
-        state.session_runs.clear();
-        state.runs_session_id = None;
-        state.selected_run_index = 0;
-        return Ok(());
-    };
+    state.runs_by_session.clear();
 
-    let response = fetch_session_runs(client, gateway_url, token, &session_id).await?;
-    state.runs_session_id = Some(response.session_id);
-    // Store raw runs and rebuild the grouped tree view.
-    state.session_runs = response.runs;
+    // Fetch runs for all known sessions
+    for session_id in session_ids {
+        match fetch_session_runs(client, gateway_url, token, session_id).await {
+            Ok(response) => {
+                state
+                    .runs_by_session
+                    .insert(session_id.clone(), response.runs);
+            }
+            Err(e) => {
+                // Log/ignore errors for individual sessions so we don't fail the whole refresh
+                info!("Failed to fetch runs for session {}: {}", session_id, e);
+            }
+        }
+    }
+
     state.rebuild_display_items();
     state.sync_run_selection();
     Ok(())
@@ -2826,7 +2947,10 @@ fn get_runs_tab_area(screen: Rect) -> Rect {
 fn single_line(text: &str, max_chars: usize) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() > max_chars {
-        let truncated: String = normalized.chars().take(max_chars.saturating_sub(3)).collect();
+        let truncated: String = normalized
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect();
         format!("{}...", truncated)
     } else {
         normalized
@@ -2937,12 +3061,8 @@ fn extract_memory_operation_details(
     let store_success = metadata
         .get("memory_store_success")
         .and_then(|v| v.as_bool());
-    let get_found = metadata
-        .get("memory_get_found")
-        .and_then(|v| v.as_bool());
-    let get_expired = metadata
-        .get("memory_get_expired")
-        .and_then(|v| v.as_bool());
+    let get_found = metadata.get("memory_get_found").and_then(|v| v.as_bool());
+    let get_expired = metadata.get("memory_get_expired").and_then(|v| v.as_bool());
     let get_value = metadata
         .get("memory_get_value")
         .map(json_value_to_display)
@@ -3137,8 +3257,8 @@ fn draw_profile_selector_popup(f: &mut Frame, area: Rect, state: &MonitorState) 
     ]));
     lines.push(Line::from(""));
 
-    let options = std::iter::once("<unset>")
-        .chain(state.available_llm_profiles.iter().map(|p| p.as_str()));
+    let options =
+        std::iter::once("<unset>").chain(state.available_llm_profiles.iter().map(|p| p.as_str()));
     for (idx, option) in options.enumerate() {
         let is_selected = idx == state.selected_profile_index;
         let style = if is_selected {
@@ -3306,32 +3426,12 @@ fn draw_agents_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
 }
 
 fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let selected_session = state.get_runs_session_id().map(|s| s.to_string());
+    let display_items = &state.display_items;
 
-    let Some(session_id) = selected_session else {
-        let placeholder = Paragraph::new(
-            "No sessions available. Connect a session first.",
-        )
-        .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().title("Runs").borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
-        f.render_widget(placeholder, area);
-        return;
-    };
-
-    let loaded_for = state.runs_session_id.as_deref().unwrap_or("<none>");
-    let session_nav = if state.ordered_session_ids.len() > 1 {
-        format!(
-            "  [s] session {}/{}",
-            state.selected_runs_session_idx + 1,
-            state.ordered_session_ids.len()
-        )
-    } else {
-        String::new()
-    };
+    // The runs are now grouped by session, no specific session is "selected".
     let title = format!(
-        "Runs for {} (loaded: {}) · [r] refresh  [↵/⎵] expand  [c] cancel  [↑↓] navigate{}",
-        session_id, loaded_for, session_nav
+        " Runs ({} items) · ↑↓ navigate  ↵/⎵ map/expand  [c]ancel [z]pause [u]uresume ",
+        display_items.len(),
     );
 
     if state.display_items.is_empty() {
@@ -3346,6 +3446,29 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .display_items
         .iter()
         .map(|item| match item {
+            RunDisplayItem::SessionHeader {
+                session_id,
+                run_count,
+                collapsed,
+            } => {
+                let is_selected = false; // We don't have selected_idx here easily, but we can get it from state if needed.
+                                         // Or just use a default style if it's the current selected item in List.
+                                         // The selection styling is actually handled by the List widget's highlight_style,
+                                         // so we don't strictly need to manually color the background here unless we want specific colors.
+
+                let mut hdr_style = Style::default().fg(Color::Cyan);
+                hdr_style = hdr_style.add_modifier(Modifier::BOLD);
+
+                let icon = if *collapsed { "▶─" } else { "▼─" };
+                let line = Line::from(vec![
+                    Span::styled(format!("{} {} ", icon, session_id), hdr_style),
+                    Span::styled(
+                        format!("({} runs)", run_count),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+                ListItem::new(line)
+            }
             RunDisplayItem::ScheduleGroup {
                 goal,
                 schedule,
@@ -3442,10 +3565,7 @@ fn draw_runs_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                 let short_id = run.run_id.get(4..12).unwrap_or(&run.run_id);
                 let mut spans = vec![
                     Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        short_id.to_string(),
-                        Style::default().fg(Color::White),
-                    ),
+                    Span::styled(short_id.to_string(), Style::default().fg(Color::White)),
                     Span::raw("  "),
                     Span::styled(
                         format!("{:<20}", &run.state),
@@ -3531,7 +3651,11 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .map(|(display_idx, item)| {
             let is_selected = display_idx == state.selected_event_index;
             match item {
-                EventDisplayItem::SessionHeader { session_id, event_count, collapsed } => {
+                EventDisplayItem::SessionHeader {
+                    session_id,
+                    event_count,
+                    collapsed,
+                } => {
                     let hdr_style = if is_selected {
                         Style::default()
                             .fg(Color::Black)
@@ -3555,7 +3679,11 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                             },
                         ),
                         Span::styled(
-                            if *collapsed { "  [↵ expand]" } else { "  [↵ collapse]" },
+                            if *collapsed {
+                                "  [↵ expand]"
+                            } else {
+                                "  [↵ collapse]"
+                            },
                             if is_selected {
                                 hdr_style
                             } else {
@@ -3632,8 +3760,8 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         }
     );
 
-    let paragraph = Paragraph::new(visible_items)
-        .block(Block::default().title(title).borders(Borders::ALL));
+    let paragraph =
+        Paragraph::new(visible_items).block(Block::default().title(title).borders(Borders::ALL));
     f.render_widget(paragraph, area);
 
     if state.show_event_detail {
@@ -3657,8 +3785,12 @@ fn build_copy_text(event: &SystemEvent) -> String {
     if let Some(ref ce) = event.code_execution {
         out.push_str("\n--- Code Execution ---\n");
         out.push_str(&format!("Language: {}\n", ce.language));
-        if let Some(ec) = ce.exit_code { out.push_str(&format!("Exit Code: {}\n", ec)); }
-        if let Some(ms) = ce.duration_ms { out.push_str(&format!("Duration: {}ms\n", ms)); }
+        if let Some(ec) = ce.exit_code {
+            out.push_str(&format!("Exit Code: {}\n", ec));
+        }
+        if let Some(ms) = ce.duration_ms {
+            out.push_str(&format!("Duration: {}ms\n", ms));
+        }
         if !ce.code.is_empty() {
             out.push_str("\nCode:\n");
             out.push_str(&ce.code);
@@ -3868,18 +4000,14 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scrol
             lines.push(Line::from(vec![
                 Span::styled("Schedule: ", Style::default().fg(Color::Yellow)),
                 Span::styled(
-                    program
-                        .schedule
-                        .unwrap_or_else(|| "none".to_string()),
+                    program.schedule.unwrap_or_else(|| "none".to_string()),
                     Style::default().fg(Color::White),
                 ),
             ]));
             lines.push(Line::from(vec![
                 Span::styled("Next Run At: ", Style::default().fg(Color::Yellow)),
                 Span::styled(
-                    program
-                        .next_run_at
-                        .unwrap_or_else(|| "none".to_string()),
+                    program.next_run_at.unwrap_or_else(|| "none".to_string()),
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -3952,18 +4080,14 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scrol
                 lines.push(Line::from(vec![
                     Span::styled("Value Stored: ", Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        memory
-                            .store_value
-                            .unwrap_or_else(|| "none".to_string()),
+                        memory.store_value.unwrap_or_else(|| "none".to_string()),
                         Style::default().fg(Color::White),
                     ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("Entry ID: ", Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        memory
-                            .store_entry_id
-                            .unwrap_or_else(|| "none".to_string()),
+                        memory.store_entry_id.unwrap_or_else(|| "none".to_string()),
                         Style::default().fg(Color::White),
                     ),
                 ]));
@@ -4038,7 +4162,10 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scrol
             } else {
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled("<unrenderable result>", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "<unrenderable result>",
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
             }
             lines.push(Line::from(""));
@@ -4092,7 +4219,10 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scrol
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" to copy to /tmp/ccos-monitor-copy.txt", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            " to copy to /tmp/ccos-monitor-copy.txt",
+            Style::default().fg(Color::DarkGray),
+        ),
     ]));
 
     let paragraph = Paragraph::new(lines)
@@ -4180,7 +4310,11 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         .map(|(display_idx, item)| {
             let is_selected = display_idx == state.selected_llm_index;
             match item {
-                LlmDisplayItem::SessionHeader { session_id, count, collapsed } => {
+                LlmDisplayItem::SessionHeader {
+                    session_id,
+                    count,
+                    collapsed,
+                } => {
                     let hdr_style = if is_selected {
                         Style::default()
                             .fg(Color::Black)
@@ -4192,74 +4326,150 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                             .add_modifier(Modifier::BOLD)
                     };
                     let collapse_icon = if *collapsed { "▶─ " } else { "▼─ " };
-                    let action = if *collapsed { "  [↵ expand]" } else { "  [↵ collapse]" };
+                    let action = if *collapsed {
+                        "  [↵ expand]"
+                    } else {
+                        "  [↵ collapse]"
+                    };
                     Line::from(vec![
                         Span::styled(collapse_icon, hdr_style),
                         Span::styled(session_id.clone(), hdr_style),
                         Span::styled(
                             format!("  {} call(s)", count),
-                            if is_selected { hdr_style } else { Style::default().fg(Color::DarkGray) },
+                            if is_selected {
+                                hdr_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
                         ),
                         Span::styled(
                             action,
-                            if is_selected { hdr_style } else { Style::default().fg(Color::DarkGray) },
+                            if is_selected {
+                                hdr_style
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
                         ),
                     ])
                 }
                 LlmDisplayItem::ConsultationEntry { consultation_idx } => {
-                    let (session_id, consultation) = &state.llm_consultations[*consultation_idx];
-                    let complete_icon = if consultation.task_complete { "✓" } else { "→" };
-                    let complete_color = if consultation.task_complete { Color::Green } else { Color::Yellow };
-                    let init_str = if consultation.is_initial { "init" } else { "fup " };
-                    let model_str = consultation
-                        .model
-                        .as_deref()
-                        .unwrap_or("?")
-                        .split('/')
-                        .last()
-                        .unwrap_or("?");
-                    let caps_str = if consultation.planned_capabilities.is_empty() {
-                        "-".to_string()
+                    // Backwards compatible way to find the consultation and session from the display item list
+                    // Find the nearest SessionHeader before this entry
+                    let mut current_session_id = String::new();
+                    for i in (0..=display_idx).rev() {
+                        if let Some(LlmDisplayItem::SessionHeader { session_id, .. }) =
+                            state.llm_display_items.get(i)
+                        {
+                            current_session_id = session_id.clone();
+                            break;
+                        }
+                    }
+
+                    if let Some(consultations) = state.llm_consultations.get(&current_session_id) {
+                        if let Some(consultation) = consultations.get(*consultation_idx) {
+                            let session_id = &current_session_id;
+                            let complete_icon = if consultation.task_complete {
+                                "✓"
+                            } else {
+                                "→"
+                            };
+                            let complete_color = if consultation.task_complete {
+                                Color::Green
+                            } else {
+                                Color::Yellow
+                            };
+                            let init_str = if consultation.is_initial {
+                                "init"
+                            } else {
+                                "fup "
+                            };
+                            let model_str = consultation
+                                .model
+                                .as_deref()
+                                .unwrap_or("?")
+                                .split('/')
+                                .last()
+                                .unwrap_or("?");
+                            let caps_str = if consultation.planned_capabilities.is_empty() {
+                                "-".to_string()
+                            } else {
+                                consultation.planned_capabilities.join(", ")
+                            };
+                            let understanding_preview =
+                                single_line(&consultation.understanding, 35);
+                            let base = if is_selected {
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default()
+                            };
+                            let _ = session_id; // grouped under header; not repeated per row
+                            Line::from(vec![
+                                Span::styled(
+                                    "│ ",
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::DarkGray)
+                                    },
+                                ),
+                                Span::styled(
+                                    format!("[{:>3}] ", consultation.iteration),
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::Cyan)
+                                    },
+                                ),
+                                Span::styled(
+                                    format!("[{}] ", complete_icon),
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(complete_color)
+                                    },
+                                ),
+                                Span::styled(
+                                    format!("[{}] ", init_str),
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::DarkGray)
+                                    },
+                                ),
+                                Span::styled(
+                                    format!("{:<16} ", model_str),
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::White)
+                                    },
+                                ),
+                                Span::styled(
+                                    understanding_preview,
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::White)
+                                    },
+                                ),
+                                Span::styled(
+                                    format!("  caps: {}", single_line(&caps_str, 25)),
+                                    if is_selected {
+                                        base
+                                    } else {
+                                        Style::default().fg(Color::DarkGray)
+                                    },
+                                ),
+                            ])
+                        } else {
+                            Line::from("")
+                        }
                     } else {
-                        consultation.planned_capabilities.join(", ")
-                    };
-                    let understanding_preview = single_line(&consultation.understanding, 35);
-                    let base = if is_selected {
-                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
-                    let _ = session_id; // grouped under header; not repeated per row
-                    Line::from(vec![
-                        Span::styled(
-                            "│ ",
-                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
-                        ),
-                        Span::styled(
-                            format!("[{:>3}] ", consultation.iteration),
-                            if is_selected { base } else { Style::default().fg(Color::Cyan) },
-                        ),
-                        Span::styled(
-                            format!("[{}] ", complete_icon),
-                            if is_selected { base } else { Style::default().fg(complete_color) },
-                        ),
-                        Span::styled(
-                            format!("[{}] ", init_str),
-                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
-                        ),
-                        Span::styled(
-                            format!("{:<16} ", model_str),
-                            if is_selected { base } else { Style::default().fg(Color::White) },
-                        ),
-                        Span::styled(
-                            understanding_preview,
-                            if is_selected { base } else { Style::default().fg(Color::White) },
-                        ),
-                        Span::styled(
-                            format!("  caps: {}", single_line(&caps_str, 25)),
-                            if is_selected { base } else { Style::default().fg(Color::DarkGray) },
-                        ),
-                    ])
+                        Line::from("")
+                    }
                 }
             }
         })
@@ -4270,8 +4480,8 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         entry_count, session_count
     );
 
-    let paragraph = Paragraph::new(visible_items)
-        .block(Block::default().title(title).borders(Borders::ALL));
+    let paragraph =
+        Paragraph::new(visible_items).block(Block::default().title(title).borders(Borders::ALL));
     f.render_widget(paragraph, area);
 
     // Detail popup for the selected consultation
@@ -4279,8 +4489,26 @@ fn draw_llm_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         if let Some(LlmDisplayItem::ConsultationEntry { consultation_idx }) =
             state.llm_display_items.get(state.selected_llm_index)
         {
-            let (session_id, consultation) = &state.llm_consultations[*consultation_idx];
-            draw_llm_detail_popup(f, area, session_id, consultation, state.llm_detail_scroll);
+            let mut current_session_id = String::new();
+            for i in (0..=state.selected_llm_index).rev() {
+                if let Some(LlmDisplayItem::SessionHeader { session_id, .. }) =
+                    state.llm_display_items.get(i)
+                {
+                    current_session_id = session_id.clone();
+                    break;
+                }
+            }
+            if let Some(consultations) = state.llm_consultations.get(&current_session_id) {
+                if let Some(consultation) = consultations.get(*consultation_idx) {
+                    draw_llm_detail_popup(
+                        f,
+                        area,
+                        &current_session_id,
+                        consultation,
+                        state.llm_detail_scroll,
+                    );
+                }
+            }
         }
     }
 }
@@ -4303,7 +4531,9 @@ fn draw_llm_detail_popup(
 
     lines.push(Line::from(vec![Span::styled(
         "LLM Consultation Detail",
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
 
@@ -4318,14 +4548,22 @@ fn draw_llm_detail_popup(
     lines.push(Line::from(vec![
         Span::styled("Type:       ", label_style),
         Span::styled(
-            if consultation.is_initial { "initial" } else { "follow-up" },
+            if consultation.is_initial {
+                "initial"
+            } else {
+                "follow-up"
+            },
             value_style,
         ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Complete:   ", label_style),
         Span::styled(
-            if consultation.task_complete { "yes ✓" } else { "no →" },
+            if consultation.task_complete {
+                "yes ✓"
+            } else {
+                "no →"
+            },
             if consultation.task_complete {
                 Style::default().fg(Color::Green)
             } else {
@@ -4355,7 +4593,10 @@ fn draw_llm_detail_popup(
 
     // Planned capabilities
     if !consultation.planned_capabilities.is_empty() {
-        lines.push(Line::from(vec![Span::styled("Planned capabilities:", label_style)]));
+        lines.push(Line::from(vec![Span::styled(
+            "Planned capabilities:",
+            label_style,
+        )]));
         for cap in &consultation.planned_capabilities {
             lines.push(Line::from(vec![
                 Span::styled("  • ", dim_style),
@@ -4366,7 +4607,10 @@ fn draw_llm_detail_popup(
     }
 
     // Understanding
-    lines.push(Line::from(vec![Span::styled("Understanding:", label_style)]));
+    lines.push(Line::from(vec![Span::styled(
+        "Understanding:",
+        label_style,
+    )]));
     for line in consultation.understanding.lines() {
         lines.push(Line::from(vec![
             Span::styled("  ", dim_style),

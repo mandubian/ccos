@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
 use reqwest::Client;
@@ -399,9 +399,114 @@ fn apply_model_completion(state: &mut AppState) {
     });
 }
 
+fn apply_session_completion(state: &mut AppState, gateway_url: &str, token: &str) {
+    let input = state.input.as_str();
+    if !input.starts_with("/session") || input.contains('\n') {
+        state.clear_completion();
+        return;
+    }
+
+    let prefix = input
+        .strip_prefix("/session")
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Fetch sessions synchronously for autocomplete
+    // We cannot use rt.block_on here because we are already inside an async context (tokio::main).
+    // Instead, we can spawn a blocking thread that creates its own single-threaded runtime.
+    let gateway_url = gateway_url.to_string();
+    let token = token.to_string();
+
+    let result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let client = Client::new();
+            if let Ok(resp) = client
+                .get(format!("{}/chat/sessions", gateway_url))
+                .header("X-Admin-Token", token)
+                .send()
+                .await
+            {
+                if let Ok(sessions) = resp.json::<Vec<serde_json::Value>>().await {
+                    return Some(sessions);
+                }
+            }
+            None
+        })
+    })
+    .join()
+    .unwrap_or(None);
+
+    let Some(sessions) = result else {
+        return;
+    };
+
+    let mut matches: Vec<String> = sessions
+        .into_iter()
+        .filter_map(|s| {
+            s.get("session_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .filter_map(|id| id.strip_prefix("chat:").map(|s| s.to_string()))
+        .filter_map(|s| {
+            // Parse channel id out of "chat:channel_id:user_id"
+            let parts: Vec<&str> = s.split(':').collect();
+            if !parts.is_empty() {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    matches.sort();
+    matches.dedup();
+
+    let filtered_matches: Vec<String> = if prefix.is_empty() {
+        matches
+    } else {
+        let lower = prefix.to_ascii_lowercase();
+        matches
+            .into_iter()
+            .filter(|m| m.to_ascii_lowercase().starts_with(&lower))
+            .collect()
+    };
+
+    if filtered_matches.is_empty() {
+        state.clear_completion();
+        return;
+    }
+
+    let next_index = if let Some(comp) = &state.model_completion {
+        if comp.prefix == prefix && comp.matches == filtered_matches {
+            (comp.index + 1) % filtered_matches.len()
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let selected = filtered_matches[next_index].clone();
+    state.input = format!("/session {}", selected);
+    state.input_cursor = state.input.len();
+    state.model_completion = Some(ModelCompletionState {
+        prefix,
+        matches: filtered_matches,
+        index: next_index,
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let mut current_channel_id = args.channel_id.clone();
     let available_profiles = load_available_llm_profiles(&args.config_path);
 
     // Setup terminal
@@ -415,6 +520,7 @@ async fn main() -> anyhow::Result<()> {
     let mut state = AppState::new(available_profiles);
     state.input_history = load_input_history_from_disk();
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx_channel, mut rx_channel) = tokio::sync::watch::channel(current_channel_id.clone());
 
     // Spawn event handlers
     let tx_input = tx.clone();
@@ -509,243 +615,278 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn direct message poller
-    let direct_client = client.clone();
-    let direct_url = args.connector_url.clone();
-    let direct_secret = args.secret.clone();
-    let direct_channel = args.channel_id.clone();
-    let tx_direct = tx.clone();
+    // Connection manager
+    let conn_client = client.clone();
+    let conn_connector_url = args.connector_url.clone();
+    let conn_secret = args.secret.clone();
+    let conn_user_id = args.user_id.clone();
+    let conn_gateway_url = args.gateway_url.clone();
+    let conn_tx = tx.clone();
 
     tokio::spawn(async move {
-        let mut first_check = true;
+        let mut connection_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
         loop {
-            match direct_client
-                .get(format!("{}/connector/loopback/outbound", direct_url))
-                .header("x-ccos-connector-secret", &direct_secret)
-                .query(&[("channel_id", &direct_channel)])
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    if first_check {
-                        let _ = tx_direct.send(AppEvent::Status("Connected".to_string()));
-                        first_check = false;
-                    }
-                    if let Ok(messages) = resp.json::<Vec<OutboundRequest>>().await {
-                        for msg in messages {
-                            let _ = tx_direct.send(AppEvent::Message(ChatMessage {
-                                source: MessageSource::Direct,
-                                sender: "agent".to_string(),
-                                content: msg.content,
-                                timestamp: chrono::Local::now(),
-                                metadata: None,
-                            }));
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = tx_direct.send(AppEvent::Status(format!("Offline: {}", e)));
-                    first_check = true;
-                }
+            // Cancel existing handles
+            for handle in connection_handles.drain(..) {
+                handle.abort();
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
 
-    // Check session status before connecting
-    let ws_session = format!("chat:{}:{}", args.channel_id, args.user_id);
-    let session_client = Client::new();
-    let session_status =
-        check_session_status(&session_client, &args.gateway_url, &ws_session).await;
+            let current_channel = rx_channel.borrow().clone();
 
-    match session_status {
-        SessionStatus::New => {
-            let _ = tx.send(AppEvent::Message(ChatMessage {
-                source: MessageSource::System,
-                sender: "System".to_string(),
-                content: "🆕 New session created. Agent will spawn on first message.".to_string(),
-                timestamp: chrono::Local::now(),
-                metadata: None,
-            }));
-        }
-        SessionStatus::Reconnecting { agent_running } => {
-            let msg = if agent_running {
-                "🔄 Reconnected to existing session. Agent is running.".to_string()
-            } else {
-                "🔄 Reconnected to existing session. Starting agent...".to_string()
-            };
-            let _ = tx.send(AppEvent::Message(ChatMessage {
-                source: MessageSource::System,
-                sender: "System".to_string(),
-                content: msg,
-                timestamp: chrono::Local::now(),
-                metadata: None,
-            }));
-        }
-    }
+            // Spawn direct message poller
+            let direct_client = conn_client.clone();
+            let direct_url = conn_connector_url.clone();
+            let direct_secret = conn_secret.clone();
+            let direct_channel = current_channel.clone();
+            let tx_direct = conn_tx.clone();
 
-    // Spawn WebSocket event stream for real-time updates
-    let ws_url = args.gateway_url.clone();
-    let tx_ws = tx.clone();
-    let ws_token = args.secret.clone();
-
-    tokio::spawn(async move {
-        use futures::{SinkExt, StreamExt};
-        use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-
-        let ws_endpoint = ws_url
-            .replace("http://", "ws://")
-            .replace("https://", "wss://");
-        let url = format!(
-            "{}/chat/stream/{}?token={}",
-            ws_endpoint, ws_session, ws_token
-        );
-
-        loop {
-            match connect_async(&url).await {
-                Ok((ws_stream, _)) => {
-                    let (mut write, mut read) = ws_stream.split();
-
-                    // Send initial connection message
-                    info!("WebSocket connected to {}", url);
-
-                    // Process incoming messages
-                    while let Some(msg) = read.next().await {
-                        match msg {
-                            Ok(Message::Text(text)) => {
-                                // Parse the event
-                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&text)
-                                {
-                                    let event_type = event
-                                        .get("event_type")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown");
-
-                                    match event_type {
-                                        "action" | "historical" => {
-                                            // Handle action events
-                                            if let Some(action) = event.get("action") {
-                                                let action_type = action
-                                                    .get("action_type")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("unknown");
-                                                let function_name = action
-                                                    .get("function_name")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("unknown");
-
-                                                let (sender, content) = match action_type {
-                                                    "CapabilityCall" => (
-                                                        "Action".to_string(),
-                                                        format!("⚡ {}", function_name),
-                                                    ),
-                                                    "CapabilityResult" => (
-                                                        "Result".to_string(),
-                                                        format!("✅ {}", function_name),
-                                                    ),
-                                                    _ => continue,
-                                                };
-
-                                                let event_id = format!(
-                                                    "{}-{}",
-                                                    action
-                                                        .get("timestamp")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0),
-                                                    function_name
-                                                );
-
-                                                let message = ChatMessage {
-                                                    source: MessageSource::Audit,
-                                                    sender,
-                                                    content,
-                                                    timestamp: chrono::Local::now(),
-                                                    metadata: None,
-                                                };
-
-                                                let _ = tx_ws
-                                                    .send(AppEvent::AuditUpdate(event_id, message));
-                                            }
-                                        }
-                                        "state_update" => {
-                                            // Handle state updates (heartbeats)
-                                            if let Some(state) = event.get("state") {
-                                                let is_healthy = state
-                                                    .get("is_healthy")
-                                                    .and_then(|v| v.as_bool())
-                                                    .unwrap_or(false);
-                                                let current_step = state
-                                                    .get("current_step")
-                                                    .and_then(|v| v.as_u64())
-                                                    .unwrap_or(0);
-
-                                                let health_icon =
-                                                    if is_healthy { "🟢" } else { "🔴" };
-                                                let message = ChatMessage {
-                                                    source: MessageSource::Audit,
-                                                    sender: "Status".to_string(),
-                                                    content: format!(
-                                                        "{} Agent step: {}",
-                                                        health_icon, current_step
-                                                    ),
-                                                    timestamp: chrono::Local::now(),
-                                                    metadata: None,
-                                                };
-
-                                                let _ = tx_ws.send(AppEvent::AuditUpdate(
-                                                    format!(
-                                                        "state-{}",
-                                                        chrono::Local::now().timestamp()
-                                                    ),
-                                                    message,
-                                                ));
-                                            }
-                                        }
-                                        "agent_crashed" => {
-                                            // Handle crash events
-                                            let message = ChatMessage {
-                                                source: MessageSource::Audit,
-                                                sender: "Alert".to_string(),
-                                                content: "💥 Agent crashed!".to_string(),
-                                                timestamp: chrono::Local::now(),
-                                                metadata: None,
-                                            };
-
-                                            let _ = tx_ws.send(AppEvent::AuditUpdate(
-                                                format!(
-                                                    "crash-{}",
-                                                    chrono::Local::now().timestamp()
-                                                ),
-                                                message,
-                                            ));
-                                        }
-                                        "ping" => {
-                                            // Respond to ping with pong
-                                            let _ = write.send(Message::Pong(vec![])).await;
-                                        }
-                                        _ => {}
-                                    }
+            connection_handles.push(tokio::spawn(async move {
+                let mut first_check = true;
+                loop {
+                    match direct_client
+                        .get(format!("{}/connector/loopback/outbound", direct_url))
+                        .header("x-ccos-connector-secret", &direct_secret)
+                        .query(&[("channel_id", &direct_channel)])
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            if first_check {
+                                let _ = tx_direct.send(AppEvent::Status("Connected".to_string()));
+                                first_check = false;
+                            }
+                            if let Ok(messages) = resp.json::<Vec<OutboundRequest>>().await {
+                                for msg in messages {
+                                    let _ = tx_direct.send(AppEvent::Message(ChatMessage {
+                                        source: MessageSource::Direct,
+                                        sender: "agent".to_string(),
+                                        content: msg.content,
+                                        timestamp: chrono::Local::now(),
+                                        metadata: None,
+                                    }));
                                 }
                             }
-                            Ok(Message::Close(_)) => {
-                                info!("WebSocket closed, reconnecting...");
-                                break;
-                            }
-                            Err(e) => {
-                                warn!("WebSocket error: {}, reconnecting...", e);
-                                break;
-                            }
-                            _ => {}
+                        }
+                        Err(e) => {
+                            let _ = tx_direct.send(AppEvent::Status(format!("Offline: {}", e)));
+                            first_check = true;
                         }
                     }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-                Err(e) => {
-                    warn!("WebSocket connection failed: {}, retrying in 5s...", e);
+            }));
+
+            // Check session status before connecting
+            let ws_session = format!("chat:{}:{}", current_channel, conn_user_id);
+            let session_client = Client::new();
+            let session_status =
+                check_session_status(&session_client, &conn_gateway_url, &ws_session).await;
+
+            match session_status {
+                SessionStatus::New => {
+                    let _ = conn_tx.send(AppEvent::Message(ChatMessage {
+                        source: MessageSource::System,
+                        sender: "System".to_string(),
+                        content: format!(
+                            "🆕 Joined session '{}'. Agent will spawn on first message.",
+                            current_channel
+                        ),
+                        timestamp: chrono::Local::now(),
+                        metadata: None,
+                    }));
+                }
+                SessionStatus::Reconnecting { agent_running } => {
+                    let msg = if agent_running {
+                        format!(
+                            "🔄 Reconnected to existing session '{}'. Agent is running.",
+                            current_channel
+                        )
+                    } else {
+                        format!(
+                            "🔄 Reconnected to existing session '{}'. Starting agent...",
+                            current_channel
+                        )
+                    };
+                    let _ = conn_tx.send(AppEvent::Message(ChatMessage {
+                        source: MessageSource::System,
+                        sender: "System".to_string(),
+                        content: msg,
+                        timestamp: chrono::Local::now(),
+                        metadata: None,
+                    }));
                 }
             }
 
-            // Wait before reconnecting
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Spawn WebSocket event stream for real-time updates
+            let ws_url = conn_gateway_url.clone();
+            let tx_ws = conn_tx.clone();
+            let ws_token = conn_secret.clone();
+
+            connection_handles.push(tokio::spawn(async move {
+                use futures::{SinkExt, StreamExt};
+                use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+
+                let ws_endpoint = ws_url
+                    .replace("http://", "ws://")
+                    .replace("https://", "wss://");
+                let url = format!(
+                    "{}/chat/stream/{}?token={}",
+                    ws_endpoint, ws_session, ws_token
+                );
+
+                loop {
+                    match connect_async(&url).await {
+                        Ok((ws_stream, _)) => {
+                            let (mut write, mut read) = ws_stream.split();
+
+                            info!("WebSocket connected to {}", url);
+
+                            // Process incoming messages
+                            while let Some(msg) = read.next().await {
+                                match msg {
+                                    Ok(Message::Text(text)) => {
+                                        if let Ok(event) =
+                                            serde_json::from_str::<serde_json::Value>(&text)
+                                        {
+                                            let event_type = event
+                                                .get("event_type")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+
+                                            match event_type {
+                                                "action" | "historical" => {
+                                                    // Handle action events
+                                                    if let Some(action) = event.get("action") {
+                                                        let action_type = action
+                                                            .get("action_type")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("unknown");
+                                                        let function_name = action
+                                                            .get("function_name")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("unknown");
+
+                                                        let (sender, content) = match action_type {
+                                                            "CapabilityCall" => (
+                                                                "Action".to_string(),
+                                                                format!("⚡ {}", function_name),
+                                                            ),
+                                                            "CapabilityResult" => (
+                                                                "Result".to_string(),
+                                                                format!("✅ {}", function_name),
+                                                            ),
+                                                            _ => continue,
+                                                        };
+
+                                                        let event_id = format!(
+                                                            "{}-{}",
+                                                            action
+                                                                .get("timestamp")
+                                                                .and_then(|v| v.as_u64())
+                                                                .unwrap_or(0),
+                                                            function_name
+                                                        );
+
+                                                        let message = ChatMessage {
+                                                            source: MessageSource::Audit,
+                                                            sender,
+                                                            content,
+                                                            timestamp: chrono::Local::now(),
+                                                            metadata: None,
+                                                        };
+
+                                                        let _ = tx_ws.send(AppEvent::AuditUpdate(
+                                                            event_id, message,
+                                                        ));
+                                                    }
+                                                }
+                                                "state_update" => {
+                                                    if let Some(state) = event.get("state") {
+                                                        let is_healthy = state
+                                                            .get("is_healthy")
+                                                            .and_then(|v| v.as_bool())
+                                                            .unwrap_or(false);
+                                                        let current_step = state
+                                                            .get("current_step")
+                                                            .and_then(|v| v.as_u64())
+                                                            .unwrap_or(0);
+
+                                                        let health_icon = if is_healthy {
+                                                            "🟢"
+                                                        } else {
+                                                            "🔴"
+                                                        };
+                                                        let message = ChatMessage {
+                                                            source: MessageSource::Audit,
+                                                            sender: "Status".to_string(),
+                                                            content: format!(
+                                                                "{} Agent step: {}",
+                                                                health_icon, current_step
+                                                            ),
+                                                            timestamp: chrono::Local::now(),
+                                                            metadata: None,
+                                                        };
+
+                                                        let _ = tx_ws.send(AppEvent::AuditUpdate(
+                                                            format!(
+                                                                "state-{}",
+                                                                chrono::Local::now().timestamp()
+                                                            ),
+                                                            message,
+                                                        ));
+                                                    }
+                                                }
+                                                "agent_crashed" => {
+                                                    let message = ChatMessage {
+                                                        source: MessageSource::Audit,
+                                                        sender: "Alert".to_string(),
+                                                        content: "💥 Agent crashed!".to_string(),
+                                                        timestamp: chrono::Local::now(),
+                                                        metadata: None,
+                                                    };
+
+                                                    let _ = tx_ws.send(AppEvent::AuditUpdate(
+                                                        format!(
+                                                            "crash-{}",
+                                                            chrono::Local::now().timestamp()
+                                                        ),
+                                                        message,
+                                                    ));
+                                                }
+                                                "ping" => {
+                                                    let _ = write.send(Message::Pong(vec![])).await;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    Ok(Message::Close(_)) => {
+                                        info!("WebSocket closed, reconnecting...");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        warn!("WebSocket error: {}, reconnecting...", e);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("WebSocket connection failed: {}, retrying in 5s...", e);
+                        }
+                    }
+
+                    // Wait before reconnecting
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }));
+
+            // Block until `rx_channel` receives a change
+            if rx_channel.changed().await.is_err() {
+                break;
+            }
         }
     });
 
@@ -797,100 +938,132 @@ async fn main() -> anyhow::Result<()> {
                                         warn!("Failed to persist chat input history: {}", e);
                                     }
 
-                                    // Smart Mentions: Add @agent if no mention is present
-                                    // BUT: Don't add @agent to slash commands (they're handled locally)
-                                    if !text.starts_with('@') && !text.starts_with('/') {
-                                        text = format!("@agent {}", text);
-                                    }
+                                    if text.starts_with("/session") {
+                                        let session_name =
+                                            text.strip_prefix("/session").unwrap_or("").trim();
+                                        let new_channel_id = if session_name.is_empty() {
+                                            chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+                                        } else {
+                                            session_name.to_string()
+                                        };
 
-                                    let message = ChatMessage {
-                                        source: MessageSource::User,
-                                        sender: args.user_id.clone(),
-                                        content: text.clone(),
-                                        timestamp: chrono::Local::now(),
-                                        metadata: None,
-                                    };
-                                    state.messages.push(message);
-                                    state.is_waiting = true;
+                                        current_channel_id = new_channel_id.clone();
+                                        let _ = tx_channel.send(new_channel_id.clone());
 
-                                    // Feedback to user
-                                    state.messages.push(ChatMessage {
-                                        source: MessageSource::System,
-                                        sender: "System".to_string(),
-                                        content: format!(
-                                            "Sending to gateway (Channel: {})...",
-                                            args.channel_id
-                                        ),
-                                        timestamp: chrono::Local::now(),
-                                        metadata: None,
-                                    });
+                                        state.messages.push(ChatMessage {
+                                            source: MessageSource::System,
+                                            sender: "System".to_string(),
+                                            content: format!(
+                                                "Switched to session '{}'",
+                                                new_channel_id
+                                            ),
+                                            timestamp: chrono::Local::now(),
+                                            metadata: None,
+                                        });
+                                    } else {
+                                        // Normal message handling
+                                        // Smart Mentions: Add @agent if no mention is present
+                                        // BUT: Don't add @agent to slash commands (they're handled locally)
+                                        if !text.starts_with('@') && !text.starts_with('/') {
+                                            text = format!("@agent {}", text);
+                                        }
 
-                                    // Send to gateway
-                                    let payload = json!({
-                                        "channel_id": args.channel_id,
-                                        "sender_id": args.user_id,
-                                        "text": text,
-                                        "timestamp": chrono::Utc::now().to_rfc3339()
-                                    });
+                                        let message = ChatMessage {
+                                            source: MessageSource::User,
+                                            sender: args.user_id.clone(),
+                                            content: text.clone(),
+                                            timestamp: chrono::Local::now(),
+                                            metadata: None,
+                                        };
+                                        state.messages.push(message);
+                                        state.is_waiting = true;
 
-                                    let client = client.clone();
-                                    let url = format!(
-                                        "{}/connector/loopback/inbound",
-                                        args.connector_url
-                                    );
-                                    let secret = args.secret.clone();
-                                    let tx_fb = tx.clone();
+                                        // Feedback to user
+                                        state.messages.push(ChatMessage {
+                                            source: MessageSource::System,
+                                            sender: "System".to_string(),
+                                            content: format!(
+                                                "Sending to gateway (Channel: {})...",
+                                                current_channel_id
+                                            ),
+                                            timestamp: chrono::Local::now(),
+                                            metadata: None,
+                                        });
 
-                                    tokio::spawn(async move {
-                                        match client
-                                            .post(url)
-                                            .header("x-ccos-connector-secret", &secret)
-                                            .json(&payload)
-                                            .send()
-                                            .await
-                                        {
-                                            Ok(resp) => {
-                                                if resp.status().is_success() {
-                                                    if let Ok(body) =
-                                                        resp.json::<serde_json::Value>().await
-                                                    {
-                                                        if body
-                                                            .get("accepted")
-                                                            .and_then(|a| a.as_bool())
-                                                            .unwrap_or(false)
+                                        // Send to gateway
+                                        let payload = json!({
+                                            "channel_id": current_channel_id,
+                                            "sender_id": args.user_id,
+                                            "text": text,
+                                            "timestamp": chrono::Utc::now().to_rfc3339()
+                                        });
+
+                                        let client = client.clone();
+                                        let url = format!(
+                                            "{}/connector/loopback/inbound",
+                                            args.connector_url
+                                        );
+                                        let secret = args.secret.clone();
+                                        let tx_fb = tx.clone();
+
+                                        tokio::spawn(async move {
+                                            match client
+                                                .post(url)
+                                                .header("x-ccos-connector-secret", &secret)
+                                                .json(&payload)
+                                                .send()
+                                                .await
+                                            {
+                                                Ok(resp) => {
+                                                    if resp.status().is_success() {
+                                                        if let Ok(body) =
+                                                            resp.json::<serde_json::Value>().await
                                                         {
-                                                            let _ = tx_fb.send(AppEvent::Status(
-                                                                "Message accepted".to_string(),
-                                                            ));
+                                                            if body
+                                                                .get("accepted")
+                                                                .and_then(|a| a.as_bool())
+                                                                .unwrap_or(false)
+                                                            {
+                                                                let _ =
+                                                                    tx_fb.send(AppEvent::Status(
+                                                                        "Message accepted"
+                                                                            .to_string(),
+                                                                    ));
+                                                            } else {
+                                                                let err = body.get("error").and_then(|e| e.as_str()).unwrap_or("Gateway rejected message (check channel/sender allowlist or mentions)");
+                                                                let _ = tx_fb.send(
+                                                                    AppEvent::Error(format!(
+                                                                        "Rejected: {}",
+                                                                        err
+                                                                    )),
+                                                                );
+                                                                let _ =
+                                                                    tx_fb.send(AppEvent::Status(
+                                                                        "Rejected".to_string(),
+                                                                    ));
+                                                            }
                                                         } else {
-                                                            let err = body.get("error").and_then(|e| e.as_str()).unwrap_or("Gateway rejected message (check channel/sender allowlist or mentions)");
-                                                            let _ = tx_fb.send(AppEvent::Error(
-                                                                format!("Rejected: {}", err),
-                                                            ));
                                                             let _ = tx_fb.send(AppEvent::Status(
-                                                                "Rejected".to_string(),
+                                                                "Message sent".to_string(),
                                                             ));
                                                         }
                                                     } else {
-                                                        let _ = tx_fb.send(AppEvent::Status(
-                                                            "Message sent".to_string(),
-                                                        ));
+                                                        let _ =
+                                                            tx_fb.send(AppEvent::Error(format!(
+                                                                "Failed to send: HTTP {}",
+                                                                resp.status()
+                                                            )));
                                                     }
-                                                } else {
+                                                }
+                                                Err(e) => {
                                                     let _ = tx_fb.send(AppEvent::Error(format!(
-                                                        "Failed to send: HTTP {}",
-                                                        resp.status()
+                                                        "Connection error: {}",
+                                                        e
                                                     )));
                                                 }
                                             }
-                                            Err(e) => {
-                                                let _ = tx_fb.send(AppEvent::Error(format!(
-                                                    "Connection error: {}",
-                                                    e
-                                                )));
-                                            }
-                                        }
-                                    });
+                                        });
+                                    }
 
                                     state.input.clear();
                                     state.input_cursor = 0;
@@ -900,7 +1073,15 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             KeyCode::Tab => {
-                                apply_model_completion(&mut state);
+                                if state.input.starts_with("/model") {
+                                    apply_model_completion(&mut state);
+                                } else if state.input.starts_with("/session") {
+                                    apply_session_completion(
+                                        &mut state,
+                                        &args.gateway_url,
+                                        &args.secret,
+                                    );
+                                }
                             }
                             KeyCode::Esc => {
                                 state.should_quit = true;
@@ -915,8 +1096,28 @@ async fn main() -> anyhow::Result<()> {
                                 if key.modifiers.contains(KeyModifiers::ALT) {
                                     state.scroll += 1;
                                 } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                    state.input_cursor =
-                                        move_cursor_vertically(&state.input, state.input_cursor, -1);
+                                    state.input_cursor = move_cursor_vertically(
+                                        &state.input,
+                                        state.input_cursor,
+                                        -1,
+                                    );
+                                } else if let Some(mut comp) = state.model_completion.take() {
+                                    if !comp.matches.is_empty() {
+                                        comp.index = if comp.index == 0 {
+                                            comp.matches.len() - 1
+                                        } else {
+                                            comp.index - 1
+                                        };
+                                        let selected = comp.matches[comp.index].clone();
+                                        let cmd = if state.input.starts_with("/session") {
+                                            "/session"
+                                        } else {
+                                            "/model"
+                                        };
+                                        state.input = format!("{} {}", cmd, selected);
+                                        state.input_cursor = state.input.len();
+                                    }
+                                    state.model_completion = Some(comp);
                                 } else {
                                     let changed = state.history_prev();
                                     if changed {
@@ -930,6 +1131,19 @@ async fn main() -> anyhow::Result<()> {
                                 } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                                     state.input_cursor =
                                         move_cursor_vertically(&state.input, state.input_cursor, 1);
+                                } else if let Some(mut comp) = state.model_completion.take() {
+                                    if !comp.matches.is_empty() {
+                                        comp.index = (comp.index + 1) % comp.matches.len();
+                                        let selected = comp.matches[comp.index].clone();
+                                        let cmd = if state.input.starts_with("/session") {
+                                            "/session"
+                                        } else {
+                                            "/model"
+                                        };
+                                        state.input = format!("{} {}", cmd, selected);
+                                        state.input_cursor = state.input.len();
+                                    }
+                                    state.model_completion = Some(comp);
                                 } else {
                                     let changed = state.history_next();
                                     if changed {
@@ -938,10 +1152,12 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             KeyCode::Left => {
-                                state.input_cursor = prev_char_boundary(&state.input, state.input_cursor);
+                                state.input_cursor =
+                                    prev_char_boundary(&state.input, state.input_cursor);
                             }
                             KeyCode::Right => {
-                                state.input_cursor = next_char_boundary(&state.input, state.input_cursor);
+                                state.input_cursor =
+                                    next_char_boundary(&state.input, state.input_cursor);
                             }
                             KeyCode::Home => {
                                 state.input_cursor = 0;
@@ -995,13 +1211,26 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn render(f: &mut Frame, state: &AppState) {
+    let mut constraints = vec![
+        Constraint::Length(3), // Header
+        Constraint::Min(1),    // Messages
+    ];
+
+    let completion_height = if let Some(comp) = &state.model_completion {
+        (comp.matches.len() as u16).clamp(1, 5) + 2
+    } else {
+        0
+    };
+
+    if completion_height > 0 {
+        constraints.push(Constraint::Length(completion_height));
+    }
+
+    constraints.push(Constraint::Length(6)); // Input
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Min(1),    // Messages
-            Constraint::Length(6), // Input
-        ])
+        .constraints(constraints)
         .split(f.size());
 
     // Header
@@ -1094,16 +1323,51 @@ fn render(f: &mut Frame, state: &AppState) {
         .scroll((scroll_offset as u16, 0));
     f.render_widget(paragraph, message_area);
 
+    let mut input_chunk_index = 2;
+
+    if let Some(comp) = &state.model_completion {
+        input_chunk_index = 3;
+        let comp_area = chunks[2];
+
+        let mut list_items = Vec::new();
+        let start = comp
+            .index
+            .saturating_sub(2)
+            .min(comp.matches.len().saturating_sub(5));
+        let end = (start + 5).min(comp.matches.len());
+        let visible_matches = &comp.matches[start..end];
+
+        for (i, m) in visible_matches.iter().enumerate() {
+            let actual_idx = start + i;
+            let style = if actual_idx == comp.index {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            list_items.push(ListItem::new(Line::from(Span::styled(m.clone(), style))));
+        }
+
+        let title = if state.input.starts_with("/session") {
+            " Sessions "
+        } else {
+            " Models "
+        };
+
+        let list = List::new(list_items).block(Block::default().borders(Borders::ALL).title(title));
+
+        f.render_widget(list, comp_area);
+    }
+
     // Input
     let input = Paragraph::new(state.input.as_str())
         .style(Style::default().fg(Color::Yellow))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Type your message (Enter=send, Shift/Ctrl+Enter=newline, Tab=/model autocomplete) "),
+                .title(" Type your message (Enter=send, Shift/Ctrl+Enter=newline, Tab=/model autocomplete, /session for new session) "),
         )
         .wrap(ratatui::widgets::Wrap { trim: false });
-    f.render_widget(input, chunks[2]);
+    f.render_widget(input, chunks[input_chunk_index]);
 
     let before_cursor = &state.input[..state.input_cursor.min(state.input.len())];
     let cursor_row = before_cursor.matches('\n').count() as u16;
@@ -1112,10 +1376,10 @@ fn render(f: &mut Frame, state: &AppState) {
         .next()
         .map(|s| s.chars().count() as u16)
         .unwrap_or(0);
-    let max_row = chunks[2].height.saturating_sub(3);
+    let max_row = chunks[input_chunk_index].height.saturating_sub(3);
     f.set_cursor(
-        chunks[2].x + 1 + cursor_col,
-        chunks[2].y + 1 + cursor_row.min(max_row),
+        chunks[input_chunk_index].x + 1 + cursor_col,
+        chunks[input_chunk_index].y + 1 + cursor_row.min(max_row),
     );
 }
 

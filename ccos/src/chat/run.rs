@@ -60,6 +60,17 @@ impl RunState {
         matches!(self, RunState::Active) || self.is_paused()
     }
 
+    /// Returns true if the run is busy in a way that should block scheduled background tasks.
+    /// We do NOT block on PausedExternalEvent because that typically means the main session
+    /// run is just waiting for the next user chat message.
+    pub fn is_blocking_scheduler(&self) -> bool {
+        matches!(self, RunState::Active)
+            || matches!(
+                self,
+                RunState::PausedApproval { .. } | RunState::PausedCheckpoint { .. }
+            )
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "Active" => Some(RunState::Active),
@@ -482,7 +493,10 @@ impl RunStore {
         let json = match serde_json::to_string_pretty(&snapshot) {
             Ok(j) => j,
             Err(e) => {
-                log::error!("[RunStore] Failed to serialize runs (data NOT saved): {}", e);
+                log::error!(
+                    "[RunStore] Failed to serialize runs (data NOT saved): {}",
+                    e
+                );
                 return;
             }
         };
@@ -533,12 +547,16 @@ impl RunStore {
                     Ok(()) => log::error!(
                         "[RunStore] Failed to deserialize {:?}: {}. \
                         Corrupt file renamed to {:?}. Starting with empty store.",
-                        path, e, bak
+                        path,
+                        e,
+                        bak
                     ),
                     Err(re) => log::error!(
                         "[RunStore] Failed to deserialize {:?}: {}. \
                         Could not rename to backup ({}) — original intact.",
-                        path, e, re
+                        path,
+                        e,
+                        re
                     ),
                 }
                 None
@@ -585,10 +603,10 @@ impl RunStore {
             .find(|r| matches!(r.state, RunState::Active))
     }
 
-    pub fn get_busy_run_for_session(&self, session_id: &str) -> Option<&Run> {
+    pub fn get_blocking_run_for_session(&self, session_id: &str) -> Option<&Run> {
         self.get_runs_for_session(session_id)
             .into_iter()
-            .find(|r| r.state.is_busy())
+            .find(|r| r.state.is_blocking_scheduler())
     }
 
     pub fn get_latest_paused_external_run_id_for_session(
@@ -764,11 +782,12 @@ impl RunStore {
         }
     }
 
-    /// Complete a run and create the next recurring run if applicable.
+    /// Finish a run and create the next recurring run if applicable.
     /// Returns the ID of the newly created run if this was a recurring task.
-    pub fn complete_run_and_schedule_next(
+    pub fn finish_run_and_schedule_next(
         &mut self,
         run_id: &str,
+        final_state: RunState,
         calculate_next: impl Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
     ) -> Option<String> {
         // Get the run's schedule before transitioning to Done
@@ -793,8 +812,8 @@ impl RunStore {
             .map(|v| v as u32)
             .unwrap_or(1);
 
-        // Transition to Done
-        self.update_run_state(run_id, RunState::Done);
+        // Transition to terminal state
+        self.update_run_state(run_id, final_state);
 
         // Check if this is a recurring task
         if let Some(ref sched) = schedule {
@@ -1277,8 +1296,11 @@ mod serde_tests {
         // File must have been updated
         let data = std::fs::read_to_string(&tmp).expect("runs.json should exist");
         let json: serde_json::Value = serde_json::from_str(&data).expect("valid JSON");
-        assert!(json["runs"].as_object().unwrap().contains_key(&run_id),
-            "run_id not found in saved JSON: {}", data);
+        assert!(
+            json["runs"].as_object().unwrap().contains_key(&run_id),
+            "run_id not found in saved JSON: {}",
+            data
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(&tmp);

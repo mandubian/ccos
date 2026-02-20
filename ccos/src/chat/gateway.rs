@@ -24,6 +24,7 @@ use crate::approval::{
     UnifiedApprovalQueue,
 };
 use crate::capabilities::registry::CapabilityRegistry;
+use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
 use crate::chat::run::{BudgetContext, Run, RunState, RunStore, SharedRunStore};
@@ -522,17 +523,25 @@ impl GatewayState {
                         .collect();
                     // Extract all keys mentioned across the prior-run entries so we
                     // can give an explicit, unambiguous instruction to the next agent.
-                    let known_keys: Vec<String> = result.entries.iter().flat_map(|e| {
-                        // content: "run_id=X goal=Y memory_keys=[k1, k2]"
-                        e.content.split("memory_keys=[").nth(1)
-                            .and_then(|s| s.split(']').next())
-                            .map(|keys_str| {
-                                keys_str.split(',').map(|k| k.trim().to_string())
-                                    .filter(|k| !k.is_empty())
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()
-                    }).collect();
+                    let known_keys: Vec<String> = result
+                        .entries
+                        .iter()
+                        .flat_map(|e| {
+                            // content: "run_id=X goal=Y memory_keys=[k1, k2]"
+                            e.content
+                                .split("memory_keys=[")
+                                .nth(1)
+                                .and_then(|s| s.split(']').next())
+                                .map(|keys_str| {
+                                    keys_str
+                                        .split(',')
+                                        .map(|k| k.trim().to_string())
+                                        .filter(|k| !k.is_empty())
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect();
                     let key_instruction = if known_keys.is_empty() {
                         "When using ccos.memory.get or ccos.memory.store (or ccos_sdk.memory), \
                         use the EXACT SAME key that was used in prior runs for this session."
@@ -540,7 +549,8 @@ impl GatewayState {
                     } else {
                         // Deduplicate while preserving order
                         let mut seen = std::collections::HashSet::new();
-                        let unique_keys: Vec<&String> = known_keys.iter()
+                        let unique_keys: Vec<&String> = known_keys
+                            .iter()
                             .filter(|k| seen.insert(k.as_str()))
                             .collect();
                         format!(
@@ -548,7 +558,11 @@ impl GatewayState {
                             are: [{}]. You MUST use these EXACT key names in \
                             ccos_sdk.memory.get / ccos_sdk.memory.store (or ccos.memory.get / \
                             ccos.memory.store). Do NOT invent new key names.",
-                            unique_keys.iter().map(|k| format!("\"{}\"", k)).collect::<Vec<_>>().join(", ")
+                            unique_keys
+                                .iter()
+                                .map(|k| format!("\"{}\"", k))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         )
                     };
                     let prior_context = format!(
@@ -805,6 +819,35 @@ impl ChatGateway {
         }
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
+        // Wire a CatalogService into the Gateway's marketplace so that
+        // ccos.skill.search can discover local skills.
+        {
+            let catalog_service = Arc::new(crate::catalog::CatalogService::new());
+            marketplace
+                .set_catalog_service(Arc::clone(&catalog_service))
+                .await;
+
+            // Bootstrap skill discovery immediately so the catalog is populated.
+            let skills_path =
+                std::env::var("CCOS_SKILLS_PATH").unwrap_or_else(|_| "skills".to_string());
+            let skills_dir = std::path::PathBuf::from(&skills_path);
+            if skills_dir.exists() {
+                let skill_agent =
+                    crate::capability_marketplace::discovery::LocalSkillDiscoveryAgent::new(
+                        skills_dir,
+                    );
+                match skill_agent.discover(Some(Arc::clone(&marketplace))).await {
+                    Ok(_) => log::info!("[Gateway] LocalSkillDiscoveryAgent discovery complete"),
+                    Err(e) => log::warn!("[Gateway] LocalSkillDiscoveryAgent failed: {:?}", e),
+                }
+            } else {
+                log::info!(
+                    "[Gateway] CCOS_SKILLS_PATH={} does not exist, skipping skill discovery",
+                    skills_path
+                );
+            }
+        }
+
         // Configure approval store for capability approval tracking
         let approval_store_path = config.approvals_dir.join("capability_approvals.json");
         if let Err(e) = marketplace
@@ -812,7 +855,7 @@ impl ChatGateway {
             .await
         {
             log::warn!(
-                "[Gateway] Failed to configure approval store at {}: {}. 
+                "[Gateway] Failed to configure approval store at {}: {}. \
                 Capability approvals will not be persisted.",
                 approval_store_path.display(),
                 e
@@ -826,9 +869,7 @@ impl ChatGateway {
         let handle = connector.connect().await?;
 
         // Determine persistence paths for runs and sessions (under .ccos/ in cwd)
-        let ccos_state_dir = std::env::current_dir()
-            .unwrap_or_default()
-            .join(".ccos");
+        let ccos_state_dir = std::env::current_dir().unwrap_or_default().join(".ccos");
         if let Err(e) = std::fs::create_dir_all(&ccos_state_dir) {
             log::warn!("[Gateway] Failed to create .ccos state dir: {}", e);
         }
@@ -836,7 +877,8 @@ impl ChatGateway {
         let sessions_persist_path = ccos_state_dir.join("sessions.json");
         log::info!(
             "[Gateway] Persistence paths: runs={:?} sessions={:?}",
-            runs_persist_path, sessions_persist_path
+            runs_persist_path,
+            sessions_persist_path
         );
 
         // Rebuild stores from causal chain (restart-safe autonomy).
@@ -936,7 +978,11 @@ impl ChatGateway {
             });
 
             let working_memory = crate::working_memory::WorkingMemory::new(Box::new(
-                crate::working_memory::InMemoryJsonlBackend::new(wm_backend_path.clone(), None, None),
+                crate::working_memory::InMemoryJsonlBackend::new(
+                    wm_backend_path.clone(),
+                    None,
+                    None,
+                ),
             ));
             working_memory_arc = Arc::new(Mutex::new(working_memory));
             if let Some(path) = wm_backend_path {
@@ -997,7 +1043,13 @@ impl ChatGateway {
             checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             internal_api_secret,
             realtime_sink,
-            admin_tokens: config.admin_tokens.clone(),
+            admin_tokens: {
+                let mut tokens = config.admin_tokens.clone();
+                if !tokens.contains(&config.connector.shared_secret) {
+                    tokens.push(config.connector.shared_secret.clone());
+                }
+                tokens
+            },
             approval_ui_url: config.approval_ui_url.clone(),
             spawn_llm_profile: Arc::new(RwLock::new(resolve_default_spawn_llm_profile())),
             session_llm_profiles: Arc::new(RwLock::new(HashMap::new())),
@@ -1381,6 +1433,45 @@ impl ChatGateway {
                 }
                 return Ok(()); // Command handled, don't push to agent
             }
+            if content_to_push.starts_with("/session") {
+                let session_name = content_to_push
+                    .strip_prefix("/session")
+                    .unwrap_or("")
+                    .trim();
+
+                let new_channel_id = if session_name.is_empty() {
+                    // Generate a new session id with current date
+                    chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+                } else {
+                    session_name.to_string()
+                };
+
+                let target_session_id = format!("chat:{}:{}", new_channel_id, envelope.sender_id);
+
+                // Create the new session if it doesn't exist yet
+                if self
+                    .state
+                    .session_registry
+                    .get_session(&target_session_id)
+                    .await
+                    .is_none()
+                {
+                    let _ = self
+                        .state
+                        .session_registry
+                        .create_session(Some(target_session_id.clone()))
+                        .await;
+                }
+
+                self.state
+                    .send_chat_message(
+                        &session_id,
+                        format!("🔄 Run this command in a new terminal to join the session:\n\n    cargo run --bin ccos-chat -- --channel-id {} --user-id {}\n", new_channel_id, envelope.sender_id),
+                    )
+                    .await;
+
+                return Ok(());
+            }
             if content_to_push.starts_with("/model") {
                 let profile = content_to_push
                     .strip_prefix("/model")
@@ -1391,7 +1482,7 @@ impl ChatGateway {
                     self.state
                         .send_chat_message(
                             &session_id,
-                            "Usage: /model <profile-name> (example: /model openai:gpt-4.1)"
+                            "Usage: /model <profile-name> (example: /model openai:gpt-4.1)\nUse Tab for autocomplete."
                                 .to_string(),
                         )
                         .await;
@@ -1593,9 +1684,7 @@ impl ChatGateway {
                             Value::String(schedule.to_string()),
                         );
                     }
-                    if let Some(next_run_at) =
-                        inputs.get("next_run_at").and_then(|v| v.as_str())
-                    {
+                    if let Some(next_run_at) = inputs.get("next_run_at").and_then(|v| v.as_str()) {
                         meta.insert(
                             "run_create_next_run_at".to_string(),
                             Value::String(next_run_at.to_string()),
@@ -1763,10 +1852,8 @@ impl ChatGateway {
                     result_metadata.insert("memory_get_found".to_string(), Value::Boolean(found));
                 }
                 if let Some(expired) = result_json.get("expired").and_then(|v| v.as_bool()) {
-                    result_metadata.insert(
-                        "memory_get_expired".to_string(),
-                        Value::Boolean(expired),
-                    );
+                    result_metadata
+                        .insert("memory_get_expired".to_string(), Value::Boolean(expired));
                 }
                 if let Some(value_json) = result_json.get("value") {
                     if let Ok(value_rtfs) = json_to_rtfs_value(value_json) {
@@ -2025,7 +2112,9 @@ async fn evaluate_run_completion(
 
     if should_eval {
         let predicate = if let Ok(store) = state.run_store.lock() {
-            store.get_run(run_id).and_then(|run| run.completion_predicate.clone())
+            store
+                .get_run(run_id)
+                .and_then(|run| run.completion_predicate.clone())
         } else {
             None
         };
@@ -2070,9 +2159,11 @@ async fn evaluate_run_completion(
             // Complete the run and schedule next if recurring.
             let next_run_snapshot = {
                 if let Ok(mut store) = state.run_store.lock() {
-                    let next_run_id = store.complete_run_and_schedule_next(run_id, |sched| {
-                        Scheduler::calculate_next_run(sched)
-                    });
+                    let next_run_id = store.finish_run_and_schedule_next(
+                        run_id,
+                        crate::chat::run::RunState::Done,
+                        |sched| Scheduler::calculate_next_run(sched),
+                    );
                     next_run_id.and_then(|new_run_id| {
                         store.get_run(&new_run_id).map(|next_run| {
                             let max_runs = next_run
@@ -2107,31 +2198,39 @@ async fn evaluate_run_completion(
                 tags.insert("scheduled-context".to_string());
                 tags.insert(format!("session:{}", session_id));
                 // Retrieve goal from run store for richer context
-                let goal_text = state.run_store.lock().ok()
+                let goal_text = state
+                    .run_store
+                    .lock()
+                    .ok()
                     .and_then(|s| s.get_run(run_id).map(|r| r.goal.clone()))
                     .unwrap_or_default();
                 // Discover which WM keys were written during this run (D-tagged entries).
                 // Entry IDs follow "global:{key}" or "skill:{id}:{key}"; skip metadata.
-                let memory_keys: Vec<String> = state.working_memory.lock()
+                let memory_keys: Vec<String> = state
+                    .working_memory
+                    .lock()
                     .ok()
                     .and_then(|wm| {
                         let params = QueryParams::with_tags([format!("session:{}", session_id)])
                             .with_limit(Some(50));
                         wm.query(&params).ok().map(|result| {
-                            result.entries.iter().filter_map(|e| {
-                                let id = &e.id;
-                                if id.starts_with("scheduled-ctx:") {
-                                    None // skip our own metadata entries
-                                } else if let Some(key) = id.strip_prefix("global:") {
-                                    Some(key.to_string())
-                                } else if id.starts_with("skill:") {
-                                    // skill:{skill_id}:{key} — take everything after second ':'
-                                    id.splitn(3, ':').nth(2).map(|k| k.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
+                            result
+                                .entries
+                                .iter()
+                                .filter_map(|e| {
+                                    let id = &e.id;
+                                    if id.starts_with("scheduled-ctx:") {
+                                        None // skip our own metadata entries
+                                    } else if let Some(key) = id.strip_prefix("global:") {
+                                        Some(key.to_string())
+                                    } else if id.starts_with("skill:") {
+                                        // skill:{skill_id}:{key} — take everything after second ':'
+                                        id.splitn(3, ':').nth(2).map(|k| k.to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>()
                         })
                     })
                     .unwrap_or_default();
@@ -3141,7 +3240,8 @@ async fn create_run_handler(
         .as_deref()
         .and_then(normalize_schedule_input);
 
-    if payload.schedule.is_some() && normalized_schedule.is_none() && payload.next_run_at.is_none() {
+    if payload.schedule.is_some() && normalized_schedule.is_none() && payload.next_run_at.is_none()
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -3255,8 +3355,7 @@ async fn create_run_handler(
             payload.next_run_at,
             payload.trigger_capability_id.as_deref(),
             payload.trigger_inputs.as_ref(),
-        )
-        {
+        ) {
             log::info!(
                 "[Gateway] Deduplicating scheduled run: existing run {} found with similar goal for session {}",
                 existing_run_id,
@@ -4288,7 +4387,12 @@ async fn pause_run_handler(
         store.pause_scheduled_run(&run_id, "Paused via API".to_string())
     };
 
-    SheriffLogger::log_run("PAUSED_SCHEDULE", &run_id, &session_id, "Run paused via API");
+    SheriffLogger::log_run(
+        "PAUSED_SCHEDULE",
+        &run_id,
+        &session_id,
+        "Run paused via API",
+    );
 
     {
         let mut meta = HashMap::new();
@@ -4470,13 +4574,15 @@ async fn transition_run_handler(
 
             run.transition(new_state.clone());
 
-            // If transitioning to Done, check if this is a recurring run and schedule next
-            let next_run_id = if matches!(new_state, crate::chat::run::RunState::Done) {
-                store.complete_run_and_schedule_next(&run_id, |sched| {
+            // If transitioning to Done or Failed, check if this is a recurring run and schedule next
+            let next_run_id = if new_state.is_terminal()
+                && !matches!(new_state, crate::chat::run::RunState::Cancelled)
+            {
+                store.finish_run_and_schedule_next(&run_id, new_state.clone(), |sched| {
                     Scheduler::calculate_next_run(sched)
                 })
             } else {
-                store.save_to_disk();
+                store.update_run_state(&run_id, new_state.clone());
                 None
             };
 
