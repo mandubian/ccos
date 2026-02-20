@@ -997,6 +997,12 @@ impl MonitorState {
     }
 
     fn add_llm_consultation(&mut self, session_id: String, consultation: LlmConsultation) {
+        // Ensure the session is tracked in ordered_session_ids so it shows up in the LLM tab
+        // (may arrive via WebSocket before the periodic session poll fires).
+        if !self.ordered_session_ids.contains(&session_id) {
+            self.ordered_session_ids.push(session_id.clone());
+            self.ordered_session_ids.sort();
+        }
         // Also add to events for the Events tab
         let caps = if consultation.planned_capabilities.is_empty() {
             "none".to_string()
@@ -1994,10 +2000,18 @@ async fn main() -> anyhow::Result<()> {
                     state.agents.clear();
                     state.agent_session_ids.clear();
 
-                    // Rebuild ordered list of all session IDs for Runs tab navigation.
+                    // Rebuild ordered list of all session IDs for Runs/LLM tab navigation.
                     let mut all_ids: Vec<String> =
                         sessions.iter().map(|s| s.session_id.clone()).collect();
                     all_ids.sort();
+                    // Preserve any session IDs that arrived via WebSocket before this poll
+                    // (so their LLM consultations remain visible in the LLM tab).
+                    for sid in &state.ordered_session_ids {
+                        if !all_ids.contains(sid) {
+                            all_ids.push(sid.clone());
+                        }
+                    }
+                    state.ordered_session_ids = all_ids.clone();
 
                     for session in &sessions {
                         state
