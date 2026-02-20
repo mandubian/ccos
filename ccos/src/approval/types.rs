@@ -156,6 +156,14 @@ pub enum ApprovalCategory {
         /// Runtime ("python" or "javascript")
         runtime: String,
     },
+
+    /// Sandbox Network approval - for allowing sandboxed code to access specific domains
+    SandboxNetwork {
+        /// The capability asking for network (e.g., "ccos.execute.python")
+        capability_id: String,
+        /// The list of hosts the agent wants to connect to
+        allowed_hosts: Vec<String>,
+    },
 }
 
 /// Health tracking for approved servers
@@ -228,6 +236,23 @@ impl fmt::Display for ApprovalCategory {
             }
             ApprovalCategory::PackageApproval { package, runtime } => {
                 write!(f, "PackageApproval({} for {})", package, runtime)
+            }
+            ApprovalCategory::SandboxNetwork {
+                capability_id,
+                allowed_hosts,
+            } => {
+                if allowed_hosts.is_empty() {
+                    write!(f, "SandboxNetwork({} to NO hosts)", capability_id)
+                } else if allowed_hosts.contains(&"*".to_string()) {
+                    write!(f, "SandboxNetwork({} to ALL hosts)", capability_id)
+                } else {
+                    write!(
+                        f,
+                        "SandboxNetwork({} to {} hosts)",
+                        capability_id,
+                        allowed_hosts.len()
+                    )
+                }
             }
         }
     }

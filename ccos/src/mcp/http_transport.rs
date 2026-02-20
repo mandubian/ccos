@@ -778,6 +778,16 @@ async fn handle_api_approvals_list(
                         "runtime": runtime,
                     }),
                 ),
+                ApprovalCategory::SandboxNetwork {
+                    capability_id,
+                    allowed_hosts,
+                } => (
+                    "SandboxNetwork",
+                    json!({
+                        "capability_id": capability_id,
+                        "allowed_hosts": allowed_hosts,
+                    }),
+                ),
             };
 
             // Determine status string for UI filtering
@@ -844,7 +854,7 @@ async fn handle_api_approval_approve(
             .list(crate::approval::types::ApprovalFilter::default())
             .await
             .unwrap_or_default();
-        
+
         let approval_exists = all_approvals.iter().any(|a| a.id == id);
         if !approval_exists {
             log::warn!(

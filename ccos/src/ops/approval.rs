@@ -180,6 +180,16 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "sandbox".to_string(),
             None,
         ),
+        ApprovalCategory::SandboxNetwork {
+            capability_id,
+            allowed_hosts,
+        } => (
+            ApprovalType::Effect, // reuse Effect type for sandbox network
+            format!("Sandbox Network: {}", capability_id),
+            format!("Allowed hosts: {}", allowed_hosts.join(", ")),
+            "sandbox".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

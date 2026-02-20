@@ -651,6 +651,7 @@ fn format_category(cat: &ccos::approval::types::ApprovalCategory) -> String {
         }
         ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval".to_string(),
         ApprovalCategory::PackageApproval { .. } => "PackageApproval".to_string(),
+        ApprovalCategory::SandboxNetwork { .. } => "SandboxNetwork".to_string(),
     }
 }
 

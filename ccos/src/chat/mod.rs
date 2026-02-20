@@ -1402,6 +1402,81 @@ pub async fn register_chat_capabilities(
     // Skill Capabilities (for agent to load and execute skills)
     // -----------------------------------------------------------------
     {
+        let marketplace_for_skill_search = Arc::clone(&marketplace);
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.skill.search",
+            "Search Skills",
+            "Search the catalog for available skills matching a particular keyword or intent. Returns a list of skills with their IDs, names, descriptions, and loading URLs.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let marketplace = Arc::clone(&marketplace_for_skill_search);
+                Box::pin(async move {
+                    let query = if let Value::Map(ref map) = inputs {
+                        map.get(&MapKey::String("query".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("query".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    }.unwrap_or_default();
+
+                    let limit = if let Value::Map(ref map) = inputs {
+                        map.get(&MapKey::String("limit".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("limit".to_string()))))
+                            .and_then(|v| match v {
+                                Value::Integer(i) => Some(*i as usize),
+                                _ => None,
+                            })
+                            .unwrap_or(10)
+                    } else {
+                        10
+                    };
+
+                    if let Some(catalog) = marketplace.get_catalog().await {
+                        let filter = crate::catalog::CatalogFilter::for_kind(crate::catalog::CatalogEntryKind::Skill);
+                        let hits = catalog.search_semantic(&query, Some(&filter), limit).await;
+
+                        let mut results = Vec::new();
+                        for hit in hits {
+                            let mut item = std::collections::HashMap::new();
+                            item.insert(MapKey::String("skill_id".to_string()), Value::String(hit.entry.id));
+                            if let Some(name) = hit.entry.name {
+                                item.insert(MapKey::String("name".to_string()), Value::String(name));
+                            }
+                            if let Some(desc) = hit.entry.description {
+                                item.insert(MapKey::String("description".to_string()), Value::String(desc));
+                            }
+                            if let Some(loc) = hit.entry.location {
+                                match loc {
+                                    crate::catalog::CatalogLocation::Other(url) => {
+                                        item.insert(MapKey::String("url".to_string()), Value::String(url));
+                                    },
+                                    _ => {}
+                                }
+                            }
+                            item.insert(MapKey::String("score".to_string()), Value::Float(hit.score as f64));
+                            results.push(Value::Map(item));
+                        }
+
+                        let mut final_map = std::collections::HashMap::new();
+                        final_map.insert(MapKey::String("results".to_string()), Value::Vector(results));
+                        Ok(Value::Map(final_map))
+                    } else {
+                        Ok(Value::Map(std::collections::HashMap::from([(
+                            MapKey::String("results".to_string()),
+                            Value::Vector(vec![]),
+                        )])))
+                    }
+                })
+            }),
+            "low",
+            vec!["query".to_string()],
+            EffectType::Pure,
+        ).await?;
+    }
+
+    {
         let marketplace_for_skill_load = Arc::clone(&marketplace);
         let approval_queue_for_skill = approval_queue.clone();
         register_native_chat_capability(
@@ -1650,9 +1725,11 @@ pub async fn register_chat_capabilities(
                             Value::Vector(caps),
                         );
                     } else {
-                        return Err(RuntimeError::Generic(
-                            "ccos.skill.load: skill registered no capabilities".to_string(),
-                        ));
+                        // Return empty capabilities vector instead of error
+                        result_map.insert(
+                            MapKey::String("registered_capabilities".to_string()),
+                            Value::Vector(vec![]),
+                        );
                     }
                     
                     Ok(Value::Map(result_map))
@@ -2287,6 +2364,97 @@ pub async fn register_chat_capabilities(
                         }
                     }
 
+                    // Parse allowed_hosts
+                    let mut allowed_hosts = Vec::new();
+                    if let Some(hosts_value) = map
+                        .get(&MapKey::Keyword(Keyword("allowed_hosts".to_string())))
+                        .or_else(|| map.get(&MapKey::String("allowed_hosts".to_string())))
+                    {
+                        if let Value::Vector(hosts_vec) = hosts_value {
+                            for host in hosts_vec {
+                                if let Some(host_str) = host.as_string() {
+                                    allowed_hosts.push(host_str.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Code Introspection for Network Usage ---
+                    let mut network_required = !allowed_hosts.is_empty();
+                    
+                    // Check dependencies for network libs
+                    let network_deps = ["requests", "httpx", "aiohttp", "urllib3", "websockets"];
+                    for dep in &dependencies {
+                        if network_deps.iter().any(|nd| dep.contains(nd)) {
+                            network_required = true;
+                            break;
+                        }
+                    }
+
+                    // Check code for network imports
+                    let network_imports = [
+                        "import urllib", "from urllib",
+                        "import requests", "from requests",
+                        "import http.client", "from http",
+                        "import socket", "from socket",
+                        "import httpx", "from httpx",
+                        "import aiohttp", "from aiohttp",
+                        "import websockets", "from websockets"
+                    ];
+                    for imp in &network_imports {
+                        if code.contains(imp) {
+                            network_required = true;
+                            break;
+                        }
+                    }
+
+                    let mut final_allowed_hosts = allowed_hosts.clone();
+                    if network_required {
+                        if final_allowed_hosts.is_empty() {
+                            final_allowed_hosts.push("*".to_string());
+                        }
+
+                        if let Some(queue) = &approval_queue {
+                            // Extract session_id and run_id
+                            let session_id = map.get(&MapKey::String("session_id".to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string());
+
+                            let run_id = map.get(&MapKey::String("run_id".to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string());
+
+                            match queue.is_network_approved("ccos.execute.python", &final_allowed_hosts).await {
+                                Ok(true) => {
+                                    log::debug!("[ccos.execute.python] Network access to {:?} is approved.", final_allowed_hosts);
+                                }
+                                Ok(false) | Err(_) => {
+                                    log::info!("[ccos.execute.python] Network access to {:?} requires approval.", final_allowed_hosts);
+                                    let req_hosts = final_allowed_hosts.clone();
+                                    match queue.add_network_approval(
+                                        "ccos.execute.python".to_string(),
+                                        req_hosts,
+                                        session_id,
+                                        run_id,
+                                    ).await {
+                                        Ok(approval_id) => {
+                                            let hosts_msg = if final_allowed_hosts.contains(&"*".to_string()) { "ALL HOSTS".to_string() } else { final_allowed_hosts.join(", ") };
+                                            return Err(RuntimeError::Generic(format!(
+                                                "Sandbox network access to {} requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this network request, then retry your request.",
+                                                hosts_msg, approval_id, approval_id
+                                            )));
+                                        }
+                                        Err(ae) => {
+                                            log::error!("[ccos.execute.python] Failed to create network approval: {}", ae);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Build sandbox execution config (different from config::types::SandboxConfig)
                     let exec_sandbox_config = SandboxConfig {
                         runtime_type: SandboxRuntimeType::Process,
@@ -2296,6 +2464,8 @@ pub async fn register_chat_capabilities(
                             timeout_ms: timeout_ms as u64,
                             ..Default::default()
                         }),
+                        network_enabled: network_required,
+                        allowed_hosts: final_allowed_hosts.into_iter().collect(),
                         ..Default::default()
                     };
 
@@ -3579,6 +3749,7 @@ mod tests {
     use crate::capability_marketplace::CapabilityMarketplace;
     use crate::chat::quarantine::InMemoryQuarantineStore;
     use tokio::sync::RwLock;
+    use serde_json::json;
 
     #[tokio::test]
     async fn test_ccos_run_create_capability() {
