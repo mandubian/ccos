@@ -1384,7 +1384,8 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                              a.category_type === 'SecretWrite' ? '🔐' :
                              a.category_type === 'HumanActionRequest' ? '👤' :
                              a.category_type === 'HttpHostApproval' ? '🌍' :
-                             a.category_type === 'BudgetExtension' ? '💸' : '📋';
+                             a.category_type === 'BudgetExtension' ? '💸' :
+                             a.category_type === 'SandboxNetwork' ? '🛡️' : '📋';
                 
                 const title = a.details.server_name || a.details.capability_id || a.details.title || a.category_type;
                 const uuid = a.id;
@@ -1454,6 +1455,14 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                     detailRows += `<div class="detail-row"><span class="detail-label">Scope:</span><span class="detail-value">${escapeHtml(a.details.scope)}</span></div>`;
                     if (a.details.skill_id) detailRows += `<div class="detail-row"><span class="detail-label">Skill ID:</span><span class="detail-value">${escapeHtml(a.details.skill_id)}</span></div>`;
                     if (a.details.description) detailRows += `<div class="detail-row"><span class="detail-label">Description:</span><span class="detail-value">${escapeHtml(a.details.description)}</span></div>`;
+                }
+                
+                // SandboxNetwork details
+                if (a.category_type === 'SandboxNetwork') {
+                    detailRows += `<div class="detail-row"><span class="detail-label">Capability:</span><span class="detail-value">${escapeHtml(a.details.capability_id)}</span></div>`;
+                    if (a.details.allowed_hosts) {
+                        detailRows += `<div class="detail-row"><span class="detail-label">Allowed Hosts:</span><span class="detail-value">${a.details.allowed_hosts.map(e => escapeHtml(e)).join(', ')}</span></div>`;
+                    }
                 }
                 
                 // HumanActionRequest details with full instructions
