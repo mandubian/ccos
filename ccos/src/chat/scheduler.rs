@@ -45,8 +45,11 @@ impl Scheduler {
 
                     if let Some(next_run) = run.next_run_at {
                         if next_run <= now {
-                            // SKIP if session is already busy (Active or Paused)
-                            if store.get_busy_run_for_session(&run.session_id).is_some() {
+                            // SKIP if session is blocked by an Active or PausedApproval run
+                            if store
+                                .get_blocking_run_for_session(&run.session_id)
+                                .is_some()
+                            {
                                 // We don't log here to avoid log spam every 10s.
                                 // It will eventually trigger once the session is free.
                                 continue;
@@ -138,30 +141,48 @@ impl Scheduler {
 
                             // Extract stdout / success from result for chat notification
                             let stdout = match &result {
-                                rtfs::runtime::values::Value::Map(m) => {
-                                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("stdout".to_string())))
-                                        .or_else(|| m.get(&rtfs::ast::MapKey::String("stdout".to_string())))
-                                        .and_then(|v| v.as_string())
-                                        .map(|s| s.to_string())
-                                }
+                                rtfs::runtime::values::Value::Map(m) => m
+                                    .get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                                        "stdout".to_string(),
+                                    )))
+                                    .or_else(|| {
+                                        m.get(&rtfs::ast::MapKey::String("stdout".to_string()))
+                                    })
+                                    .and_then(|v| v.as_string())
+                                    .map(|s| s.to_string()),
                                 _ => None,
                             };
                             let success = match &result {
-                                rtfs::runtime::values::Value::Map(m) => {
-                                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("success".to_string())))
-                                        .or_else(|| m.get(&rtfs::ast::MapKey::String("success".to_string())))
-                                        .and_then(|v| match v { rtfs::runtime::values::Value::Boolean(b) => Some(*b), _ => None })
-                                        .unwrap_or(true)
-                                }
+                                rtfs::runtime::values::Value::Map(m) => m
+                                    .get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                                        "success".to_string(),
+                                    )))
+                                    .or_else(|| {
+                                        m.get(&rtfs::ast::MapKey::String("success".to_string()))
+                                    })
+                                    .and_then(|v| match v {
+                                        rtfs::runtime::values::Value::Boolean(b) => Some(*b),
+                                        _ => None,
+                                    })
+                                    .unwrap_or(true),
                                 _ => true,
                             };
 
                             // Record capability execution to causal chain (event pane)
                             let mut meta = std::collections::HashMap::new();
-                            meta.insert("capability_id".to_string(), rtfs::runtime::values::Value::String(cap_id_for_task.clone()));
-                            meta.insert("success".to_string(), rtfs::runtime::values::Value::Boolean(success));
+                            meta.insert(
+                                "capability_id".to_string(),
+                                rtfs::runtime::values::Value::String(cap_id_for_task.clone()),
+                            );
+                            meta.insert(
+                                "success".to_string(),
+                                rtfs::runtime::values::Value::Boolean(success),
+                            );
                             if let Some(ref out) = stdout {
-                                meta.insert("stdout".to_string(), rtfs::runtime::values::Value::String(out.clone()));
+                                meta.insert(
+                                    "stdout".to_string(),
+                                    rtfs::runtime::values::Value::String(out.clone()),
+                                );
                             }
                             let _ = crate::chat::gateway::record_run_event(
                                 &state_for_task,
@@ -170,7 +191,8 @@ impl Scheduler {
                                 &step_id,
                                 "capability.direct.complete",
                                 meta,
-                            ).await;
+                            )
+                            .await;
 
                             // Send stdout output to chat so it's visible in the messages pane.
                             // Use connector.send() directly (NOT push_message_to_session which
@@ -195,9 +217,11 @@ impl Scheduler {
 
                             let next_run_id = {
                                 let mut store = run_store.lock().unwrap();
-                                store.complete_run_and_schedule_next(&run_id_for_task, |sched| {
-                                    Self::calculate_next_run(sched)
-                                })
+                                store.finish_run_and_schedule_next(
+                                    &run_id_for_task,
+                                    RunState::Done,
+                                    |sched| Self::calculate_next_run(sched),
+                                )
                             };
                             if let Some(next_run_id) = next_run_id {
                                 info!(
@@ -213,9 +237,18 @@ impl Scheduler {
                             );
                             // Record failure to causal chain
                             let mut meta = std::collections::HashMap::new();
-                            meta.insert("capability_id".to_string(), rtfs::runtime::values::Value::String(cap_id_for_task.clone()));
-                            meta.insert("success".to_string(), rtfs::runtime::values::Value::Boolean(false));
-                            meta.insert("error".to_string(), rtfs::runtime::values::Value::String(e.to_string()));
+                            meta.insert(
+                                "capability_id".to_string(),
+                                rtfs::runtime::values::Value::String(cap_id_for_task.clone()),
+                            );
+                            meta.insert(
+                                "success".to_string(),
+                                rtfs::runtime::values::Value::Boolean(false),
+                            );
+                            meta.insert(
+                                "error".to_string(),
+                                rtfs::runtime::values::Value::String(e.to_string()),
+                            );
                             let _ = crate::chat::gateway::record_run_event(
                                 &state_for_task,
                                 &session_id_for_task,
@@ -223,14 +256,26 @@ impl Scheduler {
                                 &step_id,
                                 "capability.direct.failed",
                                 meta,
-                            ).await;
+                            )
+                            .await;
+                            let state = RunState::Failed {
+                                error: format!(
+                                    "direct capability '{}' failed: {}",
+                                    cap_id_for_task, e
+                                ),
+                            };
                             let mut store = run_store.lock().unwrap();
-                            store.update_run_state(
+                            let next_run_id = store.finish_run_and_schedule_next(
                                 &run_id_for_task,
-                                RunState::Failed {
-                                    error: format!("direct capability '{}' failed: {}", cap_id_for_task, e),
-                                },
+                                state,
+                                |sched| Self::calculate_next_run(sched),
                             );
+                            if let Some(next_run_id) = next_run_id {
+                                info!(
+                                    "[Scheduler] Created recurring follow-up run {} after failed direct capability run {}",
+                                    next_run_id, run_id_for_task
+                                );
+                            }
                         }
                     }
                 });
@@ -309,15 +354,16 @@ mod tests {
     use crate::capability_marketplace::CapabilityMarketplace;
     use crate::causal_chain::CausalChain;
     use crate::chat::connector::{
-        ChatConnector, ConnectionHandle, EnvelopeCallback, HealthStatus, OutboundRequest, SendResult,
+        ChatConnector, ConnectionHandle, EnvelopeCallback, HealthStatus, OutboundRequest,
+        SendResult,
     };
     use crate::chat::gateway::GatewayState;
     use crate::chat::quarantine::InMemoryQuarantineStore;
     use crate::chat::run::{new_shared_run_store, BudgetContext, Run, RunState};
     use crate::chat::spawner::LogOnlySpawner;
+    use crate::chat::Scheduler as SchedulerType;
     use crate::chat::{new_shared_resource_store, InMemoryCheckpointStore, SessionRegistry};
     use crate::chat::{MessageEnvelope, RealTimeTrackingSink};
-    use crate::chat::Scheduler as SchedulerType;
     use async_trait::async_trait;
     use rtfs::runtime::error::RuntimeResult;
     use rtfs::runtime::values::Value;
@@ -414,11 +460,11 @@ mod tests {
             approval_ui_url: "http://localhost:3000".to_string(),
             spawn_llm_profile: Arc::new(RwLock::new(None)),
             session_llm_profiles: Arc::new(RwLock::new(HashMap::new())),
-            working_memory: Arc::new(Mutex::new(
-                crate::working_memory::WorkingMemory::new(Box::new(
-                    crate::working_memory::InMemoryJsonlBackend::new(None, None, None),
+            working_memory: Arc::new(Mutex::new(crate::working_memory::WorkingMemory::new(
+                Box::new(crate::working_memory::InMemoryJsonlBackend::new(
+                    None, None, None,
                 )),
-            )),
+            ))),
         })
     }
 
@@ -478,5 +524,56 @@ mod tests {
             Some(2)
         );
         assert_eq!(next.trigger_capability_id.as_deref(), Some("test.cap.ok"));
+    }
+
+    #[tokio::test]
+    async fn test_compiled_scheduled_task_execution() {
+        let state = build_test_gateway_state().await;
+        let scheduler = Scheduler::new(state.run_store.clone());
+
+        // 1. Create a scheduled run with a direct capability trigger
+        let session_id = "test:test-session";
+        let trigger_cap = "test.cap.ok";
+        let trigger_inputs = serde_json::json!({
+            "n": 1
+        });
+
+        let next_run = Utc::now() - chrono::Duration::seconds(1); // Due now
+        let run_id = {
+            let mut store = state.run_store.lock().unwrap();
+            let run = crate::chat::run::Run::new_scheduled(
+                session_id.to_string(),
+                "test direct cap".to_string(),
+                "*/1 * * * * *".to_string(),
+                next_run,
+                Some(BudgetContext::default()),
+                Some(trigger_cap.to_string()),
+                Some(trigger_inputs.clone()),
+            );
+            store.create_run(run)
+        };
+
+        // 2. Trigger the scheduler once
+        scheduler.check_scheduled_runs(&state).await;
+
+        // Wait a brief moment for the async direct capability execution to complete
+        for _ in 0..20 {
+            let done = {
+                let store = state.run_store.lock().unwrap();
+                let current = store.get_run(&run_id).expect("run exists");
+                matches!(current.state, RunState::Done)
+            };
+            if done {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 3. Verify state transition to Active (or Done if it completed super fast)
+        {
+            let store = state.run_store.lock().unwrap();
+            let run = store.get_run(&run_id).expect("run exists");
+            assert!(matches!(run.state, RunState::Active) || matches!(run.state, RunState::Done));
+        }
     }
 }
