@@ -3357,6 +3357,9 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::PackageApproval { package, runtime } => {
                             json!({ "type": "PackageApproval", "package": package, "runtime": runtime })
                         }
+                        ccos::approval::types::ApprovalCategory::SandboxNetwork { capability_id, allowed_hosts } => {
+                            json!({ "type": "SandboxNetwork", "capability_id": capability_id, "allowed_hosts": allowed_hosts })
+                        }
                     };
 
                     json!({
@@ -3430,6 +3433,7 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                     ccos::approval::types::ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
                     ccos::approval::types::ApprovalCategory::PackageApproval { .. } => "PackageApproval",
+                    ccos::approval::types::ApprovalCategory::SandboxNetwork { .. } => "SandboxNetwork",
                 };
 
                 Ok(json!({

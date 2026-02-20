@@ -201,7 +201,13 @@ impl BubblewrapSandbox {
         let timeout_ms = config
             .resources
             .as_ref()
-            .map(|r| if r.timeout_ms > 0 { r.timeout_ms } else { 30000 })
+            .map(|r| {
+                if r.timeout_ms > 0 {
+                    r.timeout_ms
+                } else {
+                    30000
+                }
+            })
             .unwrap_or(30000);
 
         // Build command — bwrap or unjailed
@@ -254,6 +260,24 @@ impl BubblewrapSandbox {
                 if Path::new(cert_path).exists() {
                     c.arg("--ro-bind").arg(cert_path).arg(cert_path);
                 }
+            }
+
+            if Path::new("/etc/resolv.conf").exists()
+                && (config.network_enabled
+                    || !config.allowed_hosts.is_empty()
+                    || !config.allowed_ports.is_empty())
+            {
+                c.arg("--ro-bind")
+                    .arg("/etc/resolv.conf")
+                    .arg("/etc/resolv.conf");
+            }
+            if Path::new("/etc/nsswitch.conf").exists() {
+                c.arg("--ro-bind")
+                    .arg("/etc/nsswitch.conf")
+                    .arg("/etc/nsswitch.conf");
+            }
+            if Path::new("/etc/hosts").exists() {
+                c.arg("--ro-bind").arg("/etc/hosts").arg("/etc/hosts");
             }
 
             c.arg("--proc").arg("/proc");
@@ -354,8 +378,7 @@ impl BubblewrapSandbox {
         let mut stdin_writer = tokio::io::BufWriter::new(stdin);
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut visible_stdout = String::new();
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
 
         // Interactive IPC loop
         loop {
@@ -390,33 +413,27 @@ impl BubblewrapSandbox {
                                 serde_json::json!({"success": false, "error": format!("Invalid call JSON: {}", e)})
                             }
                             Ok(call) => {
-                                let cap_id = call["cap"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string();
+                                let cap_id = call["cap"].as_str().unwrap_or("").to_string();
                                 let inputs = call["inputs"].clone();
                                 match dispatcher(cap_id.clone(), inputs).await {
                                     Ok(v) => {
-                                        log::debug!(
-                                            "[sandbox] CCOS_CALL {} → ok",
-                                            cap_id
-                                        );
+                                        log::debug!("[sandbox] CCOS_CALL {} → ok", cap_id);
                                         serde_json::json!({"success": true, "value": v})
                                     }
                                     Err(e) => {
-                                        log::warn!(
-                                            "[sandbox] CCOS_CALL {} → error: {}",
-                                            cap_id, e
-                                        );
+                                        log::warn!("[sandbox] CCOS_CALL {} → error: {}", cap_id, e);
                                         serde_json::json!({"success": false, "error": e.to_string()})
                                     }
                                 }
                             }
                         };
                         // Write result to Python's stdin
-                        let response =
-                            format!("CCOS_RESULT::{}\n", serde_json::to_string(&result_json)
-                                .unwrap_or_else(|_| r#"{"success":false,"error":"serialise"}"#.to_string()));
+                        let response = format!(
+                            "CCOS_RESULT::{}\n",
+                            serde_json::to_string(&result_json).unwrap_or_else(|_| {
+                                r#"{"success":false,"error":"serialise"}"#.to_string()
+                            })
+                        );
                         if let Err(e) = stdin_writer.write_all(response.as_bytes()).await {
                             log::warn!("[sandbox] Failed to write CCOS_RESULT to stdin: {}", e);
                         }
@@ -666,6 +683,14 @@ impl BubblewrapSandbox {
                 .arg("/etc/resolv.conf")
                 .arg("/etc/resolv.conf");
         }
+        if Path::new("/etc/nsswitch.conf").exists() {
+            cmd.arg("--ro-bind")
+                .arg("/etc/nsswitch.conf")
+                .arg("/etc/nsswitch.conf");
+        }
+        if Path::new("/etc/hosts").exists() {
+            cmd.arg("--ro-bind").arg("/etc/hosts").arg("/etc/hosts");
+        }
 
         // Mount proc and dev (minimal)
         cmd.arg("--proc").arg("/proc");
@@ -903,23 +928,32 @@ impl BubblewrapSandbox {
         for file in input_files {
             if file.host_path.exists() {
                 let dest = input_dir.join(&file.name);
-                fs::copy(&file.host_path, &dest)
-                    .await
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to copy input file {}: {}", file.name, e)))?;
+                fs::copy(&file.host_path, &dest).await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to copy input file {}: {}", file.name, e))
+                })?;
             }
         }
 
         let timeout_ms = config
             .resources
             .as_ref()
-            .map(|r| if r.timeout_ms > 0 { r.timeout_ms } else { 30000 })
+            .map(|r| {
+                if r.timeout_ms > 0 {
+                    r.timeout_ms
+                } else {
+                    30000
+                }
+            })
             .unwrap_or(30000);
 
         let mut cmd = Command::new(match runtime {
             "python" => "/usr/bin/python3",
             "javascript" => "/usr/bin/node",
             _ => {
-                return Err(RuntimeError::Generic(format!("Unsupported runtime: {}", runtime)));
+                return Err(RuntimeError::Generic(format!(
+                    "Unsupported runtime: {}",
+                    runtime
+                )));
             }
         });
 

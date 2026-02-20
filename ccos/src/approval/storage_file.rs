@@ -33,7 +33,7 @@ impl FileApprovalStorage {
             "[FileApprovalStorage] Initializing with base_path: {:?}",
             base_path
         );
-        
+
         // Ensure base directory exists
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| {
@@ -142,7 +142,7 @@ impl FileApprovalStorage {
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
         })?;
-        
+
         // Clear cache before reloading to ensure fresh data
         cache.clear();
 
@@ -151,7 +151,7 @@ impl FileApprovalStorage {
             if !status_dir.exists() {
                 continue;
             }
-            
+
             if let Ok(entries) = std::fs::read_dir(&status_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -516,6 +516,7 @@ impl FileApprovalStorage {
                 ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                 ApprovalCategory::HttpHostApproval { .. } => "HttpHostApproval",
                 ApprovalCategory::PackageApproval { .. } => "PackageApproval",
+                ApprovalCategory::SandboxNetwork { .. } => "SandboxNetwork",
             };
             if request_type != category_type {
                 return false;
@@ -541,16 +542,16 @@ impl ApprovalStorage for FileApprovalStorage {
             request.id,
             std::mem::discriminant(&request.category)
         );
-        
+
         // Save to disk first
         self.save_request(&request)?;
-        
+
         log::info!(
             "[FileApprovalStorage] Saved approval {} to disk at {:?}",
             request.id,
             self.get_request_path_for_status(&request.id, &request.status)
         );
-        
+
         // Then add to cache
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
@@ -608,20 +609,17 @@ impl ApprovalStorage for FileApprovalStorage {
             id,
             self.base_path
         );
-        
+
         // Reload from disk to pick up any changes made by other processes
         self.load_all()?;
 
         let cache = self.cache.read().map_err(|_| {
             RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
         })?;
-        
+
         let result = cache.get(id).cloned();
         if result.is_some() {
-            log::info!(
-                "[FileApprovalStorage] Found approval {} in cache",
-                id
-            );
+            log::info!("[FileApprovalStorage] Found approval {} in cache", id);
         } else {
             log::warn!(
                 "[FileApprovalStorage] Approval {} NOT found in cache. Cache has {} entries",
@@ -638,7 +636,7 @@ impl ApprovalStorage for FileApprovalStorage {
                 );
             }
         }
-        
+
         Ok(result)
     }
 

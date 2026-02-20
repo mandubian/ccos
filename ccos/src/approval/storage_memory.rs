@@ -85,6 +85,7 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                             "HttpHostApproval"
                         }
                         super::types::ApprovalCategory::PackageApproval { .. } => "PackageApproval",
+                        super::types::ApprovalCategory::SandboxNetwork { .. } => "SandboxNetwork",
                     };
                     if actual_type != cat_type {
                         return false;

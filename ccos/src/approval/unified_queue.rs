@@ -1148,21 +1148,25 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                     // can resume the correct run
                     let mut updated_req = req.clone();
                     let mut metadata_changed = false;
-                    
+
                     if let Some(ref sid) = session_id {
                         if updated_req.metadata.get("session_id") != Some(sid) {
-                            updated_req.metadata.insert("session_id".to_string(), sid.clone());
+                            updated_req
+                                .metadata
+                                .insert("session_id".to_string(), sid.clone());
                             metadata_changed = true;
                         }
                     }
-                    
+
                     if let Some(ref rid) = run_id {
                         if updated_req.metadata.get("run_id") != Some(rid) {
-                            updated_req.metadata.insert("run_id".to_string(), rid.clone());
+                            updated_req
+                                .metadata
+                                .insert("run_id".to_string(), rid.clone());
                             metadata_changed = true;
                         }
                     }
-                    
+
                     if metadata_changed {
                         log::info!(
                             "[UnifiedApprovalQueue] Updating existing approval {} metadata with session_id={:?}, run_id={:?}",
@@ -1172,14 +1176,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                         );
                         self.storage.update(&updated_req).await?;
                     }
-                    
+
                     // IMPORTANT: Notify consumers even for existing approvals
                     // This ensures the user gets nudged about the pending approval
                     let consumers = self.consumers.read().await;
                     for consumer in consumers.iter() {
                         consumer.on_approval_requested(&updated_req).await;
                     }
-                    
+
                     return Ok(req.id);
                 }
             }
@@ -1209,7 +1213,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         if let Some(sid) = session_id {
             request.metadata.insert("session_id".to_string(), sid);
         }
-        
+
         if let Some(rid) = run_id {
             request.metadata.insert("run_id".to_string(), rid);
         }
@@ -1251,6 +1255,156 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                     && r.to_lowercase() == runtime.to_lowercase()
                 {
                     return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    // ========================================================================
+    // Sandbox Network Approval Specific Operations
+    // ========================================================================
+
+    /// Add a sandbox network approval request
+    pub async fn add_network_approval(
+        &self,
+        capability_id: String,
+        allowed_hosts: Vec<String>,
+        session_id: Option<String>,
+        run_id: Option<String>,
+    ) -> RuntimeResult<String> {
+        // Check if a pending request already exists for this capability
+        let pending = self.list_pending_by_category("SandboxNetwork").await?;
+        for req in pending {
+            if let ApprovalCategory::SandboxNetwork {
+                capability_id: c_id,
+                allowed_hosts: a_h,
+            } = &req.category
+            {
+                // Simple matching: if capability_id matches and the requested hosts are an exact match
+                if c_id == &capability_id && a_h == &allowed_hosts {
+                    log::info!(
+                        "[UnifiedApprovalQueue] Found existing pending SandboxNetwork for {}, returning existing ID: {}",
+                        capability_id,
+                        req.id
+                    );
+
+                    let mut updated_req = req.clone();
+                    let mut metadata_changed = false;
+
+                    if let Some(ref sid) = session_id {
+                        if updated_req.metadata.get("session_id") != Some(sid) {
+                            updated_req
+                                .metadata
+                                .insert("session_id".to_string(), sid.clone());
+                            metadata_changed = true;
+                        }
+                    }
+
+                    if let Some(ref rid) = run_id {
+                        if updated_req.metadata.get("run_id") != Some(rid) {
+                            updated_req
+                                .metadata
+                                .insert("run_id".to_string(), rid.clone());
+                            metadata_changed = true;
+                        }
+                    }
+
+                    if metadata_changed {
+                        self.storage.update(&updated_req).await?;
+                    }
+
+                    let consumers = self.consumers.read().await;
+                    for consumer in consumers.iter() {
+                        consumer.on_approval_requested(&updated_req).await;
+                    }
+
+                    return Ok(req.id);
+                }
+            }
+        }
+
+        let hosts_str = if allowed_hosts.is_empty() {
+            "NO hosts".to_string()
+        } else if allowed_hosts.contains(&"*".to_string()) {
+            "ALL hosts".to_string()
+        } else {
+            allowed_hosts.join(", ")
+        };
+
+        log::info!(
+            "[UnifiedApprovalQueue] Creating new SandboxNetwork for {} (hosts: {}) with session_id={:?}, run_id={:?}",
+            capability_id,
+            hosts_str,
+            session_id,
+            run_id
+        );
+
+        let mut request = ApprovalRequest::new(
+            ApprovalCategory::SandboxNetwork {
+                capability_id: capability_id.clone(),
+                allowed_hosts,
+            },
+            RiskAssessment {
+                level: RiskLevel::High,
+                reasons: vec![format!(
+                    "{} requested network access to: {}",
+                    capability_id, hosts_str
+                )],
+            },
+            24, // 24 hour expiry
+            None,
+        );
+
+        if let Some(sid) = session_id {
+            request.metadata.insert("session_id".to_string(), sid);
+        }
+
+        if let Some(rid) = run_id {
+            request.metadata.insert("run_id".to_string(), rid);
+        }
+
+        let id = self.add(request).await?;
+        Ok(id)
+    }
+
+    /// Check if network access is approved for the given capability and requested hosts
+    pub async fn is_network_approved(
+        &self,
+        capability_id: &str,
+        requested_hosts: &[String],
+    ) -> RuntimeResult<bool> {
+        let approved = self
+            .storage
+            .list(ApprovalFilter {
+                category_type: Some("SandboxNetwork".to_string()),
+                status_pending: Some(false),
+                ..Default::default()
+            })
+            .await?;
+
+        for req in approved {
+            if !req.status.is_approved() {
+                continue;
+            }
+            if let ApprovalCategory::SandboxNetwork {
+                capability_id: c_id,
+                allowed_hosts: a_h,
+            } = &req.category
+            {
+                if c_id == capability_id {
+                    // Check if the approved hosts cover the requested hosts.
+                    // If approved includes "*", it covers everything.
+                    if a_h.contains(&"*".to_string()) {
+                        return Ok(true);
+                    }
+
+                    // Otherwise, all requested hosts must be in the approved list
+                    let all_covered = requested_hosts.iter().all(|rh| a_h.contains(rh));
+                    if all_covered {
+                        return Ok(true);
+                    }
                 }
             }
         }
