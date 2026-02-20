@@ -3418,12 +3418,12 @@ async fn create_run_handler(
                 payload.trigger_inputs.clone(),
             )
         } else if let Some(ref sched) = normalized_schedule {
-            if let Some(next_at) = crate::chat::scheduler::Scheduler::calculate_next_run(sched) {
+            if crate::chat::scheduler::Scheduler::calculate_next_run(sched).is_some() {
                 Run::new_scheduled(
                     payload.session_id.clone(),
                     payload.goal.clone(),
                     sched.clone(),
-                    next_at,
+                    Utc::now(), // Execute immediately upon creation
                     budget.clone(),
                     payload.trigger_capability_id.clone(),
                     payload.trigger_inputs.clone(),
