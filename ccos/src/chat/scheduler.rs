@@ -102,13 +102,31 @@ impl Scheduler {
                     cap_id, run_id
                 );
 
-                let inputs = if let Some(json_inputs) = trigger_inputs {
+                let step_id = format!("{}-direct-{}", run_id, uuid::Uuid::new_v4());
+
+                let mut inputs = if let Some(json_inputs) = trigger_inputs {
                     crate::utils::value_conversion::json_to_rtfs_value(&json_inputs).unwrap_or(
                         rtfs::runtime::values::Value::Map(std::collections::HashMap::new()),
                     )
                 } else {
                     rtfs::runtime::values::Value::Map(std::collections::HashMap::new())
                 };
+
+                // Inject session tracking parameters
+                if let rtfs::runtime::values::Value::Map(ref mut map) = inputs {
+                    map.insert(
+                        rtfs::ast::MapKey::String("session_id".to_string()),
+                        rtfs::runtime::values::Value::String(session_id.clone()),
+                    );
+                    map.insert(
+                        rtfs::ast::MapKey::String("run_id".to_string()),
+                        rtfs::runtime::values::Value::String(run_id.clone()),
+                    );
+                    map.insert(
+                        rtfs::ast::MapKey::String("step_id".to_string()),
+                        rtfs::runtime::values::Value::String(step_id.clone()),
+                    );
+                }
 
                 // Inject session token if it's a python execution
                 if cap_id == "ccos.execute.python" {
@@ -131,7 +149,6 @@ impl Scheduler {
                 let cap_id_for_task = cap_id.clone();
 
                 tokio::spawn(async move {
-                    let step_id = format!("{}-direct-{}", run_id_for_task, uuid::Uuid::new_v4());
                     match marketplace.execute_capability(&cap_id, &inputs).await {
                         Ok(result) => {
                             info!(
@@ -231,50 +248,114 @@ impl Scheduler {
                             }
                         }
                         Err(e) => {
-                            error!(
-                                "[Scheduler] Direct capability {} for run {} failed: {}",
-                                cap_id_for_task, run_id_for_task, e
-                            );
-                            // Record failure to causal chain
-                            let mut meta = std::collections::HashMap::new();
-                            meta.insert(
-                                "capability_id".to_string(),
-                                rtfs::runtime::values::Value::String(cap_id_for_task.clone()),
-                            );
-                            meta.insert(
-                                "success".to_string(),
-                                rtfs::runtime::values::Value::Boolean(false),
-                            );
-                            meta.insert(
-                                "error".to_string(),
-                                rtfs::runtime::values::Value::String(e.to_string()),
-                            );
-                            let _ = crate::chat::gateway::record_run_event(
-                                &state_for_task,
-                                &session_id_for_task,
-                                &run_id_for_task,
-                                &step_id,
-                                "capability.direct.failed",
-                                meta,
-                            )
-                            .await;
-                            let state = RunState::Failed {
-                                error: format!(
-                                    "direct capability '{}' failed: {}",
-                                    cap_id_for_task, e
-                                ),
-                            };
-                            let mut store = run_store.lock().unwrap();
-                            let next_run_id = store.finish_run_and_schedule_next(
-                                &run_id_for_task,
-                                state,
-                                |sched| Self::calculate_next_run(sched),
-                            );
-                            if let Some(next_run_id) = next_run_id {
+                            let e_str = e.to_string();
+
+                            // Check if this is an approval requirement
+                            if e_str.contains("requires approval") && e_str.contains("Approval ID:")
+                            {
+                                // Extract approval ID
+                                let approval_id = e_str
+                                    .split("Approval ID:")
+                                    .nth(1)
+                                    .unwrap_or("")
+                                    .split('\n')
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string();
+
                                 info!(
-                                    "[Scheduler] Created recurring follow-up run {} after failed direct capability run {}",
-                                    next_run_id, run_id_for_task
+                                    "[Scheduler] Direct capability {} for run {} paused for approval {}",
+                                    cap_id_for_task, run_id_for_task, approval_id
                                 );
+
+                                // Record pause to causal chain
+                                let mut meta = std::collections::HashMap::new();
+                                meta.insert(
+                                    "approval_id".to_string(),
+                                    rtfs::runtime::values::Value::String(approval_id.clone()),
+                                );
+                                let _ = crate::chat::gateway::record_run_event(
+                                    &state_for_task,
+                                    &session_id_for_task,
+                                    &run_id_for_task,
+                                    &step_id,
+                                    "capability.paused_approval",
+                                    meta,
+                                )
+                                .await;
+
+                                // Send chat message instructing user
+                                let channel_id = session_id_for_task
+                                    .split(':')
+                                    .nth(1)
+                                    .unwrap_or("general")
+                                    .to_string();
+                                let outbound = crate::chat::connector::OutboundRequest {
+                                    channel_id,
+                                    content: format!("Scheduled run paused. {}", e_str),
+                                    reply_to: None,
+                                    metadata: None,
+                                };
+                                let _ = state_for_task
+                                    .connector
+                                    .send(&state_for_task.connector_handle, outbound)
+                                    .await;
+
+                                // Transition run to PausedApproval
+                                let mut store = run_store.lock().unwrap();
+                                store.update_run_state(
+                                    &run_id_for_task,
+                                    RunState::PausedApproval {
+                                        reason: approval_id,
+                                    },
+                                );
+                            } else {
+                                error!(
+                                    "[Scheduler] Direct capability {} for run {} failed: {}",
+                                    cap_id_for_task, run_id_for_task, e
+                                );
+                                // Record failure to causal chain
+                                let mut meta = std::collections::HashMap::new();
+                                meta.insert(
+                                    "capability_id".to_string(),
+                                    rtfs::runtime::values::Value::String(cap_id_for_task.clone()),
+                                );
+                                meta.insert(
+                                    "success".to_string(),
+                                    rtfs::runtime::values::Value::Boolean(false),
+                                );
+                                meta.insert(
+                                    "error".to_string(),
+                                    rtfs::runtime::values::Value::String(e.to_string()),
+                                );
+                                let _ = crate::chat::gateway::record_run_event(
+                                    &state_for_task,
+                                    &session_id_for_task,
+                                    &run_id_for_task,
+                                    &step_id,
+                                    "capability.direct.failed",
+                                    meta,
+                                )
+                                .await;
+                                let state = RunState::Failed {
+                                    error: format!(
+                                        "direct capability '{}' failed: {}",
+                                        cap_id_for_task, e
+                                    ),
+                                };
+                                let mut store = run_store.lock().unwrap();
+                                let next_run_id = store.finish_run_and_schedule_next(
+                                    &run_id_for_task,
+                                    state,
+                                    |sched| Self::calculate_next_run(sched),
+                                );
+                                if let Some(next_run_id) = next_run_id {
+                                    info!(
+                                        "[Scheduler] Created recurring follow-up run {} after failed direct capability run {}",
+                                        next_run_id, run_id_for_task
+                                    );
+                                }
                             }
                         }
                     }
