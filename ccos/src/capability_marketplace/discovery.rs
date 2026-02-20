@@ -396,6 +396,84 @@ impl CapabilityDiscovery for LocalFileDiscoveryAgent {
     }
 }
 
+pub struct LocalSkillDiscoveryAgent {
+    pub(crate) discovery_path: std::path::PathBuf,
+}
+
+impl LocalSkillDiscoveryAgent {
+    pub fn new(discovery_path: std::path::PathBuf) -> Self {
+        Self { discovery_path }
+    }
+}
+
+#[async_trait]
+impl CapabilityDiscovery for LocalSkillDiscoveryAgent {
+    async fn discover(
+        &self,
+        marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
+        // We do *not* return capabilities. Instead we directly push Skills into the catalog!
+        if let Some(mp) = marketplace {
+            if let Some(catalog) = mp.get_catalog().await {
+                if let Ok(entries) = std::fs::read_dir(&self.discovery_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                            if ext == "md" || ext == "yaml" || ext == "yml" {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    let url = format!("file://{}", path.display());
+                                    // Parse just the frontmatter using the permissive parser
+                                    if let Ok(loaded) =
+                                        crate::skills::loader::load_skill_from_content(
+                                            &url, &content,
+                                        )
+                                    {
+                                        let skill_id = loaded.skill.id.clone();
+
+                                        // Extract tags if present in description or name
+                                        let mut tags = Vec::new();
+                                        if loaded.skill.description.to_lowercase().contains("agent")
+                                        {
+                                            tags.push("agent".to_string());
+                                        }
+
+                                        catalog
+                                            .register_skill(
+                                                skill_id,
+                                                Some(loaded.skill.name.clone()),
+                                                Some(loaded.skill.description.clone()),
+                                                Some(url.clone()),
+                                                tags,
+                                                crate::catalog::CatalogSource::Discovered,
+                                            )
+                                            .await;
+                                        log::info!(
+                                            "LocalSkillDiscoveryAgent registered skill: {}",
+                                            url
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return empty since this agent only index skills, not capability manifests
+        Ok(Vec::new())
+    }
+
+    fn name(&self) -> &str {
+        "LocalSkillDiscoveryAgent"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 async fn parse_capability_manifest_from_json(
     cap_json: &serde_json::Value,
 ) -> Result<CapabilityManifest, RuntimeError> {
