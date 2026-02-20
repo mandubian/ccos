@@ -26,6 +26,7 @@ pub struct CatalogHit {
 pub enum CatalogEntryKind {
     Capability,
     Plan,
+    Skill,
 }
 
 /// Provenance of the registered artifact
@@ -311,6 +312,61 @@ impl CatalogEntry {
             output_schema: plan.output_schema.as_ref().map(|v| v.to_string()),
         }
     }
+
+    pub async fn new_skill(
+        skill_id: String,
+        name: Option<String>,
+        description: Option<String>,
+        url: Option<String>,
+        tags: Vec<String>,
+        source: CatalogSource,
+        embedding_service: Option<&mut EmbeddingService>,
+    ) -> Self {
+        let mut text_components = vec![skill_id.as_str()];
+        if let Some(n) = name.as_deref() {
+            text_components.push(n);
+        }
+        if let Some(d) = description.as_deref() {
+            text_components.push(d);
+        }
+
+        let search_blob = build_search_blob(&text_components, &tags, &[], &[]);
+
+        let embedding = if let Some(es) = embedding_service {
+            match es.embed(&search_blob).await {
+                Ok(emb) => Some(emb),
+                Err(e) => {
+                    eprintln!("Failed to generate embedding for skill: {}", e);
+                    Some(embed_text(&search_blob))
+                }
+            }
+        } else {
+            Some(embed_text(&search_blob))
+        };
+
+        let location = url.map(CatalogLocation::Other);
+
+        Self {
+            id: skill_id,
+            kind: CatalogEntryKind::Skill,
+            name,
+            description,
+            source,
+            provider: None,
+            tags,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            location,
+            capability_refs: Vec::new(),
+            goal: None,
+            search_blob,
+            embedding,
+            domains: Vec::new(),
+            categories: Vec::new(),
+            input_schema: None,
+            output_schema: None,
+        }
+    }
 }
 
 /// Unified catalog service, providing registration and search capabilities
@@ -351,6 +407,35 @@ impl CatalogService {
     ) {
         let mut service_guard = self.embedding_service.write().await;
         let entry = CatalogEntry::new_plan(plan, source, location, service_guard.as_mut()).await;
+        self.insert_entry(entry);
+    }
+
+    /// Upsert a skill into the catalog
+    pub async fn register_skill(
+        &self,
+        skill_id: String,
+        name: Option<String>,
+        description: Option<String>,
+        url: Option<String>,
+        tags: Vec<String>,
+        source: CatalogSource,
+    ) {
+        let mut service_guard = self.embedding_service.write().await;
+        let entry = CatalogEntry::new_skill(
+            skill_id.clone(),
+            name,
+            description,
+            url,
+            tags,
+            source,
+            service_guard.as_mut(),
+        )
+        .await;
+        eprintln!(
+            "[CatalogService] register_skill: id={} embedding={}",
+            skill_id,
+            entry.embedding.is_some()
+        );
         self.insert_entry(entry);
     }
 
@@ -507,8 +592,19 @@ impl CatalogService {
             .read()
             .expect("embedding index poisoned");
 
+        eprintln!(
+            "[CatalogService] search_semantic: entries={}, embedding_index={}",
+            entries_guard.len(),
+            embeddings_guard.len()
+        );
         for (entry_id, embedding) in embeddings_guard.iter() {
             if let Some(entry) = entries_guard.get(entry_id) {
+                eprintln!(
+                    "[CatalogService] entry: id={} kind={:?} filter_matches={}",
+                    entry_id,
+                    entry.kind,
+                    filter.matches(entry)
+                );
                 if !filter.matches(entry) {
                     continue;
                 }
@@ -755,5 +851,47 @@ fn value_to_string(value: &Value) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_skill_registration_and_search() {
+        let catalog = CatalogService::new();
+        catalog
+            .register_skill(
+                "nitter-feed".to_string(),
+                Some("Nitter Feed".to_string()),
+                Some(
+                    "Fetches recent tweets from an X Twitter user using a Nitter RSS feed"
+                        .to_string(),
+                ),
+                Some("file:///skills/nitter_feed.md".to_string()),
+                vec!["twitter".to_string(), "rss".to_string()],
+                CatalogSource::Discovered,
+            )
+            .await;
+
+        let entries = catalog.entries.read().unwrap();
+        println!("entries count: {}", entries.len());
+        println!("entries keys: {:?}", entries.keys().collect::<Vec<_>>());
+        drop(entries);
+
+        let idx = catalog.embedding_index.read().unwrap();
+        println!("embedding_index count: {}", idx.len());
+        drop(idx);
+
+        let filter = CatalogFilter::for_kind(CatalogEntryKind::Skill);
+        let hits = catalog
+            .search_semantic("twitter thread fetching", Some(&filter), 10)
+            .await;
+        println!("hits: {}", hits.len());
+        for h in &hits {
+            println!("  hit: {} score={:.3}", h.entry.id, h.score);
+        }
+        assert!(!hits.is_empty(), "expected at least one skill hit");
     }
 }

@@ -198,11 +198,11 @@ pub fn get_configured_capabilities_path() -> PathBuf {
 
 /// Get the configured generated capabilities path (capabilities_dir/generated_subdir).
 pub fn get_configured_generated_path() -> PathBuf {
+    let base = get_configured_capabilities_path();
     if let Some(config) = load_agent_config() {
-        let base = resolve_workspace_path(&config.storage.capabilities_dir);
         return base.join(&config.storage.generated_subdir);
     }
-    get_configured_capabilities_path().join("generated")
+    base.join("generated")
 }
 
 /// Get the configured sessions path (capabilities_dir/sessions_subdir).
@@ -217,11 +217,11 @@ pub fn get_configured_sessions_path() -> PathBuf {
         };
     }
 
+    let base = get_configured_capabilities_path();
     if let Some(config) = load_agent_config() {
-        let base = resolve_workspace_path(&config.storage.capabilities_dir);
         return base.join(&config.storage.sessions_subdir);
     }
-    get_configured_capabilities_path().join("sessions")
+    base.join("sessions")
 }
 
 /// Legacy alias for backward compatibility. Prefer `get_workspace_root()`.

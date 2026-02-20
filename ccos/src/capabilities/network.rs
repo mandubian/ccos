@@ -229,10 +229,39 @@ pub async fn register_network_capabilities(
                     }
 
                     if !host_allowed && !host_approved && !internal_bypass {
+                        // Try to create an approval request instead of hard-failing
+                        if let Some(queue) = &approval_queue {
+                            let session_id = match &input {
+                                Value::Map(m) => get_map_string(m, "session_id"),
+                                _ => None,
+                            };
+                            let approval_id = queue
+                                .add_http_host_approval(
+                                    host.clone(),
+                                    Some(port),
+                                    url.clone(),
+                                    "session".to_string(),
+                                    Some("ccos.network.http-fetch".to_string()),
+                                    format!(
+                                        "HTTP fetch requested access to {}:{}",
+                                        host, port
+                                    ),
+                                    24, // 24-hour expiry
+                                    session_id,
+                                )
+                                .await?;
+                            return Err(RuntimeError::Generic(format!(
+                                "HTTP host '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this host, then retry.",
+                                host, approval_id, approval_id
+                            )));
+                        }
                         return Err(RuntimeError::SecurityViolation {
                             operation: "ccos.network.http-fetch".to_string(),
                             capability: "ccos.network.http-fetch".to_string(),
-                            context: format!("Host '{}' not in HTTP allowlist", host),
+                            context: format!(
+                                "Host '{}' not in HTTP allowlist and no approval queue configured. Add the host to the HTTP allowlist to proceed.",
+                                host
+                            ),
                         });
                     }
                     if !port_allowed && !internal_bypass {

@@ -34,15 +34,20 @@ pub struct AgentLlmClient {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PlannedAction {
     pub capability_id: String,
+    #[serde(default)]
     pub reasoning: String,
+    #[serde(default)]
     pub inputs: serde_json::Value,
 }
 
 /// The agent's plan for processing a message
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentPlan {
+    #[serde(default)]
     pub understanding: String,
+    #[serde(default)]
     pub actions: Vec<PlannedAction>,
+    #[serde(default)]
     pub response: String,
 }
 
@@ -185,8 +190,7 @@ impl AgentLlmClient {
 
         // Retry once on 429 / 5xx before failing — OpenRouter rate-limits are transient.
         let response = if !response.status().is_success()
-            && (response.status().as_u16() == 429
-                || response.status().is_server_error())
+            && (response.status().as_u16() == 429 || response.status().is_server_error())
         {
             warn!(
                 "LLM returned {} on first attempt; retrying after 8 s",
@@ -397,19 +401,20 @@ When working with scheduling:
        `trigger_capability_id`. A fresh LLM agent is spawned each tick.
 
 When working with skills:
+- Use ccos.skill.search with: {{ "query": "..." }} to search the catalog for available skills matching a keyword or intent. Do this before asking the user for a skill URL, or if the user asks for a capability you don't immediately recognize.
 - Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions (Markdown/YAML/JSON).
 - Never call ccos.skill.load without a valid "url" in inputs. If you need to ask the user for a URL, send only the response message and do NOT add ccos.skill.load to actions.
-- If the user mentions a skill by name and Agent context contains a "skill_url_hint" entry for that name, use that URL. Otherwise ask the user for the URL.
+- If the user mentions a skill by name, first search for it using ccos.skill.search. If not found, and Agent context contains a "skill_url_hint" entry for that name, use that URL. Otherwise ask the user for the URL. NEVER guess or hallucinate a skill URL.
 - Only use ccos.skill.load when the user is explicitly trying to load/onboard/install a skill OR when the URL clearly points to a skill definition file (e.g. ends with .md/.yaml/.yml/.json or contains /skill.md).
 - If the user provides a URL that is clearly NOT a skill definition (e.g. an X/Twitter tweet URL like https://x.com/... or a normal web page), treat it as data for a skill operation instead (usually via ccos.skill.execute), or ask a clarifying question. Do NOT call ccos.skill.load for arbitrary URLs.
 - Once loaded, the skill_definition will describe available operations and any setup requirements.
 - Use ccos.skill.execute for any required skill operation (onboarding or otherwise) with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
 - Plan and execute the steps required to fulfill the user's request using the available skill operations.
-- If the skill name is not in agent context hints and the user did not provide a URL, ask the user for the skill URL and do not call ccos.skill.load until they provide it.
+- If the skill name/intent is not in agent context hints and ccos.skill.search finds nothing, ask the user for the skill URL and do not call ccos.skill.load until they provide it. NEVER guess or hallucinate a skill URL.
 - Only use operations explicitly listed in Registered capabilities; do not invent operation names (e.g. "skill_definition"). If unsure, ask the user or check the registered capabilities list.
 
 When working with code execution:
-- Use ccos.execute.python for running Python snippets. Input: {{ "code": "..." }}.
+- Use ccos.execute.python for running Python snippets. Input: {{ "code": "..." }}. NOTE: The Python sandbox blocks network access by default. If your code requires network access (e.g., uses `requests` or `urllib`), the system will pause execution and ask the user for approval. To explicitly request access to specific domains, pass `allowed_hosts: ["example.com"]`. When execution pauses for approval, return the provided error message to the user and wait for them to type `/approve <id>`.
 - Use ccos.execute.javascript for Node.js snippets. Input: {{ "code": "..." }}.
 - Use ccos.code.refined_execute for complex tasks that may require multiple attempts or self-correction. Input: {{ "task": "...", "language": "python|javascript|rtfs" }}. This is the RECOMMENDED way for code tasks.
 - If using ccos.network.http-fetch, handle the results carefully. Outputs can be passed to code execution for further processing.
@@ -436,6 +441,8 @@ Human-in-the-loop rule:
 
 You have access to these capabilities:
 {}
+
+IMPORTANT - CAPABILITY IDS: Use EXACTLY the punctuation shown in the capabilities list. DO NOT replace dots with underscores (e.g. use "ccos.network.http-fetch", NEVER "ccos_network_http_fetch").
 
 Preferred response mode:
 - If tool-calling is available, return actions via native tool calls.
@@ -703,7 +710,9 @@ pub struct ActionResult {
 /// Extended plan that includes completion status for iterative mode
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IterativeAgentPlan {
+    #[serde(default)]
     pub understanding: String,
+    #[serde(default)]
     pub actions: Vec<PlannedAction>,
     #[serde(default)]
     pub response: String,
@@ -861,6 +870,7 @@ Guidelines:
 - If an action failed, you may retry with different parameters
 - When task is complete, set actions: [] and provide a comprehensive final answer
 - ALWAYS provide the required parameters for each capability as shown above
+- CAPABILITY IDS: Use EXACTLY the punctuation shown in the capabilities list. DO NOT replace dots with underscores (e.g. use "ccos.network.http-fetch", NEVER "ccos_network_http_fetch").
 - OUTPUT FORMAT: You MUST respond with valid JSON. Do NOT use XML, DSML, or any other markup tags like `<|DSML|...>` or `<|DSML|invoke`.
 - After successful `ccos.run.create`, avoid calling `ccos.run.create` again unless another distinct schedule is still required by user request.
 - After successful single-schedule creation, next step is usually `ccos.chat.egress.send_outbound` and `task_complete=true`.
@@ -986,8 +996,7 @@ Preferred response mode:
 
         // Retry once on 429 / 5xx before failing — OpenRouter rate-limits are transient.
         let response = if !response.status().is_success()
-            && (response.status().as_u16() == 429
-                || response.status().is_server_error())
+            && (response.status().as_u16() == 429 || response.status().is_server_error())
         {
             warn!(
                 "LLM iterative call returned {} on first attempt; retrying after 8 s",
