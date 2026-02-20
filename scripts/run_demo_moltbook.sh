@@ -127,7 +127,7 @@ export CCOS_SKILL_URL_HINTS="moltbook=http://localhost:8765/skill.md"
     --connector-secret "demo-secret" \
     --min-send-interval-ms 0 \
     --allow-senders "user1" \
-    --allow-channels "moltbook-demo" \
+    --allow-channels "*" \
     --mentions "@agent" \
     --keywords "onboard,done,ok,yes,no,user,agent,post" \
     > /tmp/gateway.log 2>&1 &
