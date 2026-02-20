@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use axum::extract::{Json, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use base64::Engine as _;
 use chrono::Utc;
 use reqwest::Client;
@@ -92,9 +95,7 @@ pub struct ConnectionHandle {
 }
 
 pub type EnvelopeCallback = Arc<
-    dyn Fn(MessageEnvelope) -> futures::future::BoxFuture<'static, RuntimeResult<()>>
-        + Send
-        + Sync,
+    dyn Fn(MessageEnvelope) -> futures::future::BoxFuture<'static, RuntimeResult<()>> + Send + Sync,
 >;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,14 +111,18 @@ impl ActivationRules {
         if self.allowed_senders.is_empty() {
             return false;
         }
-        self.allowed_senders.iter().any(|s| s == "*" || s == sender_id)
+        self.allowed_senders
+            .iter()
+            .any(|s| s == "*" || s == sender_id)
     }
 
     pub fn is_allowed_channel(&self, channel_id: &str) -> bool {
         if self.allowed_channels.is_empty() {
             return false;
         }
-        self.allowed_channels.iter().any(|c| c == "*" || c == channel_id)
+        self.allowed_channels
+            .iter()
+            .any(|c| c == "*" || c == channel_id)
     }
 
     pub fn match_trigger(&self, text: &str) -> Option<String> {
@@ -149,9 +154,16 @@ pub struct LoopbackConnectorConfig {
 pub trait ChatConnector: Send + Sync {
     async fn connect(&self) -> RuntimeResult<ConnectionHandle>;
     async fn disconnect(&self, handle: &ConnectionHandle) -> RuntimeResult<()>;
-    async fn subscribe(&self, handle: &ConnectionHandle, callback: EnvelopeCallback)
-        -> RuntimeResult<()>;
-    async fn send(&self, handle: &ConnectionHandle, outbound: OutboundRequest) -> RuntimeResult<SendResult>;
+    async fn subscribe(
+        &self,
+        handle: &ConnectionHandle,
+        callback: EnvelopeCallback,
+    ) -> RuntimeResult<()>;
+    async fn send(
+        &self,
+        handle: &ConnectionHandle,
+        outbound: OutboundRequest,
+    ) -> RuntimeResult<SendResult>;
     async fn health(&self, handle: &ConnectionHandle) -> RuntimeResult<HealthStatus>;
 }
 
@@ -211,11 +223,10 @@ impl LoopbackWebhookConnector {
         let listener = TcpListener::bind(addr)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to bind connector: {}", e)))?;
-        let server = axum::serve(listener, router.into_make_service()).with_graceful_shutdown(
-            async move {
+        let server =
+            axum::serve(listener, router.into_make_service()).with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
-            },
-        );
+            });
 
         let handle = tokio::spawn(async move {
             let _ = server.await;
@@ -236,7 +247,9 @@ impl LoopbackWebhookConnector {
             let elapsed = now.duration_since(last);
             let min_interval = StdDuration::from_millis(self.state.config.min_send_interval_ms);
             if elapsed < min_interval {
-                return Err(RuntimeError::Generic("Outbound rate limit exceeded".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Outbound rate limit exceeded".to_string(),
+                ));
             }
         }
         *guard = Some(now);
@@ -272,7 +285,11 @@ impl ChatConnector for LoopbackWebhookConnector {
         Ok(())
     }
 
-    async fn send(&self, _handle: &ConnectionHandle, outbound: OutboundRequest) -> RuntimeResult<SendResult> {
+    async fn send(
+        &self,
+        _handle: &ConnectionHandle,
+        outbound: OutboundRequest,
+    ) -> RuntimeResult<SendResult> {
         self.enforce_rate_limit()?;
         // If outbound_url is configured, push via HTTP POST.
         // Otherwise, enqueue for polling via GET /connector/loopback/outbound.
@@ -295,8 +312,10 @@ impl ChatConnector for LoopbackWebhookConnector {
         } else {
             // Queue for poll-based delivery
             let channel = outbound.channel_id.clone();
-            let mut queue = self.state.outbound_queue.lock()
-                .map_err(|_| RuntimeError::Generic("Failed to lock outbound queue".to_string()))?;
+            let mut queue =
+                self.state.outbound_queue.lock().map_err(|_| {
+                    RuntimeError::Generic("Failed to lock outbound queue".to_string())
+                })?;
             queue.entry(channel).or_default().push(outbound);
         }
 
@@ -360,7 +379,11 @@ async fn inbound_handler(
         );
     }
 
-    if !state.config.activation.is_allowed_sender(&payload.sender_id) {
+    if !state
+        .config
+        .activation
+        .is_allowed_sender(&payload.sender_id)
+    {
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
@@ -374,7 +397,11 @@ async fn inbound_handler(
         );
     }
 
-    if !state.config.activation.is_allowed_channel(&payload.channel_id) {
+    if !state
+        .config
+        .activation
+        .is_allowed_channel(&payload.channel_id)
+    {
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
@@ -389,7 +416,7 @@ async fn inbound_handler(
     }
 
     let trigger = state.config.activation.match_trigger(&payload.text);
-    if trigger.is_none() {
+    if trigger.is_none() && !payload.text.trim_start().starts_with('/') {
         return (
             StatusCode::OK,
             Json(LoopbackInboundResponse {
@@ -448,9 +475,7 @@ async fn inbound_handler(
     }
 
     let message_id = Uuid::new_v4().to_string();
-    let timestamp = payload
-        .timestamp
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let timestamp = payload.timestamp.unwrap_or_else(|| Utc::now().to_rfc3339());
     let envelope = MessageEnvelope {
         id: message_id.clone(),
         channel_id: payload.channel_id,
@@ -508,7 +533,10 @@ async fn outbound_poll_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if secret != state.config.shared_secret {
-        return (StatusCode::UNAUTHORIZED, Json(Vec::<OutboundRequest>::new()));
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(Vec::<OutboundRequest>::new()),
+        );
     }
 
     let channel_id = query.channel_id.unwrap_or_default();
