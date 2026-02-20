@@ -126,8 +126,12 @@ impl DependencyManager {
         info!("Installing packages: {:?}", packages);
 
         // Build pip install command
-        let mut cmd = Command::new("pip");
+        let mut cmd = Command::new("python3");
+        cmd.arg("-m");
+        cmd.arg("pip");
         cmd.arg("install");
+        cmd.arg("--target");
+        cmd.arg("."); // Install into the current work_dir
         cmd.arg("--no-cache-dir"); // Don't use pip cache
         cmd.arg("--disable-pip-version-check");
 
