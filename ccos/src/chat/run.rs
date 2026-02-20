@@ -712,6 +712,10 @@ impl RunStore {
             match (&run.state, &new_state) {
                 // Special case: resuming a paused run resets the budget window
                 (_, RunState::Active) if run.state.is_paused() => run.resume(),
+                (_, RunState::Scheduled) if run.state.is_paused() => {
+                    run.budget_started_at = Utc::now();
+                    run.transition(new_state.clone());
+                }
                 // Scheduled -> Active: direct transition (no budget reset needed)
                 (RunState::Scheduled, RunState::Active) => run.transition(RunState::Active),
                 // All other transitions

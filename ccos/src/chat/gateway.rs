@@ -178,7 +178,16 @@ impl ApprovalConsumer for GatewayState {
                     // Resume the run (we need lock again)
                     {
                         let mut store = self.run_store.lock().unwrap();
-                        store.update_run_state(&run_id, crate::chat::run::RunState::Active);
+                        let target_state = if let Some(run) = store.get_run(&run_id) {
+                            if run.trigger_capability_id.is_some() {
+                                crate::chat::run::RunState::Scheduled
+                            } else {
+                                crate::chat::run::RunState::Active
+                            }
+                        } else {
+                            crate::chat::run::RunState::Active
+                        };
+                        store.update_run_state(&run_id, target_state);
                     }
 
                     SheriffLogger::log_run(
@@ -269,7 +278,16 @@ impl ApprovalConsumer for GatewayState {
                             // Resume the run
                             {
                                 let mut store = self.run_store.lock().unwrap();
-                                store.update_run_state(&run_id, crate::chat::run::RunState::Active);
+                                let target_state = if let Some(run) = store.get_run(&run_id) {
+                                    if run.trigger_capability_id.is_some() {
+                                        crate::chat::run::RunState::Scheduled
+                                    } else {
+                                        crate::chat::run::RunState::Active
+                                    }
+                                } else {
+                                    crate::chat::run::RunState::Active
+                                };
+                                store.update_run_state(&run_id, target_state);
                             }
 
                             SheriffLogger::log_run(
