@@ -303,15 +303,22 @@ impl CCOS {
             crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery::new(),
         ));
 
-        let capability_marketplace = Arc::new(capability_marketplace_orig);
+        // Add Local Skill Discovery Agent
+        // Read the CCOS skill path from env or config (defaulting to workspaces/mandubian/ccos/skills for now, or just "./skills" relative to runner)
+        let skills_path =
+            std::env::var("CCOS_SKILLS_PATH").unwrap_or_else(|_| "skills".to_string());
+        capability_marketplace_orig.add_discovery_agent(Box::new(
+            crate::capability_marketplace::discovery::LocalSkillDiscoveryAgent::new(PathBuf::from(
+                skills_path,
+            )),
+        ));
 
-        // Bootstrap the marketplace with discovered capabilities
-        capability_marketplace
-            .bootstrap(Arc::clone(&capability_marketplace))
-            .await?;
+        let capability_marketplace = Arc::new(capability_marketplace_orig);
 
         // RuntimeHost factory moved to after Orchestrator creation for unified governance path
 
+        // Create and wire the CatalogService BEFORE bootstrapping so that
+        // LocalSkillDiscoveryAgent can access it during discovery
         let catalog_service = Arc::new(CatalogService::new());
 
         // Optimize: Initialize embedding service if configured
@@ -330,6 +337,12 @@ impl CCOS {
         capability_marketplace
             .set_catalog_service(Arc::clone(&catalog_service))
             .await;
+
+        // Bootstrap the marketplace with discovered capabilities
+        // (CatalogService is already wired so LocalSkillDiscoveryAgent can register skills)
+        capability_marketplace
+            .bootstrap(Arc::clone(&capability_marketplace))
+            .await?;
 
         // Use provided AgentConfig or default
         let agent_config = if let Some(cfg) = agent_config_opt {

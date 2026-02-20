@@ -4,8 +4,8 @@
 
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::skills::PrimitiveMapper;
-use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use crate::skills::SkillMapper;
+use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,31 @@ struct SkillLoadOutput {
     description: String,
     capabilities: Vec<String>,
     requires_approval: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillSearchInput {
+    query: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+#[derive(Debug, Serialize)]
+struct SkillSearchResult {
+    skill_id: String,
+    name: Option<String>,
+    description: Option<String>,
+    url: Option<String>,
+    score: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct SkillSearchOutput {
+    results: Vec<SkillSearchResult>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,16 +94,18 @@ pub async fn register_skill_capabilities(
             rt_handle.block_on(async {
                 let mut mapper = sm.lock().await;
                 let result = mapper.load_and_register(&payload.url).await;
-                log::info!("[ccos.skill.load] Skill registration result: {:?}", result.as_ref().map(|r| r.capabilities_to_register.len()));
+                log::info!(
+                    "[ccos.skill.load] Skill registration result: {:?}",
+                    result.as_ref().map(|r| r.capabilities_to_register.len())
+                );
                 result
             })
         })
         .join()
         .map_err(|_| RuntimeError::Generic("ccos.skill.load: thread join error".to_string()))?;
 
-        let loaded = loaded.map_err(|err| {
-            RuntimeError::Generic(format!("ccos.skill.load: {}", err))
-        })?;
+        let loaded =
+            loaded.map_err(|err| RuntimeError::Generic(format!("ccos.skill.load: {}", err)))?;
 
         if loaded.skill.id == "unnamed-skill" || loaded.capabilities_to_register.is_empty() {
             return Err(RuntimeError::Generic(
@@ -103,6 +130,58 @@ pub async fn register_skill_capabilities(
             "Skill / Load".to_string(),
             "Load and register a skill from a URL (Markdown or YAML)".to_string(),
             load_handler,
+        )
+        .await?;
+
+    // ccos.skill.search
+    let marketplace_search = marketplace.clone();
+    let search_handler = Arc::new(move |input: &Value| {
+        let payload: SkillSearchInput = parse_payload("ccos.skill.search", input)?;
+        let marketplace = marketplace_search.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let results = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                if let Some(catalog) = marketplace.get_catalog().await {
+                    let filter = crate::catalog::CatalogFilter::for_kind(
+                        crate::catalog::CatalogEntryKind::Skill,
+                    );
+
+                    // Always try semantic search first - it falls back to keyword matching automatically if embeddings aren't configured
+                    let hits = catalog
+                        .search_semantic(&payload.query, Some(&filter), payload.limit)
+                        .await;
+
+                    hits.into_iter()
+                        .map(|hit| SkillSearchResult {
+                            skill_id: hit.entry.id,
+                            name: hit.entry.name,
+                            description: hit.entry.description,
+                            url: hit.entry.location.and_then(|loc| match loc {
+                                crate::catalog::CatalogLocation::Other(url) => Some(url),
+                                _ => None,
+                            }),
+                            score: hit.score,
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
+            })
+        })
+        .join()
+        .map_err(|_| RuntimeError::Generic("ccos.skill.search: thread join error".to_string()))?;
+
+        let output = SkillSearchOutput { results };
+        produce_value("ccos.skill.search", output)
+    });
+
+    marketplace
+        .register_local_capability(
+            "ccos.skill.search".to_string(),
+            "Skill / Search".to_string(),
+            "Search for available skills by intent or keyword".to_string(),
+            search_handler,
         )
         .await?;
 
@@ -137,8 +216,7 @@ pub async fn register_skill_capabilities(
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    if !known_ops.is_empty()
-                        && !known_ops.iter().any(|op| op == &payload.operation)
+                    if !known_ops.is_empty() && !known_ops.iter().any(|op| op == &payload.operation)
                     {
                         return Err(RuntimeError::Generic(format!(
                             "Unknown operation for {}: {}. Available: {}",
@@ -155,13 +233,17 @@ pub async fn register_skill_capabilities(
                     format!("{}.{}", payload.skill_id, payload.operation)
                 };
 
-                let params_json = payload.params.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                let params_json = payload
+                    .params
+                    .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
                 let rtfs_args = json_to_rtfs_value(&params_json)?;
                 marketplace.execute_capability(&cap_id, &rtfs_args).await
             })
         })
         .join()
-        .map_err(|_| RuntimeError::Generic("ccos.skill.execute: thread join error".to_string()))??;
+        .map_err(|_| {
+            RuntimeError::Generic("ccos.skill.execute: thread join error".to_string())
+        })??;
 
         Ok(result)
     });

@@ -424,34 +424,45 @@ impl CapabilityDiscovery for LocalSkillDiscoveryAgent {
                                 if let Ok(content) = std::fs::read_to_string(&path) {
                                     let url = format!("file://{}", path.display());
                                     // Parse just the frontmatter using the permissive parser
-                                    if let Ok(loaded) =
-                                        crate::skills::loader::load_skill_from_content(
-                                            &url, &content,
-                                        )
-                                    {
-                                        let skill_id = loaded.skill.id.clone();
+                                    match crate::skills::loader::load_skill_from_content(
+                                        &url, &content,
+                                    ) {
+                                        Ok(loaded) => {
+                                            let skill_id = loaded.skill.id.clone();
 
-                                        // Extract tags if present in description or name
-                                        let mut tags = Vec::new();
-                                        if loaded.skill.description.to_lowercase().contains("agent")
-                                        {
-                                            tags.push("agent".to_string());
+                                            // Extract tags if present in description or name
+                                            let mut tags = Vec::new();
+                                            if loaded
+                                                .skill
+                                                .description
+                                                .to_lowercase()
+                                                .contains("agent")
+                                            {
+                                                tags.push("agent".to_string());
+                                            }
+
+                                            catalog
+                                                .register_skill(
+                                                    skill_id,
+                                                    Some(loaded.skill.name.clone()),
+                                                    Some(loaded.skill.description.clone()),
+                                                    Some(url.clone()),
+                                                    tags,
+                                                    crate::catalog::CatalogSource::Discovered,
+                                                )
+                                                .await;
+                                            log::info!(
+                                                "LocalSkillDiscoveryAgent registered skill: {}",
+                                                url
+                                            );
                                         }
-
-                                        catalog
-                                            .register_skill(
-                                                skill_id,
-                                                Some(loaded.skill.name.clone()),
-                                                Some(loaded.skill.description.clone()),
-                                                Some(url.clone()),
-                                                tags,
-                                                crate::catalog::CatalogSource::Discovered,
-                                            )
-                                            .await;
-                                        log::info!(
-                                            "LocalSkillDiscoveryAgent registered skill: {}",
-                                            url
-                                        );
+                                        Err(e) => {
+                                            log::warn!(
+                                                "LocalSkillDiscoveryAgent failed to parse {}: {:?}",
+                                                path.display(),
+                                                e
+                                            );
+                                        }
                                     }
                                 }
                             }
