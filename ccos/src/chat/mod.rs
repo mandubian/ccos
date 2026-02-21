@@ -2741,8 +2741,26 @@ pub async fn register_chat_capabilities(
                                                 module, approval_id, approval_id
                                             )));
                                         }
+                                        Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
+                                            // Package is approved — cache was stale when is_package_approved
+                                            // was called above. Retry with it added to the dependency list.
+                                            if max_retries > 0 {
+                                                log::info!(
+                                                    "[ccos.execute.python] Package '{}' confirmed approved (stale cache), retrying with it in dependencies.",
+                                                    module
+                                                );
+                                                current_dependencies.push(module.clone());
+                                                max_retries -= 1;
+                                                continue;
+                                            } else {
+                                                return Err(RuntimeError::Generic(format!(
+                                                    "Package '{}' is approved but install keeps failing (max retries exhausted). Check uv is installed and network is reachable.",
+                                                    module
+                                                )));
+                                            }
+                                        }
                                         Err(ae) => {
-                                            log::error!("[ccos.execute.python] Failed to create package approval for missing module: {}", ae);
+                                            log::error!("[ccos.execute.python] Failed to create package approval for '{}': {}", module, ae);
                                         }
                                     }
                                 }

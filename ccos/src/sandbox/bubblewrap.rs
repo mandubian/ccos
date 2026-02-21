@@ -226,6 +226,12 @@ impl BubblewrapSandbox {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
+            tracing::error!(
+                "[sandbox] Pass 1 uv install FAILED for packages {:?}:\nstdout: {}\nstderr: {}",
+                packages,
+                stdout,
+                stderr
+            );
             return Err(RuntimeError::Generic(format!(
                 "uv install failed:\nstdout: {}\nstderr: {}",
                 stdout, stderr
