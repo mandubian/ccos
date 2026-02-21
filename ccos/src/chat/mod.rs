@@ -2469,20 +2469,24 @@ pub async fn register_chat_capabilities(
                         ..Default::default()
                     };
 
-                    // Create dependency manager using captured config
-                    let mut effective_sandbox_cfg = sandbox_cfg.clone();
-                    
-                    // Pre-check for approved packages and add them to temporary auto_approved list
-                    if let Some(queue) = &approval_queue {
-                        for dep in &dependencies {
-                            if queue.is_package_approved(dep, "python").await.unwrap_or(false) {
-                                log::debug!("[ccos.execute.python] Package {} is already approved, adding to temporary allowlist", dep);
-                                effective_sandbox_cfg.package_allowlist.auto_approved.push(dep.clone());
+                    let mut current_dependencies = dependencies.clone();
+                    let mut max_retries = 3;
+
+                    let result_json = loop {
+                        // Create dependency manager using captured config
+                        let mut effective_sandbox_cfg = sandbox_cfg.clone();
+                        
+                        // Pre-check for approved packages and add them to temporary auto_approved list
+                        if let Some(queue) = &approval_queue {
+                            for dep in &current_dependencies {
+                                if queue.is_package_approved(dep, "python").await.unwrap_or(false) {
+                                    log::debug!("[ccos.execute.python] Package {} is already approved, adding to temporary allowlist", dep);
+                                    effective_sandbox_cfg.package_allowlist.auto_approved.push(dep.clone());
+                                }
                             }
                         }
-                    }
 
-                    let dep_manager = DependencyManager::new(effective_sandbox_cfg);
+                        let dep_manager = DependencyManager::new(effective_sandbox_cfg);
 
                     // Capture session/run context from outer inputs so the dispatcher can
                     // inject them into every SDK-originated ccos.memory.* call, enabling
@@ -2500,7 +2504,7 @@ pub async fn register_chat_capabilities(
 
                     // Execute: interactive mode (with ccos_sdk.py IPC) when no deps to install;
                     // fall back to standard mode when dependencies are requested.
-                    let result = if dependencies.is_empty() {
+                    let result = if current_dependencies.is_empty() {
                         use std::pin::Pin;
                         use crate::sandbox::bubblewrap::CapabilityDispatcher;
                         use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
@@ -2541,7 +2545,7 @@ pub async fn register_chat_capabilities(
                             .await
                     } else {
                         sandbox
-                            .execute_python(&code, &input_files, &exec_sandbox_config, Some(&dependencies), Some(&dep_manager))
+                            .execute_python(&code, &input_files, &exec_sandbox_config, Some(&current_dependencies), Some(&dep_manager))
                             .await
                     };
 
@@ -2625,6 +2629,17 @@ pub async fn register_chat_capabilities(
                                         .and_then(|v| v.as_string())
                                         .map(|s| s.to_string());
 
+                                    if queue.is_package_approved(&module, "python").await.unwrap_or(false) {
+                                        if max_retries > 0 {
+                                            log::info!("[ccos.execute.python] Detected missing module '{}', but it is already approved. Retrying execution with it added to dependencies.", module);
+                                            current_dependencies.push(module.clone());
+                                            max_retries -= 1;
+                                            continue;
+                                        } else {
+                                            log::warn!("[ccos.execute.python] Max retries reached for missing approved module '{}'", module);
+                                        }
+                                    }
+
                                     match queue.add_package_approval(
                                         module.clone(),
                                         "python".to_string(),
@@ -2689,7 +2704,11 @@ pub async fn register_chat_capabilities(
                         );
                     }
 
-                    Ok(Value::Map(output_map))
+                    // Return the successful result from the loop
+                        break Ok(Value::Map(output_map));
+                    };
+
+                    result_json
                 })
             }),
             "high",
