@@ -113,100 +113,145 @@ impl DependencyManager {
             .collect()
     }
 
-    /// Install packages in the sandbox
+    /// Install packages into an isolated venv using `uv`.
+    ///
+    /// Creates `<target_dir>/.venv` via `uv venv`, then installs all packages
+    /// with `uv pip install --python <venv>`. The venv is self-contained and
+    /// strictly isolated: no packages from the host Python environment leak in.
+    ///
+    /// Returns the path to the venv's `python` binary so callers can activate it.
+    ///
+    /// # Errors
+    /// Returns `Err` if `uv` is not on `PATH`, or if the install fails.
+    /// There is **no fallback** to `pip --target`; that would write to the host.
     pub async fn install_packages(
         &self,
         packages: &[String],
         work_dir: &PathBuf,
         target_dir: &PathBuf,
-    ) -> Result<(), String> {
+    ) -> Result<PathBuf, String> {
         if packages.is_empty() {
-            return Ok(());
+            // Return the system python if there is nothing to install
+            return Ok(PathBuf::from("/usr/bin/python3"));
         }
 
-        info!("Installing packages: {:?}", packages);
+        // Locate uv — fail hard if absent; we do not fall back to host pip.
+        let uv = find_uv_binary().ok_or_else(|| {
+            "uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh\n\
+                 NOTE: pip --target is intentionally NOT used as it would install to the host."
+                .to_string()
+        })?;
 
-        // Build pip install command
-        let mut cmd = Command::new("python3");
-        cmd.arg("-m");
-        cmd.arg("pip");
-        cmd.arg("install");
-        cmd.arg("--target");
-        cmd.arg(target_dir); // Install into the workspace dir (bind-mounted into sandbox)
-        cmd.arg("--no-cache-dir"); // Don't use pip cache
-        cmd.arg("--disable-pip-version-check");
+        let venv_dir = target_dir.join(".venv");
+        info!(
+            "Creating venv at {:?} for packages {:?}",
+            venv_dir, packages
+        );
 
-        // Use package cache if enabled
-        if self.config.enable_package_cache {
-            let cache_dir = PathBuf::from(&self.config.package_cache_dir);
-            if cache_dir.exists() {
-                cmd.arg("--find-links").arg(&cache_dir);
-            }
-        }
-
-        // Add packages
-        for pkg in packages {
-            cmd.arg(pkg);
-        }
-
-        // Set working directory and environment
-        cmd.current_dir(work_dir);
-        cmd.env("PIP_NO_WARN_SCRIPT_LOCATION", "0");
-        cmd.env("PYTHONDONTWRITEBYTECODE", "1");
-
-        // Execute
-        let output = cmd
+        // Step 1: create the venv
+        let venv_out = Command::new(&uv)
+            .arg("venv")
+            .arg(&venv_dir)
+            .current_dir(work_dir)
+            .env(
+                "HOME",
+                std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
             .await
-            .map_err(|e| format!("Failed to execute pip install: {}", e))?;
+            .map_err(|e| format!("Failed to run `uv venv`: {}", e))?;
 
-        if output.status.success() {
-            debug!("Successfully installed packages: {:?}", packages);
-            Ok(())
+        if !venv_out.status.success() {
+            let stderr = String::from_utf8_lossy(&venv_out.stderr);
+            return Err(format!("uv venv failed: {}", stderr));
+        }
+
+        let venv_python = venv_dir.join("bin").join("python");
+
+        // Step 2: install packages into the venv
+        let mut cmd = Command::new(&uv);
+        cmd.arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(&venv_python)
+            .arg("--no-cache-dir");
+
+        for pkg in packages {
+            cmd.arg(pkg);
+        }
+
+        cmd.current_dir(work_dir);
+        cmd.env(
+            "HOME",
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        );
+        cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let install_out = cmd
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run `uv pip install`: {}", e))?;
+
+        if install_out.status.success() {
+            debug!("Successfully installed {:?} into {:?}", packages, venv_dir);
+            Ok(venv_python)
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Failed to install packages: {}", stderr);
-            Err(format!("pip install failed: {}", stderr))
+            let stderr = String::from_utf8_lossy(&install_out.stderr);
+            warn!("uv pip install failed: {}", stderr);
+            Err(format!("uv pip install failed: {}", stderr))
         }
     }
 
-    /// Cache packages for future use
+    /// Cache packages for future use using `uv pip download`.
+    ///
+    /// Uses `uv` exclusively — no bare `pip` calls that could touch the host environment.
     pub async fn cache_packages(&self, packages: &[String]) -> Result<(), String> {
         if !self.config.enable_package_cache {
             return Ok(());
         }
 
-        let cache_dir = PathBuf::from(&self.config.package_cache_dir);
+        let uv = find_uv_binary().ok_or_else(|| {
+            "uv not found; cannot cache packages. \
+             Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+                .to_string()
+        })?;
 
-        // Create cache directory if it doesn't exist
+        let cache_dir = PathBuf::from(&self.config.package_cache_dir);
         tokio::fs::create_dir_all(&cache_dir)
             .await
             .map_err(|e| format!("Failed to create cache directory: {}", e))?;
 
-        // Download packages to cache
-        let mut cmd = Command::new("pip");
-        cmd.arg("download");
-        cmd.arg("--no-deps"); // Only download specified packages, not dependencies
+        let mut cmd = Command::new(&uv);
+        cmd.arg("pip").arg("download");
+        cmd.arg("--no-deps");
         cmd.arg("-d").arg(&cache_dir);
+        cmd.env(
+            "HOME",
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        );
 
         for pkg in packages {
             cmd.arg(pkg);
         }
 
         let output = cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .output()
             .await
-            .map_err(|e| format!("Failed to download packages: {}", e))?;
+            .map_err(|e| format!("Failed to run `uv pip download`: {}", e))?;
 
         if output.status.success() {
             info!("Cached packages to {:?}", cache_dir);
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Failed to cache packages: {}", stderr);
-            Err(format!("pip download failed: {}", stderr))
+            warn!("uv pip download failed: {}", stderr);
+            Err(format!("uv pip download failed: {}", stderr))
         }
     }
 
@@ -254,6 +299,29 @@ impl DependencyManager {
             Err(format!("npm install failed: {}", stderr))
         }
     }
+}
+
+/// Locate the `uv` binary by checking well-known paths and then `PATH`.
+fn find_uv_binary() -> Option<PathBuf> {
+    use std::path::Path;
+    let candidates = [
+        "/home/mandubian/.local/bin/uv",
+        "/usr/local/bin/uv",
+        "/usr/bin/uv",
+    ];
+    for p in &candidates {
+        if Path::new(p).exists() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    // Fall through to PATH lookup
+    std::process::Command::new("which")
+        .arg("uv")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| PathBuf::from(s.trim()))
 }
 
 /// Extract package name from a package spec

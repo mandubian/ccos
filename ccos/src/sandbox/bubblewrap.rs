@@ -706,35 +706,19 @@ impl BubblewrapSandbox {
             if !packages_to_install.is_empty() {
                 match runtime {
                     "python" => {
-                        // Pass 1: install inside a sandboxed bwrap using uv (most secure)
-                        // Falls back to host-side pip if uv is unavailable.
-                        if Self::find_uv().is_some() {
-                            info!(
-                                "[sandbox] Using uv (sandboxed Pass 1) for packages: {:?}",
-                                packages_to_install
-                            );
-                            let venv_python = Self::install_packages_via_uv_in_sandbox(
-                                &packages_to_install,
-                                &workspace_dir,
-                            )
-                            .await?;
-                            venv_python_path = Some(venv_python);
-                        } else {
-                            warn!("[sandbox] uv not found, falling back to host-side pip install");
-                            manager
-                                .install_packages(
-                                    &packages_to_install,
-                                    &work_dir.path().to_path_buf(),
-                                    &workspace_dir,
-                                )
-                                .await
-                                .map_err(|e| {
-                                    RuntimeError::Generic(format!(
-                                        "Failed to install python packages: {}",
-                                        e
-                                    ))
-                                })?;
-                        }
+                        // Strictly require uv for sandboxed package installation.
+                        // There is NO fallback to host pip — installing with pip --target
+                        // would write packages to the host system, breaking isolation.
+                        info!(
+                            "[sandbox] Using uv (sandboxed bwrap Pass 1) for packages: {:?}",
+                            packages_to_install
+                        );
+                        let venv_python = Self::install_packages_via_uv_in_sandbox(
+                            &packages_to_install,
+                            &workspace_dir,
+                        )
+                        .await?;
+                        venv_python_path = Some(venv_python);
                     }
                     "javascript" => {
                         manager
