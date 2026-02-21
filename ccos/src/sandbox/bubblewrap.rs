@@ -109,6 +109,133 @@ impl BubblewrapSandbox {
             .unwrap_or(false)
     }
 
+    /// Find the `uv` binary on the host system.
+    fn find_uv() -> Option<PathBuf> {
+        // Check common locations
+        let candidates = [
+            "/home/mandubian/.local/bin/uv",
+            "/usr/local/bin/uv",
+            "/usr/bin/uv",
+        ];
+        for p in &candidates {
+            if Path::new(p).exists() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        // Try PATH via `which`
+        std::process::Command::new("which")
+            .arg("uv")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| PathBuf::from(s.trim()))
+    }
+
+    /// Pass 1: create a virtualenv and install packages **inside a bwrap sandbox**.
+    ///
+    /// This ensures that even malicious `setup.py` / build hooks in packages
+    /// run inside a sandboxed process rather than on the bare host.
+    ///
+    /// - Network-enabled so uv can download packages from PyPI
+    /// - `workspace_dir` is bind-mounted writable as `/workspace`
+    /// - `uv` binary is bind-mounted read-only from the host
+    ///
+    /// Returns the path to the venv Python inside `workspace_dir`.
+    async fn install_packages_via_uv_in_sandbox(
+        packages: &[String],
+        workspace_dir: &Path,
+    ) -> Result<PathBuf, RuntimeError> {
+        let uv_host = Self::find_uv().ok_or_else(|| {
+            RuntimeError::Generic(
+                "uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+                    .to_string(),
+            )
+        })?;
+
+        let venv_host = workspace_dir.join(".venv");
+        let uv_in_sandbox = PathBuf::from("/uv"); // where we mount uv inside bwrap
+
+        // Build the shell command: uv venv + uv pip install in one pass
+        let pkgs = packages.join(" ");
+        let sh_cmd = format!(
+            "/uv venv /workspace/.venv && /uv pip install --python /workspace/.venv/bin/python {pkgs}",
+        );
+
+        let mut cmd = Command::new("bwrap");
+        // Isolation (but keep network for downloading)
+        cmd.arg("--unshare-user");
+        cmd.arg("--unshare-pid");
+        cmd.arg("--unshare-ipc");
+        cmd.arg("--unshare-uts");
+        cmd.arg("--die-with-parent");
+        cmd.arg("--share-net"); // Need network to fetch packages from PyPI
+
+        // System read-only mounts (python3 runtime needed by uv)
+        for sys_path in &["/usr", "/lib", "/lib64", "/bin", "/sbin"] {
+            if Path::new(sys_path).exists() {
+                cmd.arg("--ro-bind").arg(sys_path).arg(sys_path);
+            }
+        }
+        // SSL certs for HTTPS downloads
+        for cert_path in &[
+            "/etc/ssl/certs",
+            "/etc/ssl/openssl.cnf",
+            "/etc/pki",
+            "/etc/ca-certificates",
+            "/usr/share/ca-certificates",
+        ] {
+            if Path::new(cert_path).exists() {
+                cmd.arg("--ro-bind").arg(cert_path).arg(cert_path);
+            }
+        }
+        // DNS resolution
+        for net_cfg in &["/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/hosts"] {
+            if Path::new(net_cfg).exists() {
+                cmd.arg("--ro-bind").arg(net_cfg).arg(net_cfg);
+            }
+        }
+
+        // Mount uv binary (read-only) as /uv
+        cmd.arg("--ro-bind").arg(&uv_host).arg(&uv_in_sandbox);
+
+        // Writable workspace for venv output
+        cmd.arg("--bind").arg(workspace_dir).arg("/workspace");
+
+        // tmpfs for /tmp
+        cmd.arg("--tmpfs").arg("/tmp");
+        cmd.arg("--proc").arg("/proc");
+        cmd.arg("--dev").arg("/dev");
+
+        // Working directory
+        cmd.arg("--chdir").arg("/workspace");
+
+        // Run the shell command
+        cmd.arg("sh").arg("-e").arg("-c").arg(&sh_cmd);
+
+        cmd.env("HOME", "/tmp"); // uv needs HOME for cache
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        tracing::info!("[sandbox] Pass 1 (uv install): {:?}", packages);
+
+        let output = cmd.output().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to spawn uv install bwrap: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(RuntimeError::Generic(format!(
+                "uv install failed:\nstdout: {}\nstderr: {}",
+                stdout, stderr
+            )));
+        }
+
+        tracing::info!("[sandbox] Pass 1 complete - venv at {:?}", venv_host);
+        Ok(venv_host.join("bin").join("python"))
+    }
+
     /// Execute Python code with file mounting and optional dependency installation
     /// Execute Python code with file mounting and optional dependency installation
     pub async fn execute_python(
@@ -545,6 +672,9 @@ impl BubblewrapSandbox {
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to create workspace dir: {}", e)))?;
 
+        // venv_python_path is set when uv creates a venv in Pass 1
+        let mut venv_python_path: Option<PathBuf> = None;
+
         if let (Some(deps), Some(manager)) = (dependencies, dep_manager) {
             info!("Checking dependencies: {:?}", deps);
             let resolutions = manager.resolve_dependencies(deps);
@@ -573,24 +703,38 @@ impl BubblewrapSandbox {
                 }
             }
 
-            // Install packages before running sandbox
             if !packages_to_install.is_empty() {
-                info!("Installing {} packages: {:?}", runtime, packages_to_install);
                 match runtime {
                     "python" => {
-                        manager
-                            .install_packages(
+                        // Pass 1: install inside a sandboxed bwrap using uv (most secure)
+                        // Falls back to host-side pip if uv is unavailable.
+                        if Self::find_uv().is_some() {
+                            info!(
+                                "[sandbox] Using uv (sandboxed Pass 1) for packages: {:?}",
+                                packages_to_install
+                            );
+                            let venv_python = Self::install_packages_via_uv_in_sandbox(
                                 &packages_to_install,
-                                &work_dir.path().to_path_buf(),
-                                &workspace_dir, // Install into the workspace dir that bwrap mounts
+                                &workspace_dir,
                             )
-                            .await
-                            .map_err(|e| {
-                                RuntimeError::Generic(format!(
-                                    "Failed to install python packages: {}",
-                                    e
-                                ))
-                            })?;
+                            .await?;
+                            venv_python_path = Some(venv_python);
+                        } else {
+                            warn!("[sandbox] uv not found, falling back to host-side pip install");
+                            manager
+                                .install_packages(
+                                    &packages_to_install,
+                                    &work_dir.path().to_path_buf(),
+                                    &workspace_dir,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    RuntimeError::Generic(format!(
+                                        "Failed to install python packages: {}",
+                                        e
+                                    ))
+                                })?;
+                        }
                     }
                     "javascript" => {
                         manager
@@ -770,9 +914,25 @@ impl BubblewrapSandbox {
         }
 
         // Runtime specific setup
+        // If a venv was created in Pass 1, bind-mount it and use it as the interpreter.
+        // The venv python already has the correct sys.path for installed packages.
+        if let Some(ref venv_python) = venv_python_path {
+            // The venv lives inside workspace_dir which is already bound as /workspace.
+            // So workspace_dir/.venv/bin/python is at /workspace/.venv/bin/python inside bwrap.
+            let venv_in_sandbox = PathBuf::from("/workspace/.venv");
+            let python_in_sandbox = venv_in_sandbox.join("bin").join("python");
+            tracing::info!(
+                "[sandbox] Pass 2: using venv python at {:?}",
+                python_in_sandbox
+            );
+            let _ = venv_python; // the host path, only used for logging
+            cmd.arg(&python_in_sandbox);
+        }
         match runtime {
             "python" => {
-                cmd.arg("/usr/bin/python3");
+                if venv_python_path.is_none() {
+                    cmd.arg("/usr/bin/python3");
+                }
                 cmd.arg("-c");
                 cmd.arg(code);
                 cmd.env("PYTHONDONTWRITEBYTECODE", "1");
