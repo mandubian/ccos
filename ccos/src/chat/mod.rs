@@ -2455,6 +2455,90 @@ pub async fn register_chat_capabilities(
                         }
                     }
 
+                    // --- Code Introspection for Missing Packages (Static Batching) ---
+                    // Instead of failing and requesting approval one by one at runtime (which causes a tedious loop),
+                    // we statically extract imports via Regex, filter out stdlib, and batch request them upfront.
+                    let mut missing_packages = Vec::new();
+                    if let Some(queue) = &approval_queue {
+                        use regex::Regex;
+                        // Regex matches `import X`, `import X as Y`, `import X, Y`, `from X import Y`
+                        if let Ok(re) = Regex::new(r"(?m)^(?:from\s+([a-zA-Z0-9_]+)(?:\.[a-zA-Z0-9_]+)*\s+import|import\s+([a-zA-Z0-9_]+))") {
+                            let stdlib = std::collections::HashSet::from([
+                                "os", "sys", "time", "datetime", "json", "re", "math", "random",
+                                "itertools", "functools", "collections", "hashlib", "hmac",
+                                "base64", "urllib", "http", "socket", "ssl", "asyncio", "threading",
+                                "multiprocessing", "subprocess", "logging", "typing", "pathlib",
+                                "shutil", "glob", "tempfile", "sqlite3", "csv", "xml", "html",
+                                "uuid", "secrets", "dataclasses", "enum", "inspect", "ast",
+                                "traceback", "copy", "pickle", "zlib", "gzip", "tarfile", "zipfile",
+                                "argparse", "unittest", "mock", "warnings", "contextlib", "io",
+                                // We also ignore 'ccos_sdk' since it's injected
+                                "ccos_sdk",
+                            ]);
+
+                            let mut detected_imports = std::collections::HashSet::new();
+                            for caps in re.captures_iter(&code) {
+                                // Match group 1 is `from X`, group 2 is `import X`
+                                if let Some(m) = caps.get(1).or_else(|| caps.get(2)) {
+                                    let module_name = m.as_str().split('.').next().unwrap_or(m.as_str());
+                                    detected_imports.insert(module_name.to_string());
+                                }
+                            }
+
+                            for module in detected_imports {
+                                if !stdlib.contains(module.as_str()) && !dependencies.contains(&module) {
+                                    // It's a 3rd party package not in dependencies.
+                                    // Check if it's already approved (maybe they approved it previously)
+                                    if !queue.is_package_approved(&module, "python").await.unwrap_or(false) {
+                                        missing_packages.push(module);
+                                    } else {
+                                        log::debug!("[ccos.execute.python] Static check: {} is already approved.", module);
+                                    }
+                                }
+                            }
+                        }
+
+                        // If unapproved packages are detected, batch request them now.
+                        if !missing_packages.is_empty() {
+                            let mut approval_messages = Vec::new();
+                            let session_id = map.get(&MapKey::String("session_id".to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string());
+                            let run_id = map.get(&MapKey::String("run_id".to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                                .and_then(|v| v.as_string())
+                                .map(|s| s.to_string());
+
+                            for pkg in &missing_packages {
+                                match queue.add_package_approval(
+                                    pkg.clone(),
+                                    "python".to_string(),
+                                    session_id.clone(),
+                                    run_id.clone(),
+                                ).await {
+                                    Ok(approval_id) => {
+                                        approval_messages.push(format!("- {} (Use: `/approve {}`)", pkg, approval_id));
+                                    }
+                                    Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
+                                        // Package was approved between static analysis and here - silently skip.
+                                        log::info!("[ccos.execute.python] Package {} is already approved, skipping approval request.", pkg);
+                                    }
+                                    Err(ae) => {
+                                        log::error!("[ccos.execute.python] Failed to batch package approval for {}: {}", pkg, ae);
+                                    }
+                                }
+                            }
+
+                            if !approval_messages.is_empty() {
+                                return Err(RuntimeError::Generic(format!(
+                                    "Execution paused. The script requires the following unapproved packages:\n\n{}\n\nPlease visit the Approval UI or use the slash commands above to approve them, then retry.",
+                                    approval_messages.join("\n")
+                                )));
+                            }
+                        }
+                    }
+
                     // Build sandbox execution config (different from config::types::SandboxConfig)
                     let exec_sandbox_config = SandboxConfig {
                         runtime_type: SandboxRuntimeType::Process,
@@ -2580,6 +2664,11 @@ pub async fn register_chat_capabilities(
                                                     "Package '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this package, then retry your request.",
                                                     pkg, approval_id, approval_id
                                                 )));
+                                            }
+                                            Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
+                                                // Package is already approved - the static pre-check likely missed it.
+                                                // We don't block execution here; the retry loop will handle installing it.
+                                                log::info!("[ccos.execute.python] Runtime path: package {} is already approved, allowing retry.", pkg);
                                             }
                                             Err(ae) => {
                                                 log::error!("[ccos.execute.python] Failed to create package approval: {}", ae);

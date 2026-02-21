@@ -1129,6 +1129,26 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         session_id: Option<String>,
         run_id: Option<String>,
     ) -> RuntimeResult<String> {
+        // IMPORTANT: First check if the package is already approved (not just pending).
+        // This prevents the infinite loop where resume→execution→ModuleNotFoundError→new approval ID
+        // keeps cycling even though the user already approved the package.
+        if self
+            .is_package_approved(&package, &runtime)
+            .await
+            .unwrap_or(false)
+        {
+            log::info!(
+                "[UnifiedApprovalQueue] Package {} ({}) is already approved. Skipping new approval request.",
+                package,
+                runtime
+            );
+            // Return a sentinel error that callers can detect to skip the approval UI flow.
+            return Err(RuntimeError::Generic(format!(
+                "ALREADY_APPROVED:{}:{}",
+                package, runtime
+            )));
+        }
+
         // Check if a pending request already exists for this package/runtime
         let pending = self.list_pending_packages().await?;
         for req in pending {
