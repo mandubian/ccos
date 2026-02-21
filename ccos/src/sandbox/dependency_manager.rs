@@ -118,6 +118,7 @@ impl DependencyManager {
         &self,
         packages: &[String],
         work_dir: &PathBuf,
+        target_dir: &PathBuf,
     ) -> Result<(), String> {
         if packages.is_empty() {
             return Ok(());
@@ -131,7 +132,7 @@ impl DependencyManager {
         cmd.arg("pip");
         cmd.arg("install");
         cmd.arg("--target");
-        cmd.arg("."); // Install into the current work_dir
+        cmd.arg(target_dir); // Install into the workspace dir (bind-mounted into sandbox)
         cmd.arg("--no-cache-dir"); // Don't use pip cache
         cmd.arg("--disable-pip-version-check");
 

@@ -532,6 +532,8 @@ impl BubblewrapSandbox {
             .map_err(|e| RuntimeError::Generic(format!("Failed to create temp dir: {}", e)))?;
         let input_dir = work_dir.path().join("input");
         let output_dir = work_dir.path().join("output");
+        // Create workspace dir early so pip can install directly into it
+        let workspace_dir = work_dir.path().join("workspace");
 
         fs::create_dir_all(&input_dir)
             .await
@@ -539,6 +541,9 @@ impl BubblewrapSandbox {
         fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to create output dir: {}", e)))?;
+        fs::create_dir_all(&workspace_dir)
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to create workspace dir: {}", e)))?;
 
         if let (Some(deps), Some(manager)) = (dependencies, dep_manager) {
             info!("Checking dependencies: {:?}", deps);
@@ -574,7 +579,11 @@ impl BubblewrapSandbox {
                 match runtime {
                     "python" => {
                         manager
-                            .install_packages(&packages_to_install, &work_dir.path().to_path_buf())
+                            .install_packages(
+                                &packages_to_install,
+                                &work_dir.path().to_path_buf(),
+                                &workspace_dir, // Install into the workspace dir that bwrap mounts
+                            )
                             .await
                             .map_err(|e| {
                                 RuntimeError::Generic(format!(
@@ -699,11 +708,7 @@ impl BubblewrapSandbox {
         // Mount tmpfs for /tmp
         cmd.arg("--tmpfs").arg("/tmp");
 
-        // Create and mount workspace
-        let workspace_dir = work_dir.path().join("workspace");
-        fs::create_dir_all(&workspace_dir)
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create workspace dir: {}", e)))?;
+        // Mount workspace (already created above for pip install)
         cmd.arg("--bind").arg(&workspace_dir).arg("/workspace");
 
         // Mount input files (read-only)
