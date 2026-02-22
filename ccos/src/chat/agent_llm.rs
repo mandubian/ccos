@@ -416,7 +416,11 @@ When working with skills:
 When working with code execution:
 - Use ccos.execute.python for running Python snippets. Input: {{ "code": "..." }}. NOTE: The Python sandbox blocks network access by default. If your code requires network access (e.g., uses `requests` or `urllib`), the system will pause execution and ask the user for approval. To explicitly request access to specific domains, pass `allowed_hosts: ["example.com"]`. When execution pauses for approval, return the provided error message to the user and wait for them to type `/approve <id>`.
 - Use ccos.execute.javascript for Node.js snippets. Input: {{ "code": "..." }}.
-- Use ccos.code.refined_execute for complex tasks that may require multiple attempts or self-correction. Input: {{ "task": "...", "language": "python|javascript|rtfs" }}. This is the RECOMMENDED way for code tasks.
+- Use ccos.code.refined_execute for complex tasks that may require multiple attempts or self-correction. This is the RECOMMENDED way for code tasks.
+  Required input: `task` (string describing what the code should do), optional `language` (default: python).
+  You SHOULD also declare `expected_outputs` — a list of outputs the code must store via `ccos_sdk.memory.store()`. This creates a contract between runs so subsequent steps know exactly which memory keys hold the results and what their shape is. Example:
+  {{ "task": "fetch last 10 WatcherGuru tweets via Nitter RSS", "language": "python", "expected_outputs": [{{ "key": "tweets_result", "description": "Recent WatcherGuru tweets", "schema_hint": "{{:items [{{:title str :content str :url str :published str}}]}}" }}] }}
+  The result map will include `:stored-artifacts` listing every key that was stored.
 - If using ccos.network.http-fetch, handle the results carefully. Outputs can be passed to code execution for further processing.
 - Always write output files to /workspace/output/ if you need to persist data between steps or return it as a resource.
 - You can specify 'dependencies' as a list of package names for auto-installation.

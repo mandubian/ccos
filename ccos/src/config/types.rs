@@ -277,19 +277,44 @@ impl Default for PackageAllowlistConfig {
 
 fn default_auto_approved_packages() -> Vec<String> {
     vec![
+        // Python - data & science (PyPI names and import aliases)
         "pandas".to_string(),
         "numpy".to_string(),
         "matplotlib".to_string(),
-        "requests".to_string(),
-        "beautifulsoup4".to_string(),
-        "pillow".to_string(),
-        "openpyxl".to_string(),
-        "xlrd".to_string(),
-        "pyyaml".to_string(),
-        "jinja2".to_string(),
         "seaborn".to_string(),
         "scipy".to_string(),
         "scikit-learn".to_string(),
+        "sklearn".to_string(),        // import alias for scikit-learn
+        // Python - HTTP & web
+        "requests".to_string(),
+        "httpx".to_string(),
+        "aiohttp".to_string(),
+        "urllib3".to_string(),
+        // Python - HTML / XML / RSS parsing (both PyPI name and import alias)
+        "beautifulsoup4".to_string(),
+        "bs4".to_string(),            // import alias for beautifulsoup4
+        "lxml".to_string(),
+        "feedparser".to_string(),
+        "html5lib".to_string(),
+        // Python - image processing
+        "pillow".to_string(),
+        "PIL".to_string(),            // import alias for pillow
+        // Python - file / data formats
+        "openpyxl".to_string(),
+        "xlrd".to_string(),
+        "pyyaml".to_string(),
+        "yaml".to_string(),           // import alias for pyyaml
+        "toml".to_string(),
+        // Python - templating / text
+        "jinja2".to_string(),
+        "markdown".to_string(),
+        // Python - utilities
+        "python-dateutil".to_string(),
+        "dateutil".to_string(),       // import alias for python-dateutil
+        "pytz".to_string(),
+        "tqdm".to_string(),
+        "tabulate".to_string(),
+        "colorama".to_string(),
         "ccos_sdk".to_string(),
         // JavaScript packages
         "lodash".to_string(),
@@ -356,7 +381,7 @@ pub struct CodingAgentsConfig {
     #[serde(default = "default_true")]
     pub generate_tests: bool,
     /// Maximum turns for iterative code refinement
-    #[serde(default = "default_max_coding_turns")]
+    #[serde(default = "default_max_coding_turns", alias = "max_conversation_turns")]
     pub max_coding_turns: u32,
 }
 

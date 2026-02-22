@@ -99,8 +99,11 @@ struct Args {
     #[arg(long, env = "CCOS_LLM_TIMEOUT_SECS", default_value_t = 120)]
     llm_timeout_secs: u64,
 
-    /// Gateway HTTP timeout in seconds
-    #[arg(long, env = "CCOS_GATEWAY_TIMEOUT_SECS", default_value_t = 120)]
+    /// Gateway HTTP timeout in seconds.
+    /// Needs to be high enough for long-running capabilities like ccos.code.refined_execute
+    /// which involves LLM code generation, uv package installation, and sandboxed execution
+    /// across multiple refinement turns. Default: 600s (10 minutes).
+    #[arg(long, env = "CCOS_GATEWAY_TIMEOUT_SECS", default_value_t = 600)]
     gateway_timeout_secs: u64,
 
     /// Allowlist of agent context keys to share with LLM (comma-separated)
