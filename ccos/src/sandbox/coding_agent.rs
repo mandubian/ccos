@@ -33,6 +33,87 @@ pub struct CodingRequest {
     /// Optional prior attempts context for refinement
     #[serde(default)]
     pub prior_attempts: Vec<AttemptContext>,
+    /// Available skills/tools the generated code may use
+    #[serde(default)]
+    pub skill_hints: Vec<SkillHint>,
+    /// Declared output slots the generated code MUST store via ccos_sdk.memory.store()
+    #[serde(default)]
+    pub expected_outputs: Vec<ExpectedOutput>,
+}
+
+/// Declares a required output slot the generated code must persist via ccos_sdk.memory.store()
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExpectedOutput {
+    /// The key to use with ccos_sdk.memory.store(key, ...)
+    pub key: String,
+    /// Human-readable description of what should be stored
+    pub description: String,
+    /// RTFS type hint for the stored value, e.g. "{:items [{:title str :url str}]}"
+    #[serde(default)]
+    pub schema_hint: Option<String>,
+}
+
+/// Describes data actually stored via ccos_sdk.memory.store() during execution
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StoredArtifact {
+    /// The memory key used in ccos_sdk.memory.store(key, ...)
+    pub key: String,
+    /// Human-readable description of what was stored
+    pub description: String,
+    /// RTFS type hint for the stored value
+    #[serde(default)]
+    pub schema_hint: Option<String>,
+}
+
+/// A hint about an available skill/tool the code generator can use
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillHint {
+    /// Human-readable skill name
+    pub name: String,
+    /// Short description of what the skill provides
+    pub description: String,
+    /// Raw instructions / markdown for how to use this skill (HTTP endpoints, etc.)
+    pub instructions: String,
+}
+
+/// Classification of why a code attempt failed — used to generate targeted fix guidance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptErrorType {
+    /// DNS or network unreachable — try different hosts/mirrors or add fallback logic
+    NetworkFailure,
+    /// Code executed but produced wrong or empty output
+    LogicError,
+    /// Code crashed with a runtime exception
+    RuntimeException,
+    /// Execution exceeded the allowed time
+    Timeout,
+    /// Stored output did not match the expected schema
+    SchemaValidationFailure,
+}
+
+impl AttemptErrorType {
+    /// Returns targeted fix guidance to inject into the prompt
+    pub fn guidance(&self) -> &'static str {
+        match self {
+            AttemptErrorType::NetworkFailure =>
+                "The host was unreachable (DNS/connection error). Use a list of fallback URLs/mirrors \
+                 and loop over them with a short per-request timeout (e.g. 5s). Catch each exception \
+                 individually and only raise after all options are exhausted.",
+            AttemptErrorType::LogicError =>
+                "The code ran but produced incorrect or empty output. Review the logic carefully, \
+                 check parsing assumptions, and add defensive checks for empty/unexpected responses.",
+            AttemptErrorType::RuntimeException =>
+                "The code raised an unhandled exception. Add try/except around the critical section, \
+                 log the error, and ensure all edge cases are handled.",
+            AttemptErrorType::Timeout =>
+                "Execution timed out. Reduce the scope per request, add explicit short timeouts \
+                 (e.g. requests timeout=5), and avoid blocking calls without a deadline.",
+            AttemptErrorType::SchemaValidationFailure =>
+                "The stored output did not match the required schema. Review the expected schema \
+                 carefully and ensure every required field is present with the correct type.",
+        }
+    }
 }
 
 /// Context for a prior failed attempt
@@ -44,6 +125,9 @@ pub struct AttemptContext {
     pub error: String,
     /// The attempt number (1-based)
     pub attempt: u32,
+    /// Classified error type for targeted fix guidance in the prompt
+    #[serde(default)]
+    pub error_type: Option<AttemptErrorType>,
 }
 
 /// Constraints for code generation
@@ -79,6 +163,9 @@ pub struct CodingResponse {
     /// Optional test code
     #[serde(default)]
     pub tests: Option<String>,
+    /// Artifacts stored via ccos_sdk.memory.store() — declared by the LLM based on expected_outputs
+    #[serde(default)]
+    pub stored_artifacts: Vec<StoredArtifact>,
 }
 
 /// Coding Agent handles code generation delegated to specialized LLMs
@@ -127,6 +214,9 @@ impl CodingAgent {
                     attempt.code,
                     attempt.error
                 ));
+                if let Some(ref et) = attempt.error_type {
+                    p.push_str(&format!("**Fix guidance**: {}\n", et.guidance()));
+                }
             }
 
             p.push_str("\n**Goal**: Analyze why previous attempts failed and generate a corrected version that completes the task correctly.\n");
@@ -156,6 +246,71 @@ impl CodingAgent {
             }
         }
 
+        if !request.skill_hints.is_empty() {
+            prompt.push_str("\n**Available Tools & Data Sources**:\n");
+            prompt.push_str("The following skills/tools are available. Prefer them over simulating data or using restricted APIs (e.g. use Nitter instead of authenticating to X/Twitter directly).\n");
+            for hint in &request.skill_hints {
+                prompt.push_str(&format!("\n### {}\n", hint.name));
+                if !hint.description.is_empty() {
+                    prompt.push_str(&format!("{} \n", hint.description));
+                }
+                if !hint.instructions.is_empty() {
+                    prompt.push_str(&format!("{}\n", hint.instructions));
+                }
+            }
+            prompt.push_str("\n");
+        }
+
+        // Inject ccos_sdk documentation — hard contract when expected_outputs declared, soft guidance otherwise
+        if !request.expected_outputs.is_empty() {
+            prompt.push_str("\n**Required Outputs (CCOS SDK — MANDATORY)**:\n");
+            prompt.push_str("You MUST store your results using `ccos_sdk.memory.store()`. The following outputs are required:\n");
+            for eo in &request.expected_outputs {
+                prompt.push_str(&format!("\n- **Key**: `\"{}\"`\n", eo.key));
+                if !eo.description.is_empty() {
+                    prompt.push_str(&format!("  Description: {}\n", eo.description));
+                }
+                if let Some(ref sh) = eo.schema_hint {
+                    prompt.push_str(&format!("  Schema (RTFS): `{}`\n", sh));
+                }
+                prompt.push_str(&format!("  → `ccos_sdk.memory.store(\"{}\", your_data)`\n", eo.key));
+            }
+            prompt.push_str(r#"
+```python
+import ccos_sdk
+ccos_sdk.memory.store("key", data)   # REQUIRED at end of script
+data = ccos_sdk.memory.get("key", default=None)  # read prior stored value
+```
+Do NOT write local files — they are lost when the sandbox exits.
+Also print a human-readable summary to stdout.
+"#);
+        } else {
+            prompt.push_str(r#"
+**Persistence & State (CCOS SDK)**:
+A `ccos_sdk` module is always available. Use it to persist results instead of writing local files
+(which are lost when the sandbox exits).
+
+```python
+import ccos_sdk
+ccos_sdk.memory.store("result_key", {"data": ...})  # persists beyond sandbox exit
+data = ccos_sdk.memory.get("result_key", default=None)
+```
+
+Choose a descriptive key (e.g. `"tweets_result"`, `"analysis_output"`) and always call
+`ccos_sdk.memory.store()` at the end of your script. Also print a human-readable summary to stdout.
+"#);
+        }
+
+        // Generic resilience instruction — always injected regardless of skill or task
+        prompt.push_str(r#"
+**Resilience Requirements**:
+If your code makes any network requests:
+- Use a short per-request timeout (e.g. 5 seconds). Never block without a deadline.
+- If multiple endpoints/mirrors are available, loop over them and try each in order.
+- Catch exceptions per attempt individually; only fail after all options are exhausted.
+- Do not let a single unreachable host cause the entire script to fail.
+"#);
+
         if let Some(ref constraints) = request.constraints {
             prompt.push_str("\n**Constraints**:\n");
             if let Some(max_lines) = constraints.max_lines {
@@ -176,10 +331,18 @@ impl CodingAgent {
   "language": "<programming language>",
   "dependencies": ["<list>", "<of>", "<dependencies>"],
   "explanation": "<brief explanation of the code>",
-  "tests": "<optional test code>"
+  "tests": "<optional test code>",
+  "stored_artifacts": [
+    {
+      "key": "<the key passed to ccos_sdk.memory.store()>",
+      "description": "<what was stored>",
+      "schema_hint": "<RTFS type hint, e.g. {:items [{:title str :url str}]}>"
+    }
+  ]
 }
 ```
 
+`stored_artifacts` must list every key your code passes to `ccos_sdk.memory.store()`.
 Respond ONLY with the JSON object, no additional text.
 "#,
         );
@@ -319,6 +482,8 @@ mod tests {
             constraints: None,
             profile: None,
             prior_attempts: vec![],
+            skill_hints: vec![],
+            expected_outputs: vec![],
         };
 
         let prompt = agent.build_prompt(&request);

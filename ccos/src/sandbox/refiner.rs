@@ -15,6 +15,8 @@ pub enum ErrorClass {
     Syntax,
     /// Missing dependency (e.g. ModuleNotFoundError)
     MissingDependency(String),
+    /// Network failure (e.g. DNS resolution error, connection refused, unreachable host)
+    NetworkFailure(String),
     /// Runtime error (e.g. ValueError, TypeError, KeyError)
     Runtime(String),
     /// Timeout during execution
@@ -57,6 +59,30 @@ impl ErrorRefiner {
         }
     }
 
+    /// Detect network-related failures from common Python/system error messages
+    fn is_network_error(&self, stderr: &str) -> Option<String> {
+        // Patterns that reliably indicate network/DNS failure rather than logic errors
+        const NETWORK_PATTERNS: &[&str] = &[
+            "Temporary failure in name resolution",
+            "Name or service not known",
+            "socket.gaierror",
+            "ConnectionRefusedError",
+            "ConnectionError",
+            "requests.exceptions.ConnectionError",
+            "urllib.error.URLError",
+            "httpx.ConnectError",
+            "Network is unreachable",
+            "No route to host",
+            "Connection timed out",
+        ];
+        for pattern in NETWORK_PATTERNS {
+            if stderr.contains(pattern) {
+                return Some((*pattern).to_string());
+            }
+        }
+        None
+    }
+
     /// Classify a Python error from stderr
     pub fn classify_python_error(&self, stderr: &str) -> ClassifiedError {
         if stderr.is_empty() {
@@ -64,6 +90,20 @@ impl ErrorRefiner {
                 class: ErrorClass::None,
                 message: String::new(),
                 suggestion: None,
+            };
+        }
+
+        // Check for network/DNS errors before generic exception matching
+        if let Some(pattern) = self.is_network_error(stderr) {
+            return ClassifiedError {
+                class: ErrorClass::NetworkFailure(pattern.clone()),
+                message: format!("Network failure detected: {}", pattern),
+                suggestion: Some(
+                    "Use a list of fallback URLs/mirrors. Loop over them with a short \
+                     per-request timeout (5s). Catch each exception individually and \
+                     only raise after all options are exhausted."
+                    .to_string(),
+                ),
             };
         }
 
