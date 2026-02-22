@@ -6,8 +6,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -148,64 +149,168 @@ impl SessionRegistry {
         }
     }
 
-    /// Create a registry that persists sessions to the given path
+    /// Derive the archive file path from the main persist path.
+    /// e.g. `.ccos/sessions.json` → `.ccos/sessions_archive.jsonl`
+    fn archive_path(persist_path: &Path) -> PathBuf {
+        let stem = persist_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let parent = persist_path.parent().unwrap_or(Path::new("."));
+        parent.join(format!("{}_archive.jsonl", stem))
+    }
+
+    /// Create a registry that persists sessions to the given path.
+    /// The path may be given as `sessions.json` (legacy) or `sessions.jsonl`.
+    /// Internally, the live store always uses `.jsonl`; the `.json` path is only
+    /// consulted on first load for backwards-compatibility migration.
     pub fn new_with_persistence(path: impl Into<PathBuf>) -> Self {
+        let raw: PathBuf = path.into();
+        // Normalise: always store as .jsonl
+        let jsonl_path = if raw.extension().and_then(|e| e.to_str()) == Some("json") {
+            raw.with_extension("jsonl")
+        } else {
+            raw
+        };
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            persist_path: Some(path.into()),
+            persist_path: Some(jsonl_path),
         }
     }
 
-    /// Save all sessions to disk (if persistence is configured).
-    /// On restart, sessions are restored with status reset to `AgentNotRunning`
-    /// and PIDs cleared (since processes no longer exist).
+    /// Append the current state of a single session as one JSONL line.
+    /// This is the hot path — O(1) write regardless of total session count.
+    async fn append_session_to_disk(&self, session_id: &str) {
+        let Some(path) = &self.persist_path else {
+            return;
+        };
+        let session = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+        };
+        let Some(session) = session else { return };
+        let line = match serde_json::to_string(&session) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[SessionRegistry] Failed to serialize session {}: {}", session_id, e);
+                return;
+            }
+        };
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        match tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+        {
+            Ok(mut f) => {
+                let mut buf = line;
+                buf.push('\n');
+                if let Err(e) = f.write_all(buf.as_bytes()).await {
+                    log::error!("[SessionRegistry] Failed to append session to {:?}: {}", path, e);
+                }
+            }
+            Err(e) => log::error!("[SessionRegistry] Failed to open {:?} for append: {}", path, e),
+        }
+    }
+
+    /// Compact-rewrite the JSONL: one line per live session (latest state).
+    /// Called after archiving so the file never accumulates stale entries.
     pub async fn save_to_disk(&self) {
         let Some(path) = &self.persist_path else {
             return;
         };
         let sessions = self.sessions.read().await;
-        let snapshot: Vec<&SessionState> = sessions.values().collect();
-        match serde_json::to_string_pretty(&snapshot) {
-            Ok(json) => {
-                if let Some(parent) = path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
+        let mut lines = String::new();
+        for session in sessions.values() {
+            match serde_json::to_string(session) {
+                Ok(line) => {
+                    lines.push_str(&line);
+                    lines.push('\n');
                 }
-                if let Err(e) = tokio::fs::write(path, json).await {
-                    log::error!("[SessionRegistry] Failed to save sessions to {:?}: {}", path, e);
-                } else {
-                    log::debug!("[SessionRegistry] Saved {} sessions to {:?}", snapshot.len(), path);
-                }
+                Err(e) => log::error!("[SessionRegistry] Serialize error for {}: {}", session.session_id, e),
             }
-            Err(e) => log::error!("[SessionRegistry] Failed to serialize sessions: {}", e),
+        }
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Err(e) = tokio::fs::write(path, lines.as_bytes()).await {
+            log::error!("[SessionRegistry] Failed to compact-write {:?}: {}", path, e);
+        } else {
+            log::debug!("[SessionRegistry] Compacted {} sessions to {:?}", sessions.len(), path);
         }
     }
 
     /// Load sessions from disk (if persistence is configured).
-    /// Loaded sessions have their status reset to `AgentNotRunning` and PIDs cleared,
-    /// since the original agent processes are gone after a restart.
+    /// Reads JSONL (last line per session_id wins — handles un-compacted append logs).
+    /// Falls back to legacy `sessions.json` array format for migration.
+    /// Loaded sessions have transient process state cleared (PIDs are gone after restart).
     pub async fn load_from_disk(&self) {
         let Some(path) = &self.persist_path else {
             return;
         };
-        let Ok(bytes) = tokio::fs::read(path).await else {
-            log::info!("[SessionRegistry] No persisted sessions found at {:?}", path);
-            return;
-        };
-        match serde_json::from_slice::<Vec<SessionState>>(&bytes) {
-            Ok(loaded) => {
-                let count = loaded.len();
-                let mut sessions = self.sessions.write().await;
-                for mut session in loaded {
-                    // Reset transient process state — PIDs are meaningless after restart
-                    session.agent_pid = None;
-                    session.status = SessionStatus::AgentNotRunning;
-                    session.current_step = None;
-                    sessions.insert(session.session_id.clone(), session);
+
+        // Try JSONL first; fall back to legacy .json array for one-time migration.
+        let raw = match tokio::fs::read(path).await {
+            Ok(b) => b,
+            Err(_) => {
+                // Check for legacy .json file
+                let legacy = path.with_extension("json");
+                match tokio::fs::read(&legacy).await {
+                    Ok(b) => {
+                        log::info!("[SessionRegistry] Migrating from legacy {:?} → {:?}", legacy, path);
+                        b
+                    }
+                    Err(_) => {
+                        log::info!("[SessionRegistry] No persisted sessions found at {:?}", path);
+                        return;
+                    }
                 }
-                log::info!("[SessionRegistry] Loaded {} sessions from {:?}", count, path);
             }
-            Err(e) => log::error!("[SessionRegistry] Failed to deserialize sessions from {:?}: {}", path, e),
+        };
+
+        // Try JSONL (one JSON object per line, last-write-wins).
+        let text = String::from_utf8_lossy(&raw);
+        let mut map: HashMap<String, SessionState> = HashMap::new();
+        let mut jsonl_ok = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            match serde_json::from_str::<SessionState>(line) {
+                Ok(s) => { map.insert(s.session_id.clone(), s); jsonl_ok = true; }
+                Err(_) => { jsonl_ok = false; break; }
+            }
         }
+
+        // Fall back: try legacy JSON array format.
+        if !jsonl_ok {
+            match serde_json::from_slice::<Vec<SessionState>>(&raw) {
+                Ok(loaded) => {
+                    for s in loaded { map.insert(s.session_id.clone(), s); }
+                }
+                Err(e) => {
+                    log::error!("[SessionRegistry] Failed to deserialize sessions from {:?}: {}", path, e);
+                    return;
+                }
+            }
+        }
+
+        let count = map.len();
+        {
+            let mut sessions = self.sessions.write().await;
+            for mut session in map.into_values() {
+                // Reset transient process state — PIDs are meaningless after restart
+                session.agent_pid = None;
+                session.status = SessionStatus::AgentNotRunning;
+                session.current_step = None;
+                sessions.insert(session.session_id.clone(), session);
+            }
+        }
+        log::info!("[SessionRegistry] Loaded {} sessions from {:?}", count, path);
+        // Compact immediately so we start with a clean JSONL (no duplicates from pre-migration)
+        self.save_to_disk().await;
     }
 
     /// Create a new session and return its state
@@ -220,7 +325,7 @@ impl SessionRegistry {
         }
 
         log::debug!("Created new session: {}", session_id);
-        self.save_to_disk().await;
+        self.append_session_to_disk(&session_id).await;
         session
     }
 
@@ -275,16 +380,17 @@ impl SessionRegistry {
                 log::debug!("Updated session {} status to {}", session_id, status_str);
             }
         }
-        self.save_to_disk().await;
+        self.append_session_to_disk(session_id).await;
     }
 
     /// Update session state
     pub async fn update_session(&self, session: SessionState) {
+        let session_id = session.session_id.clone();
         {
             let mut sessions = self.sessions.write().await;
-            sessions.insert(session.session_id.clone(), session);
+            sessions.insert(session_id.clone(), session);
         }
-        self.save_to_disk().await;
+        self.append_session_to_disk(&session_id).await;
     }
 
     /// Set agent PID for a session
@@ -330,7 +436,7 @@ impl SessionRegistry {
                 Err(format!("Session {} not found", session_id))
             }
         };
-        self.save_to_disk().await;
+        self.append_session_to_disk(session_id).await;
         result
     }
 
@@ -358,6 +464,100 @@ impl SessionRegistry {
         } else {
             Vec::new()
         }
+    }
+
+    /// Archive sessions that are `Terminated` or `AgentNotRunning` and whose
+    /// `last_activity` is older than `older_than`.  Archived sessions are
+    /// appended (one JSON object per line) to `<persist_stem>_archive.jsonl`
+    /// and then removed from the live in-memory map so the main `sessions.json`
+    /// stays small and loads fast.
+    ///
+    /// Returns the number of sessions that were archived.
+    pub async fn archive_old_sessions(&self, older_than: chrono::Duration) -> usize {
+        let Some(path) = &self.persist_path else {
+            return 0;
+        };
+        let archive_path = Self::archive_path(path);
+        let now = Utc::now();
+
+        let to_archive: Vec<SessionState> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        SessionStatus::Terminated | SessionStatus::AgentNotRunning
+                    ) && now.signed_duration_since(s.last_activity) > older_than
+                })
+                .cloned()
+                .collect()
+        };
+
+        if to_archive.is_empty() {
+            return 0;
+        }
+
+        // Build JSONL lines to append
+        let mut lines = String::new();
+        for session in &to_archive {
+            match serde_json::to_string(session) {
+                Ok(line) => {
+                    lines.push_str(&line);
+                    lines.push('\n');
+                }
+                Err(e) => {
+                    log::error!(
+                        "[SessionRegistry] Failed to serialize session {} for archive: {}",
+                        session.session_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        if let Some(parent) = archive_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+
+        match tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&archive_path)
+            .await
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(lines.as_bytes()).await {
+                    log::error!("[SessionRegistry] Failed to write to archive {:?}: {}", archive_path, e);
+                    return 0;
+                }
+            }
+            Err(e) => {
+                log::error!("[SessionRegistry] Failed to open archive file {:?}: {}", archive_path, e);
+                return 0;
+            }
+        }
+
+        let count = to_archive.len();
+
+        // Remove archived sessions from the live map
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in &to_archive {
+                sessions.remove(&s.session_id);
+            }
+        }
+
+        log::info!(
+            "[SessionRegistry] Archived {} old session(s) (older than {}h) to {:?}",
+            count,
+            older_than.num_hours(),
+            archive_path
+        );
+
+        // Persist the trimmed live set
+        self.save_to_disk().await;
+        count
     }
 
     /// Clean up terminated sessions older than threshold
