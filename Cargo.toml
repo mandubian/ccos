@@ -1,5 +1,5 @@
 [workspace]
-members = ["rtfs", "ccos"]
+members = ["rtfs", "ccos", "test_parse_ccos"]
 resolver = "2"
 
 [workspace.package]
