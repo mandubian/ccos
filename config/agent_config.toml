@@ -442,7 +442,8 @@ warm_pool_size = 0
 
 [coding_agents]
 # Default coding agent profile to use
-default = "deepseek-coder"
+# default = "deepseek-coder"
+default = "gemini-flash"
 
 # Enable automatic test generation
 # When true, coding agents will generate unit tests alongside code
@@ -504,6 +505,35 @@ Response format (JSON):
 """
 max_tokens = 8192
 temperature = 0.3
+
+[[coding_agents.profiles]]
+name = "gemini-flash"
+provider = "openrouter"
+model = "google/gemini-3-flash-preview"
+api_key_env = "OPENROUTER_API_KEY"
+system_prompt = """
+You are an expert code generation assistant. Generate clean, well-documented code.
+
+Always provide:
+1. Import statements
+2. Type hints (Python) or TypeScript types (JS)
+3. Error handling
+4. Brief comments explaining logic
+5. Unit tests with good coverage
+
+When fetching data from URLs (requests, feedparser, etc.), ALWAYS set a browser-like User-Agent header to avoid being blocked.
+
+Response format (JSON):
+{
+  "code": "actual code here",
+  "language": "python",
+  "dependencies": ["pandas", "numpy"],
+  "explanation": "what this code does",
+  "tests": "unit test code"
+}
+"""
+max_tokens = 8192
+temperature = 0.2
 
 [[coding_agents.profiles]]
 name = "gpt-4"

@@ -34,17 +34,23 @@ impl DependencyManager {
     /// Create a new dependency manager
     pub fn new(config: SandboxConfig) -> Self {
         // Extract base packages from the default image
-        let base_packages: HashSet<String> = config
-            .images
-            .iter()
-            .find(|img| img.name == "python-data-science")
-            .map(|img| {
-                img.packages
-                    .iter()
-                    .map(|p| extract_package_name(p))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // For bubblewrap, we don't use pre-baked images, so treat base packages as empty
+        // to force auto-installation of allowed packages.
+        let base_packages: HashSet<String> = if config.runtime == "bubblewrap" {
+            HashSet::new()
+        } else {
+            config
+                .images
+                .iter()
+                .find(|img| img.name == "python-data-science")
+                .map(|img| {
+                    img.packages
+                        .iter()
+                        .map(|p| extract_package_name(p))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
 
         Self {
             allowlist: config.package_allowlist.clone(),
@@ -304,12 +310,16 @@ impl DependencyManager {
 /// Locate the `uv` binary by checking well-known paths and then `PATH`.
 fn find_uv_binary() -> Option<PathBuf> {
     use std::path::Path;
-    let candidates = [
-        "/home/mandubian/.local/bin/uv",
-        "/usr/local/bin/uv",
-        "/usr/bin/uv",
-    ];
-    for p in &candidates {
+    // Check $HOME/.local/bin/uv (common for user installs) and well-known system paths.
+    let home_local = std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".local").join("bin").join("uv"));
+    if let Some(ref p) = home_local {
+        if p.exists() {
+            return Some(p.clone());
+        }
+    }
+    for p in &["/usr/local/bin/uv", "/usr/bin/uv"] {
         if Path::new(p).exists() {
             return Some(PathBuf::from(p));
         }

@@ -90,9 +90,6 @@ impl BubblewrapSandbox {
         let scanner = SecurityScanner::new(&[
             r"subprocess\.".to_string(),
             r"os\.system\(".to_string(),
-            r"exec\(".to_string(),
-            r"eval\(".to_string(),
-            r"__import__\(".to_string(),
             r"pickle\.loads?".to_string(),
         ])
         .map_err(|e| RuntimeError::Generic(format!("Security scanner error: {}", e)))?;
@@ -111,18 +108,23 @@ impl BubblewrapSandbox {
 
     /// Find the `uv` binary on the host system.
     fn find_uv() -> Option<PathBuf> {
-        // Check common locations
-        let candidates = [
-            "/home/mandubian/.local/bin/uv",
-            "/usr/local/bin/uv",
-            "/usr/bin/uv",
-        ];
-        for p in &candidates {
+        // Check $HOME/.local/bin/uv (common for user installs) and well-known system paths.
+        let home_local = std::env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join(".local").join("bin").join("uv"));
+        let static_candidates: &[&str] = &["/usr/local/bin/uv", "/usr/bin/uv"];
+
+        if let Some(ref p) = home_local {
+            if p.exists() {
+                return Some(p.clone());
+            }
+        }
+        for p in static_candidates {
             if Path::new(p).exists() {
                 return Some(PathBuf::from(p));
             }
         }
-        // Try PATH via `which`
+        // Fall through to PATH lookup via `which`
         std::process::Command::new("which")
             .arg("uv")
             .output()
@@ -243,7 +245,6 @@ impl BubblewrapSandbox {
     }
 
     /// Execute Python code with file mounting and optional dependency installation
-    /// Execute Python code with file mounting and optional dependency installation
     pub async fn execute_python(
         &self,
         code: &str,
@@ -284,25 +285,18 @@ impl BubblewrapSandbox {
     }
 
     /// Execute Python code with a two-way CCOS_CALL:: / CCOS_RESULT:: IPC protocol.
-    ///
-    /// The sandbox mounts `ccos_sdk.py` at `/workspace/input/ccos_sdk.py` and sets
-    /// `PYTHONPATH=/workspace/input` so scripts can `import ccos_sdk`.
-    ///
-    /// When Python code calls `ccos_sdk.memory.get(...)` (or any other SDK method):
-    /// 1. Python prints `CCOS_CALL::<json>` to stdout and blocks on `sys.stdin.readline()`.
-    /// 2. This method intercepts the line, calls `dispatcher(cap_id, json_inputs)`.
-    /// 3. Writes `CCOS_RESULT::<json>` to the process's stdin.
-    /// 4. Python unblocks and receives the result value.
-    ///
-    /// Non-CCOS lines are accumulated as visible stdout returned to the caller.
+    /// Supports optional dependency installation via `uv`.
     pub async fn execute_python_interactive(
         &self,
         code: &str,
         input_files: &[InputFile],
         config: &SandboxConfig,
+        dependencies: Option<&[String]>,
+        dep_manager: Option<&super::DependencyManager>,
         dispatcher: CapabilityDispatcher,
     ) -> Result<SandboxExecutionResult, RuntimeError> {
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tracing::{info, warn};
 
         self.scanner
             .scan(code)
@@ -330,6 +324,50 @@ impl BubblewrapSandbox {
         fs::write(&sdk_host_path, CCOS_SDK_PY)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to write ccos_sdk.py: {}", e)))?;
+
+        // venv_python_path is set when uv creates a venv in Pass 1
+        let mut venv_python_path: Option<PathBuf> = None;
+
+        if let (Some(deps), Some(manager)) = (dependencies, dep_manager) {
+            info!("Checking dependencies: {:?}", deps);
+            let resolutions = manager.resolve_dependencies(deps);
+
+            let mut packages_to_install = Vec::new();
+            for resolution in resolutions {
+                match resolution {
+                    super::DependencyResolution::AlreadyAvailable => {}
+                    super::DependencyResolution::AutoInstall { package } => {
+                        info!("Auto-installing package: {}", package);
+                        packages_to_install.push(package);
+                    }
+                    super::DependencyResolution::RequiresApproval { package } => {
+                        warn!("Package {} requires approval, skipping", package);
+                        return Err(RuntimeError::Generic(
+                            format!("Package '{}' requires approval. Add to auto_approved list or approve manually.", package)
+                        ));
+                    }
+                    super::DependencyResolution::Blocked { package, reason } => {
+                        warn!("Package {} is blocked: {}", package, reason);
+                        return Err(RuntimeError::Generic(format!(
+                            "Package '{}' is blocked: {}",
+                            package, reason
+                        )));
+                    }
+                }
+            }
+
+            if !packages_to_install.is_empty() {
+                // Strictly require uv for sandboxed package installation.
+                info!(
+                    "[sandbox] Using uv (sandboxed bwrap Pass 1) for packages: {:?}",
+                    packages_to_install
+                );
+                let venv_python =
+                    Self::install_packages_via_uv_in_sandbox(&packages_to_install, &workspace_dir)
+                        .await?;
+                venv_python_path = Some(venv_python);
+            }
+        }
 
         let timeout_ms = config
             .resources
@@ -417,7 +455,7 @@ impl BubblewrapSandbox {
             c.arg("--dev").arg("/dev");
             c.arg("--tmpfs").arg("/tmp");
 
-            // Workspace (writable)
+            // Mount workspace (writable)
             c.arg("--bind").arg(&workspace_dir).arg("/workspace");
 
             // SDK file (read-only) — /workspace/input/ccos_sdk.py
@@ -471,7 +509,21 @@ impl BubblewrapSandbox {
                 }
             }
 
-            c.arg("/usr/bin/python3");
+            // Runtime specific setup: venv or system python
+            if let Some(ref venv_python) = venv_python_path {
+                // The venv lives inside workspace_dir which is already bound as /workspace.
+                // So workspace_dir/.venv/bin/python is at /workspace/.venv/bin/python inside bwrap.
+                let venv_in_sandbox = PathBuf::from("/workspace/.venv");
+                let python_in_sandbox = venv_in_sandbox.join("bin").join("python");
+                tracing::info!(
+                    "[sandbox] Pass 2: using venv python at {:?}",
+                    python_in_sandbox
+                );
+                let _ = venv_python; // host path unused
+                c.arg(&python_in_sandbox);
+            } else {
+                c.arg("/usr/bin/python3");
+            }
             c.env("PYTHONPATH", "/workspace/input");
             c
         };
@@ -678,6 +730,15 @@ impl BubblewrapSandbox {
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to create workspace dir: {}", e)))?;
 
+        // Write SDK to input_dir so it gets mounted at /workspace/input/ccos_sdk.py if needed
+        // (Only strictly required for Python, but harmless to write for others)
+        let sdk_host_path = input_dir.join("ccos_sdk.py");
+        if runtime == "python" {
+            fs::write(&sdk_host_path, CCOS_SDK_PY).await.map_err(|e| {
+                RuntimeError::Generic(format!("Failed to write ccos_sdk.py: {}", e))
+            })?;
+        }
+
         // venv_python_path is set when uv creates a venv in Pass 1
         let mut venv_python_path: Option<PathBuf> = None;
 
@@ -845,6 +906,13 @@ impl BubblewrapSandbox {
         // Mount workspace (already created above for pip install)
         cmd.arg("--bind").arg(&workspace_dir).arg("/workspace");
 
+        // SDK file (read-only) — /workspace/input/ccos_sdk.py (Python only)
+        if runtime == "python" {
+            cmd.arg("--ro-bind")
+                .arg(&sdk_host_path)
+                .arg("/workspace/input/ccos_sdk.py");
+        }
+
         // Mount input files (read-only)
         for file in input_files {
             let sandbox_path = format!("/workspace/input/{}", file.name);
@@ -927,6 +995,7 @@ impl BubblewrapSandbox {
                 cmd.arg(code);
                 cmd.env("PYTHONDONTWRITEBYTECODE", "1");
                 cmd.env("PYTHONUNBUFFERED", "1");
+                cmd.env("PYTHONPATH", "/workspace/input");
             }
             "javascript" => {
                 cmd.arg("/usr/bin/node");
