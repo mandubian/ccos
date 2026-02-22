@@ -161,11 +161,6 @@ impl ApprovalConsumer for GatewayState {
                 }
                 _ => return,
             };
-            self.send_chat_message(
-                session_id,
-                format!("Approval `{}`: {}", request.id, status_msg),
-            )
-            .await;
 
             if request.status.is_approved() {
                 // First, try to find and resume a paused run.
@@ -344,58 +339,58 @@ impl ApprovalConsumer for GatewayState {
                         }
                     }
 
-                    // Also handle EffectApproval - update capability status in marketplace
+                    // Handle EffectApproval - update capability approval status in marketplace
                     if let crate::approval::types::ApprovalCategory::EffectApproval {
                         ref capability_id,
                         ..
                     } = request.category
                     {
-                        if request.status.is_approved() {
-                            log::info!(
-                                "[Gateway] Updating capability approval status for {}",
-                                capability_id
-                            );
-                            let _ = self
-                                .marketplace
-                                .update_approval_status(
-                                    capability_id.clone(),
-                                    crate::capability_marketplace::types::ApprovalStatus::Approved,
-                                )
-                                .await;
-                        }
+                        // is_approved() is guaranteed by the outer branch, no inner check needed
+                        log::info!(
+                            "[Gateway] Updating capability approval status for {}",
+                            capability_id
+                        );
+                        let _ = self
+                            .marketplace
+                            .update_approval_status(
+                                capability_id.clone(),
+                                crate::capability_marketplace::types::ApprovalStatus::Approved,
+                            )
+                            .await;
                     }
+                }
 
-                    // Handle SecretWrite - persist secret to SecretStore when approved
-                    if let crate::approval::types::ApprovalCategory::SecretWrite {
-                        ref key,
-                        ref scope,
-                        value,
-                        ..
-                    } = &request.category
-                    {
-                        if request.status.is_approved() {
-                            if let Some(secret_value) = value {
-                                log::info!(
-                                    "[Gateway] Persisting approved secret '{}' to SecretStore",
-                                    key
-                                );
-                                // Write to SecretStore
-                                if let Err(e) =
-                                    crate::secrets::SecretStore::set(key, secret_value, scope)
-                                {
-                                    log::error!(
-                                        "[Gateway] Failed to persist secret '{}': {}",
-                                        key,
-                                        e
-                                    );
-                                } else {
-                                    log::info!("[Gateway] Secret '{}' persisted successfully", key);
-                                }
-                            }
+                // Handle SecretWrite unconditionally: persist the secret whenever the approval
+                // is approved, regardless of whether a run was also resumed. Placing this inside
+                // the 'no paused run' else branch was a bug — the secret would never be saved
+                // when a run was simultaneously being resumed.
+                if let crate::approval::types::ApprovalCategory::SecretWrite {
+                    ref key,
+                    ref scope,
+                    value,
+                    ..
+                } = &request.category
+                {
+                    if let Some(secret_value) = value {
+                        log::info!(
+                            "[Gateway] Persisting approved secret '{}' to SecretStore",
+                            key
+                        );
+                        if let Err(e) = crate::secrets::SecretStore::set(key, secret_value, scope) {
+                            log::error!("[Gateway] Failed to persist secret '{}': {}", key, e);
+                        } else {
+                            log::info!("[Gateway] Secret '{}' persisted successfully", key);
                         }
                     }
                 }
             }
+
+            // Send notification AFTER state update to avoid race condition where agent retries before state is Active
+            self.send_chat_message(
+                session_id,
+                format!("Approval `{}`: {}", request.id, status_msg),
+            )
+            .await;
         }
     }
 }
@@ -485,6 +480,51 @@ impl GatewayState {
                 format!(
                     "📦 Package approval required for **{}** ({})\n\nID: `{}`\n\nUse: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
                     package, runtime, approval_id, approval_id, approval_ui_url
+                )
+            }
+            ApprovalCategory::EffectApproval {
+                capability_id,
+                effects,
+                intent_description,
+            } => {
+                let effects_list = if effects.is_empty() {
+                    "(no effects listed)".to_string()
+                } else {
+                    effects
+                        .iter()
+                        .map(|e| format!("  • {}", e))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                format!(
+                    "⚡ Effect approval required for capability **{}**\n\n\
+                     Intent: {}\n\nEffects:\n{}\n\nID: `{}`\n\n\
+                     Use: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
+                    capability_id,
+                    intent_description,
+                    effects_list,
+                    approval_id,
+                    approval_id,
+                    approval_ui_url
+                )
+            }
+            ApprovalCategory::SandboxNetwork {
+                capability_id,
+                allowed_hosts,
+            } => {
+                let hosts_list = if allowed_hosts.is_empty() {
+                    "(no hosts listed)".to_string()
+                } else {
+                    allowed_hosts
+                        .iter()
+                        .map(|h| format!("  • {}", h))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                format!(
+                    "🌐 Sandbox network access requested by **{}**\n\nHosts:\n{}\n\nID: `{}`\n\n\
+                     Use: `/approve {}`\n\nOr visit the [Approval UI]({}/approvals) to proceed.",
+                    capability_id, hosts_list, approval_id, approval_id, approval_ui_url
                 )
             }
             _ => return,
@@ -762,7 +802,8 @@ impl SheriffLogger {
         result: &serde_json::Value,
     ) {
         let res_str = serde_json::to_string(result).unwrap_or_default();
-        let truncated = Self::truncate_for_log(&res_str, 512);
+        // Use a larger limit for results to capture full code/data in logs during debugging
+        let truncated = Self::truncate_for_log(&res_str, 20000);
         let status = if success {
             "✅ SUCCESS"
         } else {
@@ -951,6 +992,53 @@ impl ChatGateway {
         )
         .await?;
 
+        // Load coding_agents and sandbox config from agent config file so that
+        // profile overrides in agent_config.toml are respected at runtime.
+        let (sandbox_cfg, coding_agents_cfg) = {
+            let config_path = std::env::var("CCOS_AGENT_CONFIG_PATH")
+                .unwrap_or_else(|_| "config/agent_config.toml".to_string());
+            let path = std::path::Path::new(&config_path);
+            let resolved = if path.exists() {
+                path.to_path_buf()
+            } else {
+                std::path::Path::new("..").join(&config_path)
+            };
+            match std::fs::read_to_string(&resolved) {
+                Ok(content) => {
+                    let normalized = if content.starts_with("# RTFS") || content.starts_with("# ") {
+                        content.lines().skip(1).collect::<Vec<_>>().join("\n")
+                    } else {
+                        content
+                    };
+                    match toml::from_str::<AgentConfig>(&normalized) {
+                        Ok(cfg) => {
+                            log::info!(
+                                "[Gateway] Loaded coding_agents config from '{}': default={}",
+                                resolved.display(),
+                                cfg.coding_agents.default
+                            );
+                            (cfg.sandbox, cfg.coding_agents)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[Gateway] Failed to parse agent config '{}': {}. Using defaults.",
+                                resolved.display(),
+                                e
+                            );
+                            (
+                                crate::config::types::SandboxConfig::default(),
+                                crate::config::types::CodingAgentsConfig::default(),
+                            )
+                        }
+                    }
+                }
+                Err(_) => (
+                    crate::config::types::SandboxConfig::default(),
+                    crate::config::types::CodingAgentsConfig::default(),
+                ),
+            }
+        };
+
         // Generate internal secret for native capabilities
         register_chat_capabilities(
             marketplace.clone(),
@@ -962,8 +1050,8 @@ impl ChatGateway {
             Some(handle.clone()),
             Some(format!("http://{}", config.bind_addr)),
             Some(internal_api_secret.clone()),
-            crate::config::types::SandboxConfig::default(),
-            crate::config::types::CodingAgentsConfig::default(),
+            sandbox_cfg,
+            coding_agents_cfg,
         )
         .await?;
 
@@ -1050,6 +1138,16 @@ impl ChatGateway {
         // Initialize session management with persistence so sessions survive gateway restarts
         let session_registry = SessionRegistry::new_with_persistence(&sessions_persist_path);
         session_registry.load_from_disk().await;
+        // Archive stale sessions immediately on startup so the live file stays small
+        let archived = session_registry
+            .archive_old_sessions(chrono::Duration::hours(24))
+            .await;
+        if archived > 0 {
+            log::info!(
+                "[Gateway] Archived {} stale session(s) at startup",
+                archived
+            );
+        }
         let spawner = SpawnerFactory::create();
 
         // Initialize real-time tracking sink
@@ -1123,6 +1221,25 @@ impl ChatGateway {
                 monitor_sink,
             );
             monitor.run().await;
+        });
+
+        // Periodically archive sessions that are terminated/not-running and older than 24 h.
+        // This keeps sessions.json small and fast to load on restart.
+        let archive_registry = state.session_registry.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let n = archive_registry
+                    .archive_old_sessions(chrono::Duration::hours(24))
+                    .await;
+                if n > 0 {
+                    log::info!(
+                        "[Gateway] Periodic archive: archived {} stale session(s)",
+                        n
+                    );
+                }
+            }
         });
 
         connector
@@ -2436,7 +2553,42 @@ async fn execute_handler(
     let correlated_run_id = payload.inputs.get("run_id").and_then(|v| v.as_str());
     let run_id_for_log = correlated_run_id.unwrap_or("ephemeral");
 
+    let mut resolved_approval_req = None;
+
     if let Some(run_id) = correlated_run_id {
+        // First check if run is PausedApproval and we need to verify its status against storage
+        // Do this outside the lock since it requires an await
+        let approval_to_check = {
+            if let Ok(store) = state.run_store.lock() {
+                if let Some(run) = store.get_run(run_id) {
+                    if let crate::chat::run::RunState::PausedApproval { ref reason } = run.state {
+                        // Extract approval ID from reason
+                        let id = reason
+                            .replace("Waiting for approval: ", "")
+                            .trim()
+                            .to_string();
+                        Some(id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(approval_id) = approval_to_check {
+            if let Some(queue) = &state._approvals {
+                if let Ok(Some(approval_req)) = queue.get(&approval_id).await {
+                    if approval_req.status.is_approved() {
+                        resolved_approval_req = Some(approval_req);
+                    }
+                }
+            }
+        }
+
         let step_id = payload
             .inputs
             .get("step_id")
@@ -2447,6 +2599,19 @@ async fn execute_handler(
         let mut budget_exceeded_prev_state: Option<String> = None;
         if let Ok(mut store) = state.run_store.lock() {
             if let Some(run) = store.get_run_mut(run_id) {
+                // If we detected it was approved externally, auto-resume it now
+                if resolved_approval_req.is_some() {
+                    if matches!(run.state, crate::chat::run::RunState::PausedApproval { .. }) {
+                        log::info!("[Gateway] Auto-resuming paused run {} because approval was resolved externally", run_id);
+                        let target_state = if run.trigger_capability_id.is_some() {
+                            crate::chat::run::RunState::Scheduled
+                        } else {
+                            crate::chat::run::RunState::Active
+                        };
+                        run.transition(target_state);
+                    }
+                }
+
                 log::debug!(
                     "[Gateway] Run {} state={:?} budget={:?} for capability {}",
                     run_id,

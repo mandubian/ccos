@@ -59,7 +59,6 @@ struct SessionInfo {
     memory_mb: Option<u64>,
     #[allow(dead_code)]
     created_at: String,
-    #[allow(dead_code)]
     last_activity: String,
 }
 
@@ -179,6 +178,38 @@ struct MemoryOperationDetails {
     get_value: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct RefinedExecuteDetails {
+    phase: String,
+    summary: String,
+    current_turn: Option<i64>,
+    max_turns: Option<i64>,
+    task_preview: Option<String>,
+    error_class: Option<String>,
+    error_snippet: Option<String>,
+    dep_count: Option<i64>,
+    code_lines: Option<i64>,
+    // New rich fields
+    language: Option<String>,
+    dep_list: Option<String>,
+    /// Code produced by the LLM (generating / generated phases)
+    generated_code: Option<String>,
+    /// Code sent to the sandbox (executing phase)
+    executed_code: Option<String>,
+    /// Final code on success
+    final_code: Option<String>,
+    /// Code that triggered an error (refining / max_turns phases)
+    failed_code: Option<String>,
+    /// LLM explanation of the generated code
+    explanation: Option<String>,
+    /// Stdout captured from the sandbox execution
+    stdout: Option<String>,
+    /// Number of refinement cycles on success
+    refinement_cycles: Option<i64>,
+    /// Auto-discovered deps added during refining
+    auto_deps_added: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct GatewayRunSummary {
     run_id: String,
@@ -187,7 +218,6 @@ struct GatewayRunSummary {
     steps_taken: u32,
     elapsed_secs: u64,
     created_at: String,
-    #[allow(dead_code)]
     updated_at: String,
     #[allow(dead_code)]
     current_step_id: Option<String>,
@@ -621,7 +651,20 @@ impl MonitorState {
         use std::collections::HashMap as Map;
         self.display_items.clear();
 
-        for session_id in &self.ordered_session_ids {
+        // Sort sessions by most-recent run's updated_at so most active sessions come first.
+        let mut sorted_session_ids = self.ordered_session_ids.clone();
+        sorted_session_ids.sort_by(|a, b| {
+            let latest = |sid: &String| {
+                self.runs_by_session
+                    .get(sid)
+                    .and_then(|runs| runs.iter().map(|r| r.updated_at.as_str()).max())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            latest(b).cmp(&latest(a))
+        });
+
+        for session_id in &sorted_session_ids {
             if let Some(session_runs) = self.runs_by_session.get(session_id) {
                 if session_runs.is_empty() {
                     continue;
@@ -2003,7 +2046,6 @@ async fn main() -> anyhow::Result<()> {
                     // Rebuild ordered list of all session IDs for Runs/LLM tab navigation.
                     let mut all_ids: Vec<String> =
                         sessions.iter().map(|s| s.session_id.clone()).collect();
-                    all_ids.sort();
                     // Preserve any session IDs that arrived via WebSocket before this poll
                     // (so their LLM consultations remain visible in the LLM tab).
                     for sid in &state.ordered_session_ids {
@@ -2011,14 +2053,30 @@ async fn main() -> anyhow::Result<()> {
                             all_ids.push(sid.clone());
                         }
                     }
-                    state.ordered_session_ids = all_ids.clone();
 
                     for session in &sessions {
                         state
                             .sessions
                             .insert(session.session_id.clone(), session.clone());
+                    }
 
-                        // Populate agents from session info (only sessions with active agents)
+                    all_ids.sort_by(|a, b| {
+                        let a_activity = state
+                            .sessions
+                            .get(a)
+                            .map(|s| s.last_activity.as_str())
+                            .unwrap_or("");
+                        let b_activity = state
+                            .sessions
+                            .get(b)
+                            .map(|s| s.last_activity.as_str())
+                            .unwrap_or("");
+                        b_activity.cmp(a_activity)
+                    });
+                    state.ordered_session_ids = all_ids.clone();
+
+                    // Populate agents from session info (only sessions with active agents)
+                    for session in &sessions {
                         if let Some(pid) = session.agent_pid {
                             if pid > 0 {
                                 state.agents.insert(
@@ -2981,6 +3039,92 @@ fn json_value_to_display(value: &serde_json::Value) -> String {
     }
 }
 
+fn extract_refined_execute_details(metadata: &serde_json::Value) -> Option<RefinedExecuteDetails> {
+    let phase = metadata
+        .get("phase")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())?;
+    // Only handle refined_execute phases
+    let capability_id = metadata
+        .get("capability_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !capability_id.starts_with("ccos.code.refined_execute") {
+        return None;
+    }
+    let summary = metadata
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let current_turn = metadata.get("current_turn").and_then(|v| v.as_i64());
+    let max_turns = metadata.get("max_turns").and_then(|v| v.as_i64());
+    let task_preview = metadata
+        .get("task_preview")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let error_class = metadata
+        .get("error_class")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let error_snippet = metadata
+        .get("error_snippet")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let dep_count = metadata.get("dep_count").and_then(|v| v.as_i64());
+    let code_lines = metadata.get("code_lines").and_then(|v| v.as_i64());
+    Some(RefinedExecuteDetails {
+        phase,
+        summary,
+        current_turn,
+        max_turns,
+        task_preview,
+        error_class,
+        error_snippet,
+        dep_count,
+        code_lines,
+        language: metadata
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        dep_list: metadata
+            .get("dep_list")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        generated_code: metadata
+            .get("generated_code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        executed_code: metadata
+            .get("executed_code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        final_code: metadata
+            .get("final_code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        failed_code: metadata
+            .get("failed_code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        explanation: metadata
+            .get("explanation")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        stdout: metadata
+            .get("stdout")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        refinement_cycles: metadata.get("refinement_cycles").and_then(|v| v.as_i64()),
+        auto_deps_added: metadata
+            .get("auto_deps_added")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+    })
+}
+
 fn extract_run_create_program_details(
     metadata: &serde_json::Value,
 ) -> Option<RunCreateProgramDetails> {
@@ -3301,21 +3445,71 @@ fn draw_profile_selector_popup(f: &mut Frame, area: Rect, state: &MonitorState) 
 }
 
 fn draw_sessions_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
-    let header = Row::new(vec!["Session ID", "Status", "Agent PID", "Step", "Memory"]).style(
+    let header = Row::new(vec![
+        "Session ID",
+        "Status",
+        "Agent PID",
+        "Step",
+        "Last Activity",
+    ])
+    .style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     );
 
-    let rows: Vec<Row> = state
-        .sessions
-        .values()
+    let now_str = chrono::Utc::now().to_rfc3339();
+
+    let mut sessions: Vec<_> = state.sessions.values().collect();
+    sessions.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+
+    let rows: Vec<Row> = sessions
+        .into_iter()
         .map(|session| {
             let status_color = match session.status.as_str() {
                 "Active" => Color::Green,
                 "Idle" => Color::Yellow,
                 "Terminated" => Color::Red,
                 _ => Color::Gray,
+            };
+
+            // Determine if the session is old (inactive for > 1 hour) -> archive candidate
+            let is_old = {
+                let last = &session.last_activity;
+                // Compare string prefix (RFC3339 sorts lexicographically if same timezone offset)
+                // We check if last_activity is more than 1h behind now by comparing strings only
+                // as a rough heuristic; precise comparison would require parsing.
+                if let (Ok(t_last), Ok(t_now)) = (
+                    chrono::DateTime::parse_from_rfc3339(last.as_str()),
+                    chrono::DateTime::parse_from_rfc3339(now_str.as_str()),
+                ) {
+                    (t_now - t_last) > chrono::Duration::hours(1)
+                } else {
+                    false
+                }
+            };
+
+            // Compact "last activity" display: keep HH:MM:SS date part if same day, else date only.
+            let last_activity_display = {
+                let s = &session.last_activity;
+                // RFC3339: "2026-02-21T14:32:00Z" – show time portion HH:MM:SS (chars 11..19)
+                let today_prefix = &now_str[..10]; // "2026-02-21"
+                if s.len() >= 19 && s.starts_with(today_prefix) {
+                    s[11..19].to_string()
+                } else if s.len() >= 10 {
+                    s[..10].to_string() // just date for older entries
+                } else {
+                    s.clone()
+                }
+            };
+
+            let row_style = if is_old {
+                // Dim old sessions to signal they are archive candidates
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
             };
 
             Row::new(vec![
@@ -3328,13 +3522,9 @@ fn draw_sessions_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                         .map(|s| s.to_string())
                         .unwrap_or_default(),
                 ),
-                Cell::from(
-                    session
-                        .memory_mb
-                        .map(|m| format!("{} MB", m))
-                        .unwrap_or_default(),
-                ),
+                Cell::from(last_activity_display),
             ])
+            .style(row_style)
         })
         .collect();
 
@@ -3345,9 +3535,11 @@ fn draw_sessions_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
         Constraint::Ratio(1, 5),
         Constraint::Ratio(1, 5),
     ];
+    let archive_hint = " [dim = inactive >1h, archive candidate] ";
+    let title = format!(" Sessions{}", archive_hint);
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().title("Sessions").borders(Borders::ALL));
+        .block(Block::default().title(title).borders(Borders::ALL));
 
     f.render_widget(table, area);
 }
@@ -3714,12 +3906,42 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                     } else {
                         format!("{:>3}m", elapsed / 60)
                     };
-                    let color = match event.event_type.as_str() {
-                        "CRASH" => Color::Red,
-                        "ACTION" => Color::Cyan,
-                        "STATE" => Color::Green,
-                        "LLM" => Color::Magenta,
-                        _ => Color::Gray,
+                    // Determine row color: refined_execute phases get phase-specific colors.
+                    let color = if event.event_type == "ACTION" {
+                        // Check if this is a refined_execute event and pick phase color.
+                        let phase = event
+                            .metadata
+                            .as_ref()
+                            .and_then(|m| m.get("phase"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let cap_id = event
+                            .metadata
+                            .as_ref()
+                            .and_then(|m| m.get("capability_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if cap_id.starts_with("ccos.code.refined_execute") {
+                            match phase {
+                                "start" => Color::Cyan,
+                                "generating" => Color::Yellow,
+                                "generated" => Color::LightYellow,
+                                "executing" => Color::LightBlue,
+                                "success" => Color::Green,
+                                "refining" => Color::Magenta,
+                                "max_turns" => Color::LightRed,
+                                _ => Color::Cyan,
+                            }
+                        } else {
+                            Color::Cyan
+                        }
+                    } else {
+                        match event.event_type.as_str() {
+                            "CRASH" => Color::Red,
+                            "STATE" => Color::Green,
+                            "LLM" => Color::Magenta,
+                            _ => Color::Gray,
+                        }
                     };
                     let base_style = if is_selected {
                         Style::default()
@@ -3749,7 +3971,7 @@ fn draw_events_tab(f: &mut Frame, area: Rect, state: &MonitorState) {
                             },
                         ),
                         Span::styled(
-                            format!("[{:<6}] ", &event.event_type),
+                            format!("{:<8} ", &event.event_type),
                             if is_selected {
                                 base_style
                             } else {
@@ -4069,6 +4291,364 @@ fn draw_event_detail_popup(f: &mut Frame, area: Rect, event: &SystemEvent, scrol
                     Span::styled(parent_run_id, Style::default().fg(Color::White)),
                 ]));
             }
+            lines.push(Line::from(""));
+        }
+
+        if let Some(refined) = extract_refined_execute_details(metadata) {
+            // Extract all owned values upfront to avoid lifetime issues
+            let phase = refined.phase.clone();
+            let summary = refined.summary.clone();
+            let task_preview = refined.task_preview.clone();
+            let error_class = refined.error_class.clone();
+            let error_snippet = refined.error_snippet.clone();
+            let current_turn = refined.current_turn;
+            let max_turns = refined.max_turns;
+            let code_lines = refined.code_lines;
+            let dep_count = refined.dep_count;
+            let language = refined.language.clone();
+            let dep_list = refined.dep_list.clone();
+            let generated_code = refined.generated_code.clone();
+            let executed_code = refined.executed_code.clone();
+            let final_code = refined.final_code.clone();
+            let failed_code = refined.failed_code.clone();
+            let explanation = refined.explanation.clone();
+            let stdout = refined.stdout.clone();
+            let refinement_cycles = refined.refinement_cycles;
+            let auto_deps_added = refined.auto_deps_added.clone();
+
+            let (phase_icon, phase_color) = match phase.as_str() {
+                "start" => ("◉", Color::Cyan),
+                "generating" => ("⚙", Color::Yellow),
+                "generated" => ("✎", Color::LightYellow),
+                "executing" => ("▶", Color::LightBlue),
+                "success" => ("✓", Color::Green),
+                "refining" => ("↺", Color::Magenta),
+                "max_turns" => ("✗", Color::Red),
+                _ => ("·", Color::White),
+            };
+
+            // ─── Section header ────────────────────────────────────────────────
+            lines.push(Line::from(vec![Span::styled(
+                "━━━ Refined Execution ━━━",
+                Style::default()
+                    .fg(Color::LightMagenta)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+
+            // Phase + language badge
+            let lang_badge = language.as_deref().unwrap_or("python");
+            lines.push(Line::from(vec![
+                Span::styled("Phase: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{} {}", phase_icon, phase),
+                    Style::default()
+                        .fg(phase_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  lang:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {} ", lang_badge),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::REVERSED),
+                ),
+            ]));
+
+            // Turn progress bar
+            if let (Some(cur), Some(max)) = (current_turn, max_turns) {
+                let bar_filled = ((cur as f64 / max as f64) * 10.0).round() as usize;
+                let bar: String = format!(
+                    "[{}{}]",
+                    "█".repeat(bar_filled.min(10)),
+                    "░".repeat(10usize.saturating_sub(bar_filled))
+                );
+                lines.push(Line::from(vec![
+                    Span::styled("Turn: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{}/{} {}", cur, max, bar),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            } else if let Some(max) = max_turns {
+                lines.push(Line::from(vec![
+                    Span::styled("Max Turns: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(max.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+
+            // Refinement cycles (shown on success)
+            if let Some(cycles) = refinement_cycles {
+                lines.push(Line::from(vec![
+                    Span::styled("Refinement Cycles: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        cycles.to_string(),
+                        Style::default().fg(if cycles == 1 {
+                            Color::Green
+                        } else {
+                            Color::LightYellow
+                        }),
+                    ),
+                ]));
+            }
+
+            // Summary one-liner
+            if !summary.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Summary: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(summary, Style::default().fg(Color::White)),
+                ]));
+            }
+
+            // Code stats
+            {
+                let mut stats = Vec::new();
+                if let Some(lc) = code_lines {
+                    stats.push(format!("{} lines", lc));
+                }
+                if let Some(dc) = dep_count {
+                    stats.push(format!("{} deps", dc));
+                }
+                if !stats.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Code: ", Style::default().fg(Color::Yellow)),
+                        Span::styled(stats.join("  "), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+
+            // Dep list
+            if let Some(ref deps) = dep_list {
+                if !deps.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Dependencies: ", Style::default().fg(Color::Yellow)),
+                        Span::styled(deps.clone(), Style::default().fg(Color::LightCyan)),
+                    ]));
+                }
+            }
+
+            // Auto-discovered deps added during refining
+            if let Some(ref auto_deps) = auto_deps_added {
+                lines.push(Line::from(vec![
+                    Span::styled("Auto-deps added: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(auto_deps.clone(), Style::default().fg(Color::LightMagenta)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
+            // ─── Task preview ──────────────────────────────────────────────────
+            if let Some(task) = task_preview {
+                lines.push(Line::from(vec![Span::styled(
+                    "Task:",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]));
+                let task_line_count = task.lines().count();
+                for tline in task.lines().take(6) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(tline.to_owned(), Style::default().fg(Color::White)),
+                    ]));
+                }
+                if task_line_count > 6 {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("  ... ({} more lines)", task_line_count - 6),
+                        Style::default().fg(Color::DarkGray),
+                    )]));
+                }
+                lines.push(Line::from(""));
+            }
+
+            // ─── Code blocks by phase ──────────────────────────────────────────
+            // Helper: render a labeled code block (captured into local binding, not closure, to
+            // avoid borrow conflicts with `lines`).
+            macro_rules! push_code_block {
+                ($label:expr, $code:expr, $label_color:expr, $code_color:expr, $max_ln:expr) => {{
+                    let lc = $code.lines().count();
+                    lines.push(Line::from(vec![Span::styled(
+                        $label,
+                        Style::default()
+                            .fg($label_color)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
+                    for cline in $code.lines().take($max_ln) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(cline.to_owned(), Style::default().fg($code_color)),
+                        ]));
+                    }
+                    if lc > $max_ln {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("  ... ({} more lines)", lc - $max_ln),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+                    lines.push(Line::from(""));
+                }};
+            }
+
+            if let Some(ref code) = generated_code {
+                push_code_block!(
+                    "Generated Code:",
+                    code.as_str(),
+                    Color::LightYellow,
+                    Color::White,
+                    30
+                );
+            }
+            if let Some(ref code) = executed_code {
+                push_code_block!(
+                    "Executed Code:",
+                    code.as_str(),
+                    Color::LightBlue,
+                    Color::White,
+                    30
+                );
+            }
+            if let Some(ref code) = final_code {
+                push_code_block!(
+                    "Final Code (success):",
+                    code.as_str(),
+                    Color::Green,
+                    Color::LightGreen,
+                    30
+                );
+            }
+
+            // ─── LLM Explanation ───────────────────────────────────────────────
+            if let Some(ref expl) = explanation {
+                if !expl.is_empty() {
+                    lines.push(Line::from(vec![Span::styled(
+                        "Explanation:",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
+                    let expl_count = expl.lines().count();
+                    for eline in expl.lines().take(10) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(eline.to_owned(), Style::default().fg(Color::DarkGray)),
+                        ]));
+                    }
+                    if expl_count > 10 {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("  ... ({} more lines)", expl_count - 10),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+
+            // ─── Stdout output ─────────────────────────────────────────────────
+            if let Some(ref out) = stdout {
+                if !out.is_empty() {
+                    let total = out.lines().count();
+                    lines.push(Line::from(vec![Span::styled(
+                        "Stdout:",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
+                    for oline in out.lines().take(15) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(oline.to_owned(), Style::default().fg(Color::LightGreen)),
+                        ]));
+                    }
+                    if total > 15 {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("  ... ({} more lines)", total - 15),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+
+            // ─── Error Rectification (refining / max_turns phases) ─────────────
+            if matches!(phase.as_str(), "refining" | "max_turns") {
+                lines.push(Line::from(vec![Span::styled(
+                    "━━━ Error Rectification ━━━",
+                    Style::default()
+                        .fg(Color::LightRed)
+                        .add_modifier(Modifier::BOLD),
+                )]));
+
+                if let Some(ref ec) = error_class {
+                    lines.push(Line::from(vec![
+                        Span::styled("Error Class: ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!(" {} ", ec),
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(Color::LightRed)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
+
+                if let Some(ref snippet) = error_snippet {
+                    let snip_count = snippet.lines().count();
+                    lines.push(Line::from(vec![Span::styled(
+                        "Error Snippet:",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )]));
+                    for eline in snippet.lines().take(8) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(eline.to_owned(), Style::default().fg(Color::LightRed)),
+                        ]));
+                    }
+                    if snip_count > 8 {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("  ... ({} more lines)", snip_count - 8),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+                    lines.push(Line::from(""));
+                }
+
+                if let Some(ref code) = failed_code {
+                    push_code_block!(
+                        "Failed Code:",
+                        code.as_str(),
+                        Color::LightRed,
+                        Color::Red,
+                        25
+                    );
+                }
+            } else {
+                // Other phases: still show error info when present
+                if let Some(ref ec) = error_class {
+                    lines.push(Line::from(vec![
+                        Span::styled("Error Class: ", Style::default().fg(Color::Yellow)),
+                        Span::styled(ec.clone(), Style::default().fg(Color::LightRed)),
+                    ]));
+                }
+                if let Some(ref snippet) = error_snippet {
+                    let snip_count = snippet.lines().count();
+                    lines.push(Line::from(vec![Span::styled(
+                        "Error Snippet:",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )]));
+                    for eline in snippet.lines().take(6) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(eline.to_owned(), Style::default().fg(Color::LightRed)),
+                        ]));
+                    }
+                    if snip_count > 6 {
+                        lines.push(Line::from(vec![Span::styled(
+                            "  ... (truncated)",
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+                }
+            }
+
             lines.push(Line::from(""));
         }
 
