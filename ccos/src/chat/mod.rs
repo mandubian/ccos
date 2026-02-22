@@ -432,6 +432,12 @@ pub async fn register_chat_capabilities(
         marketplace.register_capability_manifest(manifest).await
     }
 
+    // Shared store: skill_id → raw skill content (markdown/yaml).
+    // Populated by ccos.skill.load and used by ccos.code.refined_execute
+    // to inject skill instructions into the code-generation prompt.
+    let skill_instructions: Arc<Mutex<HashMap<String, String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
     // ---------------------------------------------------------------------
     // Summarize message (minimal safe summarizer; no raw quotes).
     // ---------------------------------------------------------------------
@@ -1479,6 +1485,7 @@ pub async fn register_chat_capabilities(
     {
         let marketplace_for_skill_load = Arc::clone(&marketplace);
         let approval_queue_for_skill = approval_queue.clone();
+        let skill_instructions_for_load = Arc::clone(&skill_instructions);
         register_native_chat_capability(
             &*marketplace,
             "ccos.skill.load",
@@ -1488,6 +1495,7 @@ pub async fn register_chat_capabilities(
                 let inputs = inputs.clone();
                 let marketplace = Arc::clone(&marketplace_for_skill_load);
                 let approval_queue = approval_queue_for_skill.clone();
+                let skill_instructions = Arc::clone(&skill_instructions_for_load);
                 Box::pin(async move {
                     // Extract URL from inputs
                     let url = if let Value::Map(ref map) = inputs {
@@ -1673,6 +1681,11 @@ pub async fn register_chat_capabilities(
 
                     let skill = loaded_skill.skill;
                     let skill_id = skill.id.clone();
+
+                    // Store the raw skill content for use by refined_execute skill hints
+                    if let Ok(mut store) = skill_instructions.lock() {
+                        store.insert(skill_id.clone(), skill_content.clone());
+                    }
 
                     // Extract base URL from the source URL
                     let base_url = extract_base_url(&loaded_skill.source_url);
@@ -2338,7 +2351,7 @@ pub async fn register_chat_capabilities(
                             Value::Float(f) => Some(*f as u32),
                             _ => None,
                         })
-                        .unwrap_or(30000);
+                        .unwrap_or(60000); // 60s default — enough for network I/O inside the sandbox
 
                     let max_memory_mb = map
                         .get(&MapKey::Keyword(Keyword("max_memory_mb".to_string())))
@@ -2358,7 +2371,11 @@ pub async fn register_chat_capabilities(
                         if let Value::Vector(deps_vec) = deps_value {
                             for dep in deps_vec {
                                 if let Some(dep_str) = dep.as_string() {
-                                    dependencies.push(dep_str.to_string());
+                                    let dep_str = dep_str.to_string();
+                                    // Ignore ccos-sdk/ccos_sdk as it's injected by the sandbox
+                                    if dep_str != "ccos-sdk" && dep_str != "ccos_sdk" {
+                                        dependencies.push(dep_str);
+                                    }
                                 }
                             }
                         }
@@ -2487,8 +2504,14 @@ pub async fn register_chat_capabilities(
 
                             for module in detected_imports {
                                 if !stdlib.contains(module.as_str()) && !dependencies.contains(&module) {
-                                    // It's a 3rd party package not in dependencies.
-                                    // Check if it's already approved (maybe they approved it previously)
+                                    // If the module is in the config auto_approved list the DependencyManager
+                                    // will install it automatically — no queue approval needed.
+                                    let auto_approved = &sandbox_cfg.package_allowlist.auto_approved;
+                                    if auto_approved.iter().any(|a| a.to_lowercase() == module.to_lowercase()) {
+                                        log::debug!("[ccos.execute.python] Static check: {} is in auto_approved config, skipping approval gate.", module);
+                                        continue;
+                                    }
+                                    // Check if it's already approved via the persistent queue.
                                     if !queue.is_package_approved(&module, "python").await.unwrap_or(false) {
                                         missing_packages.push(module);
                                     } else {
@@ -2586,9 +2609,9 @@ pub async fn register_chat_capabilities(
                         .and_then(|v| v.as_string())
                         .map(|s| s.to_string());
 
-                    // Execute: interactive mode (with ccos_sdk.py IPC) when no deps to install;
-                    // fall back to standard mode when dependencies are requested.
-                    let result = if current_dependencies.is_empty() {
+                    // Execute using the interactive path which now supports dependencies.
+                    // This ensures SDK capabilities (memory, log) work even when packages are installed.
+                    let result = {
                         use std::pin::Pin;
                         use crate::sandbox::bubblewrap::CapabilityDispatcher;
                         use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
@@ -2625,11 +2648,14 @@ pub async fn register_chat_capabilities(
                             },
                         );
                         sandbox
-                            .execute_python_interactive(&code, &input_files, &exec_sandbox_config, dispatcher)
-                            .await
-                    } else {
-                        sandbox
-                            .execute_python(&code, &input_files, &exec_sandbox_config, Some(&current_dependencies), Some(&dep_manager))
+                            .execute_python_interactive(
+                                &code, 
+                                &input_files, 
+                                &exec_sandbox_config, 
+                                if current_dependencies.is_empty() { None } else { Some(&current_dependencies) },
+                                if current_dependencies.is_empty() { None } else { Some(&dep_manager) },
+                                dispatcher
+                            )
                             .await
                     };
 
@@ -2701,6 +2727,12 @@ pub async fn register_chat_capabilities(
                             };
 
                             if let Some(module) = module_name {
+                                // Ignore ccos-sdk/ccos_sdk as it's injected by the sandbox
+                                if module == "ccos-sdk" || module == "ccos_sdk" {
+                                    log::warn!("[ccos.execute.python] Detected missing module '{}' in stderr, but it is an injected SDK. Ignoring.", module);
+                                    continue;
+                                }
+
                                 log::info!(
                                     "[ccos.execute.python] Detected missing module '{}' in stderr, creating package approval",
                                     module
@@ -2812,18 +2844,18 @@ pub async fn register_chat_capabilities(
                     }
 
                     // Return the successful result from the loop
-                        break Ok(Value::Map(output_map));
-                    };
+                    break Ok(Value::Map(output_map));
+                };
 
-                    result_json
-                })
-            }),
-            "high",
-            vec!["compute".to_string()],
-            EffectType::Effectful,
-        )
-        .await?;
-    }
+                result_json
+            })
+        }),
+        "high",
+        vec!["compute".to_string()],
+        EffectType::Effectful,
+    )
+    .await?;
+}
 
     // -----------------------------------------------------------------
     // JavaScript Code Execution Capability (Phase 6)
@@ -3130,6 +3162,8 @@ pub async fn register_chat_capabilities(
                         constraints,
                         profile,
                         prior_attempts: vec![],
+                        skill_hints: vec![],
+                        expected_outputs: vec![],
                     };
 
                     // Create coding agent using captured config
@@ -3179,22 +3213,26 @@ pub async fn register_chat_capabilities(
     // Refined Code Execution (Phase 4)
     // -----------------------------------------------------------------
     {
-        use crate::sandbox::coding_agent::{CodingAgent, CodingRequest, AttemptContext};
+        use crate::sandbox::coding_agent::{CodingAgent, CodingRequest, AttemptContext, AttemptErrorType, ExpectedOutput};
         use crate::sandbox::refiner::{ErrorRefiner, ErrorClass};
 
         let coding_cfg = coding_agents_config.clone();
         let sandbox_cfg = sandbox_config.clone();
         let marketplace_for_loop = Arc::clone(&marketplace);
+        let chain_for_refined = Arc::clone(&causal_chain);
+        let skill_instructions_for_refined = Arc::clone(&skill_instructions);
 
         register_native_chat_capability(
             &*marketplace,
             "ccos.code.refined_execute",
             "Refined Code Execution",
-            "Generate and execute code with automatic self-correction. If execution fails, the agent will attempt to fix the code based on the error. Supports iterative refinement up to a maximum number of turns.",
+            "Generate and execute code with automatic self-correction. MANDATORY: You must provide the 'task' parameter describing the work to be done. If execution fails, the agent will attempt to fix the code based on the error. Supports iterative refinement up to a maximum number of turns.",
             Arc::new(move |inputs: &Value| {
                 let coding_cfg = coding_cfg.clone();
                 let _sandbox_cfg = sandbox_cfg.clone();
                 let marketplace = Arc::clone(&marketplace_for_loop);
+                let chain = Arc::clone(&chain_for_refined);
+                let skill_instructions = Arc::clone(&skill_instructions_for_refined);
                 let inputs = inputs.clone();
 
                 Box::pin(async move {
@@ -3202,6 +3240,52 @@ pub async fn register_chat_capabilities(
                     let map = match &inputs {
                         Value::Map(m) => m,
                         _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
+                    };
+
+                    // Extract context identifiers for progress events
+                    let session_id = map.get(&MapKey::String("session_id".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let run_id = map.get(&MapKey::String("run_id".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let step_id = map.get(&MapKey::String("step_id".to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("step_id".to_string()))))
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    // Emit a CapabilityCall progress event for each refinement phase so the
+                    // monitor shows it live without needing "show internal steps" toggled.
+                    // `phase`     – short phase name, e.g. "generating" / "executing"
+                    // `summary`   – human-readable one-liner for the event list
+                    // `extra_meta`– additional structured fields (turn, error_class, …)
+                    let emit_phase = |phase: &str, summary: String, extra_meta: Vec<(String, Value)>| {
+                        let mut meta = HashMap::new();
+                        // Use phase-qualified capability_id so each phase shows as a distinct entry
+                        meta.insert("capability_id".to_string(), Value::String(
+                            format!("ccos.code.refined_execute.{}", phase)
+                        ));
+                        meta.insert("phase".to_string(), Value::String(phase.to_string()));
+                        meta.insert("summary".to_string(), Value::String(summary));
+                        // Mark as successful progress (not an error)
+                        meta.insert("success".to_string(), Value::Boolean(true));
+                        for (k, v) in extra_meta {
+                            meta.insert(k, v);
+                        }
+                        let _ = record_chat_audit_event(
+                            &chain,
+                            "chat", "chat",
+                            &session_id, &run_id, &step_id,
+                            &format!("refined_execute.{}", phase),
+                            meta,
+                            // CapabilityCall → visible by default, not hidden with internal steps
+                            crate::types::ActionType::CapabilityCall,
+                        );
                     };
 
                     let task = map
@@ -3257,6 +3341,43 @@ pub async fn register_chat_capabilities(
                         max_turns = turns;
                     }
 
+                    // Parse expected_outputs: declared by arbiter so generated code stores
+                    // results at predictable keys with known schemas.
+                    let mut expected_outputs: Vec<ExpectedOutput> = Vec::new();
+                    if let Some(eo_val) = map
+                        .get(&MapKey::Keyword(Keyword("expected_outputs".to_string())))
+                        .or_else(|| map.get(&MapKey::String("expected_outputs".to_string())))
+                        .or_else(|| map.get(&MapKey::Keyword(Keyword("expected-outputs".to_string()))))
+                    {
+                        if let Value::Vector(items) = eo_val {
+                            for item in items {
+                                if let Value::Map(item_map) = item {
+                                    let key = item_map
+                                        .get(&MapKey::Keyword(Keyword("key".to_string())))
+                                        .or_else(|| item_map.get(&MapKey::String("key".to_string())))
+                                        .and_then(|v| v.as_string())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    let description = item_map
+                                        .get(&MapKey::Keyword(Keyword("description".to_string())))
+                                        .or_else(|| item_map.get(&MapKey::String("description".to_string())))
+                                        .and_then(|v| v.as_string())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    let schema_hint = item_map
+                                        .get(&MapKey::Keyword(Keyword("schema_hint".to_string())))
+                                        .or_else(|| item_map.get(&MapKey::String("schema_hint".to_string())))
+                                        .or_else(|| item_map.get(&MapKey::Keyword(Keyword("schema-hint".to_string()))))
+                                        .and_then(|v| v.as_string())
+                                        .map(|s| s.to_string());
+                                    if !key.is_empty() {
+                                        expected_outputs.push(ExpectedOutput { key, description, schema_hint });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let mut current_attempt = 1;
                     let mut prior_attempts: Vec<AttemptContext> = Vec::new();
                     let mut refinement_history = Vec::new();
@@ -3266,6 +3387,50 @@ pub async fn register_chat_capabilities(
                     
                     // We'll track dependencies we discover we need
                     let mut auto_dependencies = Vec::new();
+
+                    // Query catalog for skills relevant to the task and inject their
+                    // instructions into the code-generation prompt so the LLM uses
+                    // real APIs (e.g. Nitter RSS) instead of simulating data.
+                    let skill_hints: Vec<crate::sandbox::coding_agent::SkillHint> = {
+                        use crate::sandbox::coding_agent::SkillHint;
+                        let mut hints = Vec::new();
+                        if let Some(catalog) = marketplace.get_catalog().await {
+                            let filter = crate::catalog::CatalogFilter::for_kind(
+                                crate::catalog::CatalogEntryKind::Skill
+                            );
+                            let hits = catalog.search_semantic(&task, Some(&filter), 3).await;
+                            let store = skill_instructions.lock().ok();
+                            for hit in hits {
+                                if hit.score < 0.3 { continue; }
+                                let instructions = store
+                                    .as_ref()
+                                    .and_then(|s| s.get(&hit.entry.id))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                hints.push(SkillHint {
+                                    name: hit.entry.name.unwrap_or_else(|| hit.entry.id.clone()),
+                                    description: hit.entry.description.unwrap_or_default(),
+                                    instructions,
+                                });
+                                log::info!(
+                                    "[refined_execute] injecting skill hint '{}' (score={:.2})",
+                                    hit.entry.id, hit.score
+                                );
+                            }
+                        }
+                        hints
+                    };
+
+                    emit_phase("start", format!(
+                        "Starting refined execution (max {} turns): {}",
+                        max_turns,
+                        if task.len() > 80 { format!("{}...", &task[..80]) } else { task.clone() }
+                    ), vec![
+                        ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                        ("task_preview".to_string(), Value::String(
+                            if task.len() > 200 { format!("{}...", &task[..200]) } else { task.clone() }
+                        )),
+                    ]);
 
                     while current_attempt <= max_turns {
                         // A. Build prompt adjustments based on last error
@@ -3296,9 +3461,56 @@ pub async fn register_chat_capabilities(
                             constraints: None,
                             profile: None,
                             prior_attempts: prior_attempts.clone(),
+                            skill_hints: skill_hints.clone(),
+                            expected_outputs: expected_outputs.clone(),
                         };
 
+                        emit_phase("generating", format!(
+                            "Generating code (turn {}/{})",
+                            current_attempt, max_turns
+                        ), vec![
+                            ("current_turn".to_string(), Value::Integer(current_attempt as i64)),
+                            ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                            ("language".to_string(), Value::String(
+                                language.clone().unwrap_or_else(|| "python".to_string())
+                            )),
+                        ]);
+
                         let response = coding_agent.generate(&coding_request).await?;
+
+                                                    // Emit the generating event *after* we have the response so we can
+                                                    // attach the actual generated code and explanation to the event.
+                                                    {
+                                                        const MAX_CODE: usize = 20000;                            const MAX_EXPL: usize = 1000;
+                            let code_preview = if response.code.len() > MAX_CODE {
+                                format!("{}\n... (truncated)", &response.code[..MAX_CODE])
+                            } else {
+                                response.code.clone()
+                            };
+                            let expl_preview = if response.explanation.len() > MAX_EXPL {
+                                format!("{}...", &response.explanation[..MAX_EXPL])
+                            } else {
+                                response.explanation.clone()
+                            };
+                            let dep_list = response.dependencies.join(", ");
+                            emit_phase("generated", format!(
+                                "Code generated (turn {}/{}, {} lines, {} deps)",
+                                current_attempt, max_turns,
+                                response.code.lines().count(),
+                                response.dependencies.len()
+                            ), vec![
+                                ("current_turn".to_string(), Value::Integer(current_attempt as i64)),
+                                ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                                ("language".to_string(), Value::String(
+                                    language.clone().unwrap_or_else(|| "python".to_string())
+                                )),
+                                ("code_lines".to_string(), Value::Integer(response.code.lines().count() as i64)),
+                                ("dep_count".to_string(), Value::Integer(response.dependencies.len() as i64)),
+                                ("dep_list".to_string(), Value::String(dep_list)),
+                                ("generated_code".to_string(), Value::String(code_preview)),
+                                ("explanation".to_string(), Value::String(expl_preview)),
+                            ]);
+                        }
 
                         // B. Execute Code via ccos.execute.python
                         let mut exec_inputs = HashMap::new();
@@ -3319,7 +3531,60 @@ pub async fn register_chat_capabilities(
                             exec_inputs.insert(MapKey::String("dependencies".to_string()), Value::Vector(dep_vals));
                         }
 
-                        let exec_result_val = marketplace.execute_capability("ccos.execute.python", &Value::Map(exec_inputs)).await?;
+                        // Give each sandbox turn a generous timeout: network I/O, uv install, etc.
+                        // can easily exceed 30s per turn. 120s per turn is safe given refined_execute
+                        // itself is bounded by max_turns and the agent-level gateway timeout.
+                        exec_inputs.insert(
+                            MapKey::String("timeout_ms".to_string()),
+                            Value::Float(120_000.0),
+                        );
+
+                        {
+                            let dep_count = exec_inputs
+                                .get(&MapKey::String("dependencies".to_string()))
+                                .and_then(|v| if let Value::Vector(d) = v { Some(d.len()) } else { None })
+                                .unwrap_or(0);
+                            let code_lines = response.code.lines().count();
+                            let dep_list: String = exec_inputs
+                                .get(&MapKey::String("dependencies".to_string()))
+                                .and_then(|v| if let Value::Vector(d) = v { Some(d) } else { None })
+                                .map(|d| d.iter().filter_map(|v| v.as_string()).collect::<Vec<_>>().join(", "))
+                                .unwrap_or_default();
+                            const MAX_CODE: usize = 4000;
+                            let code_preview = if response.code.len() > MAX_CODE {
+                                format!("{}\n... (truncated)", &response.code[..MAX_CODE])
+                            } else {
+                                response.code.clone()
+                            };
+                            emit_phase("executing", format!(
+                                "Executing code (turn {}/{}, {} lines, {} deps)",
+                                current_attempt, max_turns, code_lines, dep_count
+                            ), vec![
+                                ("current_turn".to_string(), Value::Integer(current_attempt as i64)),
+                                ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                                ("code_lines".to_string(), Value::Integer(code_lines as i64)),
+                                ("dep_count".to_string(), Value::Integer(dep_count as i64)),
+                                ("dep_list".to_string(), Value::String(dep_list)),
+                                ("executed_code".to_string(), Value::String(code_preview)),
+                                ("language".to_string(), Value::String(
+                                    language.clone().unwrap_or_else(|| "python".to_string())
+                                )),
+                            ]);
+                        }
+
+                        let exec_result_val = match marketplace.execute_capability("ccos.execute.python", &Value::Map(exec_inputs)).await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                // Approval-blocked and infrastructure errors must be surfaced verbatim to the
+                                // user — they are NOT Python logic bugs to be refined away.
+                                // "Execution paused" → package needs /approve
+                                // "requires approval"  → network or package gate
+                                // "Security violation" → blocked by scanner
+                                // In all these cases return the error immediately so the user sees the
+                                // actionable message (e.g. "Use: /approve <id>").
+                                return Err(e);
+                            }
+                        };
                         
                         let Value::Map(exec_map) = &exec_result_val else {
                             return Err(RuntimeError::Generic("ccos.execute.python returned non-map".to_string()));
@@ -3344,12 +3609,63 @@ pub async fn register_chat_capabilities(
                         refinement_history.push(Value::Map(history_entry));
 
                         if success {
+                            // Capture stdout for the success event
+                            let stdout = exec_map
+                                .get(&MapKey::Keyword(Keyword("stdout".to_string())))
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("");
+                            const MAX_OUT: usize = 3000;
+                            let stdout_preview = if stdout.len() > MAX_OUT {
+                                format!("{}\n... (truncated)", &stdout[..MAX_OUT])
+                            } else {
+                                stdout.to_string()
+                            };
+                            const MAX_CODE: usize = 4000;
+                            let code_preview = if response.code.len() > MAX_CODE {
+                                format!("{}\n... (truncated)", &response.code[..MAX_CODE])
+                            } else {
+                                response.code.clone()
+                            };
+                            const MAX_EXPL: usize = 1000;
+                            let expl_preview = if response.explanation.len() > MAX_EXPL {
+                                format!("{}...", &response.explanation[..MAX_EXPL])
+                            } else {
+                                response.explanation.clone()
+                            };
                             // Success! Return the response + execution details + history
+                            emit_phase("success", format!(
+                                "Code executed successfully on turn {}/{}",
+                                current_attempt, max_turns
+                            ), vec![
+                                ("current_turn".to_string(), Value::Integer(current_attempt as i64)),
+                                ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                                ("language".to_string(), Value::String(
+                                    language.clone().unwrap_or_else(|| "python".to_string())
+                                )),
+                                ("final_code".to_string(), Value::String(code_preview)),
+                                ("explanation".to_string(), Value::String(expl_preview)),
+                                ("stdout".to_string(), Value::String(stdout_preview)),
+                                ("refinement_cycles".to_string(), Value::Integer(current_attempt as i64)),
+                            ]);
                             let mut final_map = exec_map.clone();
                             final_map.insert(MapKey::Keyword(Keyword("refinement_cycles".to_string())), Value::Integer(current_attempt as i64));
                             final_map.insert(MapKey::Keyword(Keyword("refinement_history".to_string())), Value::Vector(refinement_history));
                             final_map.insert(MapKey::Keyword(Keyword("final_code".to_string())), Value::String(response.code));
                             final_map.insert(MapKey::Keyword(Keyword("explanation".to_string())), Value::String(response.explanation));
+                            // Expose stored_artifacts declared by the code-gen LLM so the parent
+                            // agent knows exactly which ccos_sdk.memory keys hold the results.
+                            if !response.stored_artifacts.is_empty() {
+                                let artifacts: Vec<Value> = response.stored_artifacts.iter().map(|a| {
+                                    let mut m = std::collections::HashMap::new();
+                                    m.insert(MapKey::Keyword(Keyword("key".to_string())), Value::String(a.key.clone()));
+                                    m.insert(MapKey::Keyword(Keyword("description".to_string())), Value::String(a.description.clone()));
+                                    if let Some(ref sh) = a.schema_hint {
+                                        m.insert(MapKey::Keyword(Keyword("schema_hint".to_string())), Value::String(sh.clone()));
+                                    }
+                                    Value::Map(m)
+                                }).collect();
+                                final_map.insert(MapKey::Keyword(Keyword("stored_artifacts".to_string())), Value::Vector(artifacts));
+                            }
                             return Ok(Value::Map(final_map));
                         }
 
@@ -3357,6 +3673,32 @@ pub async fn register_chat_capabilities(
                         let classified = refiner.classify_python_error(stderr);
                         
                         if current_attempt >= max_turns {
+                            const MAX_CODE: usize = 4000;
+                            let failed_code_preview = if response.code.len() > MAX_CODE {
+                                format!("{}\n... (truncated)", &response.code[..MAX_CODE])
+                            } else {
+                                response.code.clone()
+                            };
+                            let stdout_at_failure = exec_map
+                                .get(&MapKey::Keyword(Keyword("stdout".to_string())))
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("");
+                            emit_phase("max_turns", format!(
+                                "Max turns ({}) reached — last error: {}",
+                                max_turns,
+                                if stderr.len() > 120 { format!("{}...", &stderr[..120]) } else { stderr.to_string() }
+                            ), vec![
+                                ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                                ("language".to_string(), Value::String(
+                                    language.clone().unwrap_or_else(|| "python".to_string())
+                                )),
+                                ("error_snippet".to_string(), Value::String(
+                                    if stderr.len() > 300 { format!("{}...", &stderr[..300]) } else { stderr.to_string() }
+                                )),
+                                ("error_class".to_string(), Value::String(format!("{:?}", classified.class))),
+                                ("failed_code".to_string(), Value::String(failed_code_preview)),
+                                ("stdout".to_string(), Value::String(stdout_at_failure.to_string())),
+                            ]);
                             // Max turns reached, return the last failure + history
                             let mut final_map = exec_map.clone();
                             final_map.insert(MapKey::Keyword(Keyword("refinement_cycles".to_string())), Value::Integer(current_attempt as i64));
@@ -3366,12 +3708,63 @@ pub async fn register_chat_capabilities(
                         }
 
                         // Update prior attempts for next turn
+                        let attempt_error_type = Some(match &classified.class {
+                            ErrorClass::NetworkFailure(_) => AttemptErrorType::NetworkFailure,
+                            ErrorClass::Timeout => AttemptErrorType::Timeout,
+                            ErrorClass::Syntax => AttemptErrorType::LogicError,
+                            ErrorClass::Runtime(_) => AttemptErrorType::RuntimeException,
+                            _ => AttemptErrorType::RuntimeException,
+                        });
                         prior_attempts.push(AttemptContext {
                             code: response.code,
                             error: stderr.to_string(), // Keep raw error for summary
                             attempt: current_attempt,
+                            error_type: attempt_error_type,
                         });
                         current_attempt += 1;
+
+                        {
+                            let failed_attempt = prior_attempts.last();
+                            const MAX_CODE: usize = 4000;
+                            let failed_code_preview = failed_attempt
+                                .map(|a| {
+                                    if a.code.len() > MAX_CODE {
+                                        format!("{}\n... (truncated)", &a.code[..MAX_CODE])
+                                    } else {
+                                        a.code.clone()
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let error_snippet = failed_attempt
+                                .map(|a| {
+                                    if a.error.len() > 300 {
+                                        format!("{}...", &a.error[..300])
+                                    } else {
+                                        a.error.clone()
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let stdout_at_failure = exec_map
+                                .get(&MapKey::Keyword(Keyword("stdout".to_string())))
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("");
+                            let auto_deps_str = auto_dependencies.join(", ");
+                            emit_phase("refining", format!(
+                                "Turn {} failed ({:?}), refining → turn {}/{}",
+                                current_attempt - 1, classified.class, current_attempt, max_turns
+                            ), vec![
+                                ("current_turn".to_string(), Value::Integer(current_attempt as i64)),
+                                ("max_turns".to_string(), Value::Integer(max_turns as i64)),
+                                ("language".to_string(), Value::String(
+                                    language.clone().unwrap_or_else(|| "python".to_string())
+                                )),
+                                ("error_class".to_string(), Value::String(format!("{:?}", classified.class))),
+                                ("error_snippet".to_string(), Value::String(error_snippet)),
+                                ("failed_code".to_string(), Value::String(failed_code_preview)),
+                                ("stdout".to_string(), Value::String(stdout_at_failure.to_string())),
+                                ("auto_deps_added".to_string(), Value::String(auto_deps_str)),
+                            ]);
+                        }
 
                         log::info!("Code execution failed ({:?}), starting refinement turn {}/{}", classified.class, current_attempt, max_turns);
                     }
