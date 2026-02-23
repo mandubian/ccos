@@ -204,6 +204,10 @@ pub struct Run {
     pub id: String,
     pub session_id: String,
     pub goal: String,
+    /// Root intent ID representing the "why" behind this run.
+    /// Automatically generated at creation time; links causal chain actions to the goal.
+    #[serde(default)]
+    pub root_intent_id: String,
     pub state: RunState,
     pub budget: BudgetContext,
     pub consumption: BudgetConsumption,
@@ -234,11 +238,13 @@ pub struct Run {
 impl Run {
     pub fn new(session_id: String, goal: String, budget: Option<BudgetContext>) -> Self {
         let id = format!("run-{}", uuid::Uuid::new_v4());
+        let root_intent_id = format!("intent-{}", uuid::Uuid::new_v4());
         let now = Utc::now();
         Self {
             id: id.clone(),
             session_id,
             goal,
+            root_intent_id,
             state: RunState::Active,
             budget: budget.unwrap_or_default(),
             consumption: BudgetConsumption::default(),
@@ -359,6 +365,16 @@ impl Run {
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("corr-{}", uuid::Uuid::new_v4()));
 
+        let root_intent_id = action
+            .intent_id
+            .clone()
+            .or_else(|| {
+                meta.get("root_intent_id")
+                    .and_then(|v| v.as_string())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| format!("intent-{}", run_id));
+
         let budget = BudgetContext {
             max_steps: meta
                 .get("budget_max_steps")
@@ -412,6 +428,7 @@ impl Run {
             id: run_id.to_string(),
             session_id: session_id.to_string(),
             goal: goal.to_string(),
+            root_intent_id,
             state: RunState::Active, // Default to Active on creation
             budget,
             consumption: BudgetConsumption::default(),
@@ -1147,8 +1164,8 @@ mod tests {
             action_id: "a1".to_string(),
             parent_action_id: None,
             session_id: Some("session-1".to_string()),
-            plan_id: "p1".to_string(),
-            intent_id: "i1".to_string(),
+            plan_id: Some("p1".to_string()),
+            intent_id: Some("i1".to_string()),
             action_type: ActionType::InternalStep,
             function_name: Some("chat.audit.run.create".to_string()),
             arguments: None,
@@ -1171,8 +1188,8 @@ mod tests {
             action_id: "a2".to_string(),
             parent_action_id: None,
             session_id: Some("session-1".to_string()),
-            plan_id: "p1".to_string(),
-            intent_id: "i1".to_string(),
+            plan_id: Some("p1".to_string()),
+            intent_id: Some("i1".to_string()),
             action_type: ActionType::InternalStep,
             function_name: Some("chat.audit.run.transition".to_string()),
             arguments: None,
@@ -1223,8 +1240,8 @@ mod tests {
         actions.push(crate::types::Action {
             action_id: "a1".to_string(),
             parent_action_id: None,
-            plan_id: "p1".to_string(),
-            intent_id: "i1".to_string(),
+            plan_id: Some("p1".to_string()),
+            intent_id: Some("i1".to_string()),
             action_type: crate::types::ActionType::CapabilityCall,
             function_name: Some("chat.audit.run.create".to_string()),
             timestamp: now,
@@ -1247,8 +1264,8 @@ mod tests {
         actions.push(crate::types::Action {
             action_id: "a2".to_string(),
             parent_action_id: None,
-            plan_id: "p1".to_string(),
-            intent_id: "i1".to_string(),
+            plan_id: Some("p1".to_string()),
+            intent_id: Some("i1".to_string()),
             action_type: crate::types::ActionType::CapabilityCall,
             function_name: Some("chat.audit.run.checkpoint".to_string()),
             timestamp: now + 1000,

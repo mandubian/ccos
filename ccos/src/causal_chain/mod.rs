@@ -86,13 +86,13 @@ impl CausalChain {
         if let Some(ref intent_id) = query.intent_id {
             actions = actions
                 .into_iter()
-                .filter(|a| &a.intent_id == intent_id)
+                .filter(|a| a.intent_id.as_ref() == Some(intent_id))
                 .collect();
         }
         if let Some(ref plan_id) = query.plan_id {
             actions = actions
                 .into_iter()
-                .filter(|a| &a.plan_id == plan_id)
+                .filter(|a| a.plan_id.as_ref() == Some(plan_id))
                 .collect();
         }
         if let Some(ref action_type) = query.action_type {
@@ -159,6 +159,44 @@ impl CausalChain {
         })
     }
 
+    /// Open a SQLite-backed `CausalChain` at `path`.
+    ///
+    /// The DB is opened and the schema is created/migrated, but **no rows are
+    /// loaded into memory**.  Call [`load_session`] to hydrate individual
+    /// sessions when an agent reconnects or resumes.
+    pub fn load_from_db(path: &std::path::Path) -> Result<Self, RuntimeError> {
+        Ok(Self {
+            ledger: ImmutableLedger::open_db(path)?,
+            signing: CryptographicSigning::new(),
+            provenance: ProvenanceTracker::new(),
+            metrics: PerformanceMetrics::new(),
+            event_sinks: Vec::new(),
+            logs: LogBuffer::new(
+                std::env::var("CCOS_LOG_BUFFER_CAPACITY")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(256),
+            ),
+        })
+    }
+
+    /// Hydrate all persisted actions for `session_id` into the in-memory
+    /// working set so that queries and event-sinks work for that session.
+    ///
+    /// Idempotent – safe to call multiple times for the same session.
+    /// Returns the number of actions loaded from the DB.
+    pub fn load_session(&mut self, session_id: &str) -> Result<usize, RuntimeError> {
+        self.ledger.load_session(session_id)
+    }
+
+    /// Evict all in-memory actions for `session_id` to free RAM.
+    ///
+    /// The data remains in SQLite and can be reloaded via [`load_session`].
+    /// Returns the number of actions removed from memory.
+    pub fn unload_session(&mut self, session_id: &str) -> usize {
+        self.ledger.unload_session(session_id)
+    }
+
     /// Register an event sink to be notified of action appends
     pub fn register_event_sink(&mut self, sink: Arc<dyn CausalChainEventSink>) {
         self.event_sinks.push(sink);
@@ -190,8 +228,8 @@ impl CausalChain {
             action.action_type,
             action.action_id,
             fn_name,
-            action.intent_id,
-            action.plan_id,
+            action.intent_id.as_deref().unwrap_or(""),
+            action.plan_id.as_deref().unwrap_or(""),
             action.timestamp
         );
         self.logs.push(json);
@@ -785,8 +823,8 @@ impl CausalChain {
                 "Action {}: type={:?}, intent={}, plan={}, timestamp={}\n",
                 action.action_id,
                 action.action_type,
-                action.intent_id,
-                action.plan_id,
+                action.intent_id.as_deref().unwrap_or(""),
+                action.plan_id.as_deref().unwrap_or(""),
                 action.timestamp
             ));
         }
@@ -805,8 +843,8 @@ impl CausalChain {
             action_id: uuid::Uuid::new_v4().to_string(),
             parent_action_id: None,
             session_id: session_id.map(|s| s.to_string()),
-            plan_id: "delegation".to_string(),
-            intent_id: intent_id.clone(),
+            plan_id: None,
+            intent_id: Some(intent_id.clone()),
             action_type: ActionType::InternalStep,
             function_name: Some(format!("delegation.{}", event_kind)),
             arguments: None,
@@ -1005,8 +1043,8 @@ mod tests {
 
         // Query by audit metadata
         let query = CausalQuery {
-            intent_id: Some(action.intent_id.clone()),
-            plan_id: Some(action.plan_id.clone()),
+            intent_id: action.intent_id.clone(),
+            plan_id: action.plan_id.clone(),
             action_type: Some(action.action_type.clone()),
             ..Default::default()
         };

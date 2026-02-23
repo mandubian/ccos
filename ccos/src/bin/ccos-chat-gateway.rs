@@ -95,6 +95,14 @@ struct ServeArgs {
     /// Defaults to localhost for development.
     #[arg(long, default_value = "http://localhost:3000", env = "CCOS_APPROVAL_UI_URL")]
     approval_ui_url: String,
+
+    /// Optional path to a SQLite database file for causal-chain persistence.
+    ///
+    /// When provided, causal-chain actions are written to this file and
+    /// reloaded on the next startup. When omitted, the chain is in-memory only.
+    /// Can also be set via the `CCOS_CAUSAL_CHAIN_DB` environment variable.
+    #[arg(long, env = "CCOS_CAUSAL_CHAIN_DB")]
+    causal_chain_db: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -187,6 +195,7 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
         http_allow_ports: args.http_allow_ports,
         admin_tokens: args.admin_tokens,
         approval_ui_url: args.approval_ui_url,
+        causal_chain_db_path: args.causal_chain_db,
     };
 
     ChatGateway::start(config)

@@ -167,6 +167,7 @@ impl TemplateArbiter {
             plan_id: format!("template_plan_{}", uuid::Uuid::new_v4()),
             name: Some(template.name.clone()),
             intent_ids: vec![intent.intent_id.clone()],
+            session_id: None,
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_content),
             status: PlanStatus::Draft,
@@ -207,6 +208,7 @@ impl TemplateArbiter {
             success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: crate::types::TriggerSource::HumanRequest,
             generation_context: crate::types::GenerationContext {
                 arbiter_version: "1.0.0".to_string(),

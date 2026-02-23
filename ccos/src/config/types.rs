@@ -1377,6 +1377,10 @@ pub struct StorageConfig {
     pub mode: String,
     /// Whether to buffer locally
     pub buffer_local: Option<bool>,
+    /// SQLite database file path (used when mode = "sqlite").
+    /// Defaults to `~/.ccos/causal_chain.sqlite` when not set.
+    #[serde(default)]
+    pub db_path: Option<String>,
 }
 
 impl Default for StorageConfig {
@@ -1384,6 +1388,7 @@ impl Default for StorageConfig {
         Self {
             mode: "in_memory".to_string(),
             buffer_local: None,
+            db_path: None,
         }
     }
 }

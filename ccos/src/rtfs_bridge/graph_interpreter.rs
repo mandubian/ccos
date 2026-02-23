@@ -76,6 +76,7 @@ pub fn build_graph_from_rtfs(
             success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "rtfs-graph-interpreter-1.0".to_string(),

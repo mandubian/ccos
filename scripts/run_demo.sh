@@ -41,6 +41,10 @@ export CCOS_LLM_TIMEOUT_SECS=${CCOS_LLM_TIMEOUT_SECS:-180}
 # Monitor authentication (must match gateway --admin-tokens)
 DEMO_ADMIN_TOKEN="${CCOS_DEMO_ADMIN_TOKEN:-admin-token}"
 
+# Causal chain persistence (defaults to ~/.ccos/causal_chain.sqlite)
+CAUSAL_CHAIN_DB="${CCOS_CAUSAL_CHAIN_DB:-${HOME}/.ccos/causal_chain.sqlite}"
+mkdir -p "$(dirname "$CAUSAL_CHAIN_DB")"
+
 # Build the binaries first
 echo -e "${BLUE}Building binaries...${NC}"
 # cargo build --bin ccos-chat-gateway --bin ccos-gateway-monitor --bin ccos-agent --release 2>&1 | tail -10
@@ -53,9 +57,10 @@ GATEWAY_PORT=8822
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_PORT}"
 
 echo -e "${YELLOW}Configuration:${NC}"
-echo "  Gateway URL: ${GATEWAY_URL}"
-echo "  Config file: config/agent_config.toml"
-echo "  LLM Enabled: ${CCOS_AGENT_ENABLE_LLM}"
+echo "  Gateway URL:      ${GATEWAY_URL}"
+echo "  Config file:      config/agent_config.toml"
+echo "  LLM Enabled:      ${CCOS_AGENT_ENABLE_LLM}"
+echo "  Causal chain DB:  ${CAUSAL_CHAIN_DB}"
 echo ""
 
 # Function to cleanup processes on exit
@@ -93,7 +98,8 @@ RUST_LOG=ccos=debug "$SCRIPT_DIR/../target/debug/ccos-chat-gateway" serve \
     --allow-channels "*" \
     --http-allow-hosts api.coingecko.com \
     --min-send-interval-ms 0 \
-    --mentions "@agent" > /tmp/gateway.log 2>&1 &
+    --mentions "@agent" \
+    --causal-chain-db "${CAUSAL_CHAIN_DB}" > /tmp/gateway.log 2>&1 &
 
 GATEWAY_PID=$!
 

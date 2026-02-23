@@ -19,8 +19,8 @@ pub struct FailureSummary {
     pub error_message: String,
     pub error_category: String,
     pub timestamp: u64,
-    pub plan_id: String,
-    pub intent_id: String,
+    pub plan_id: Option<String>,
+    pub intent_id: Option<String>,
 }
 
 /// Input for learning.get_failures

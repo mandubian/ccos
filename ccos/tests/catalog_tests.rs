@@ -68,6 +68,7 @@ fn sample_plan(plan_id: &str) -> Plan {
     Plan {
         plan_id: plan_id.to_string(),
         name: Some("List and filter issues".to_string()),
+        session_id: None,
         intent_ids: Vec::new(),
         language: PlanLanguage::Rtfs20,
         body: PlanBody::Rtfs("(plan ...)".to_string()),

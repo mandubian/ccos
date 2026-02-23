@@ -356,6 +356,7 @@ mod tests {
         Plan {
             plan_id: format!("plan_{}", uuid::Uuid::new_v4()),
             name: Some("Test Plan".to_string()),
+            session_id: None,
             intent_ids: vec![format!("intent_{}", uuid::Uuid::new_v4())],
             language: crate::types::PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs("(println \"Hello World\")".to_string()),

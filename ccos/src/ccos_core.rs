@@ -1066,6 +1066,7 @@ impl CCOS {
                 success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
                 parent_intent: None,
                 child_intents: vec![],
+                session_id: None,
                 triggered_by: crate::types::TriggerSource::HumanRequest,
                 generation_context: crate::types::GenerationContext {
                     arbiter_version: "delegating-1.0".to_string(),
@@ -1215,6 +1216,7 @@ impl CCOS {
                 success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
                 parent_intent: None,
                 child_intents: vec![],
+                session_id: None,
                 triggered_by: crate::types::TriggerSource::HumanRequest,
                 generation_context: crate::types::GenerationContext {
                     arbiter_version: "delegating-1.0".to_string(),
@@ -1356,6 +1358,7 @@ impl CCOS {
                 success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
                 parent_intent: None,
                 child_intents: vec![],
+                session_id: None,
                 triggered_by: crate::types::TriggerSource::HumanRequest,
                 generation_context: crate::types::GenerationContext {
                     arbiter_version: "delegating-1.0".to_string(),

@@ -390,6 +390,7 @@ impl DummyArbiter {
             plan_id: format!("dummy_plan_{}", uuid::Uuid::new_v4()),
             name: intent.name.clone(),
             intent_ids: vec![intent.intent_id.clone()],
+            session_id: None,
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(plan_body.trim().to_string()),
             status: PlanStatus::Draft,
@@ -440,6 +441,7 @@ impl DummyArbiter {
             success_criteria: intent.success_criteria.as_ref().map(|v| format!("{:?}", v)),
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "dummy-1.0".to_string(),
@@ -541,6 +543,7 @@ impl DummyArbiter {
             success_criteria: None,
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "dummy-graph-1.0".to_string(),

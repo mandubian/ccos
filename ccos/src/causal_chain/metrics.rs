@@ -231,17 +231,21 @@ impl CostTracker {
     pub fn record_action_cost(&mut self, action: &Action) {
         let cost = action.cost.unwrap_or(0.0);
 
-        // Track by intent
-        *self
-            .cost_by_intent
-            .entry(action.intent_id.clone())
-            .or_insert(0.0) += cost;
+        // Track by intent (only when the action is tied to one)
+        if let Some(intent_id) = &action.intent_id {
+            *self
+                .cost_by_intent
+                .entry(intent_id.clone())
+                .or_insert(0.0) += cost;
+        }
 
-        // Track by plan
-        *self
-            .cost_by_plan
-            .entry(action.plan_id.clone())
-            .or_insert(0.0) += cost;
+        // Track by plan (only when the action is tied to one)
+        if let Some(plan_id) = &action.plan_id {
+            *self
+                .cost_by_plan
+                .entry(plan_id.clone())
+                .or_insert(0.0) += cost;
+        }
 
         // Track by capability: Action does not have capability_id field, skip
     }

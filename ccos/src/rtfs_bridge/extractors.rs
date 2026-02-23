@@ -449,6 +449,7 @@ fn extract_plan_from_function_call(
     Ok(Plan {
         plan_id: format!("plan-{}", uuid::Uuid::new_v4()),
         name: Some(name),
+        session_id: None,
         intent_ids,
         language: crate::types::PlanLanguage::Rtfs20,
         body: crate::types::PlanBody::Rtfs(expression_to_rtfs_string(&body)),
@@ -553,6 +554,7 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
     Ok(Plan {
         plan_id: format!("plan-{}", uuid::Uuid::new_v4()),
         name: Some(name),
+        session_id: None,
         intent_ids,
         language: crate::types::PlanLanguage::Rtfs20,
         body: crate::types::PlanBody::Rtfs(expression_to_rtfs_string(&body)),

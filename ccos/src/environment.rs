@@ -518,7 +518,10 @@ impl CCOSEnvironment {
                                 .unwrap_or_else(|| format!("{:?}", a.action_type));
                             let mut content = format!(
                                 "type={:?}; plan={}; intent={}; ts={}",
-                                a.action_type, a.plan_id, a.intent_id, a.timestamp
+                                a.action_type,
+                                a.plan_id.as_deref().unwrap_or(""),
+                                a.intent_id.as_deref().unwrap_or(""),
+                                a.timestamp
                             );
                             if let Some(fn_name) = &a.function_name {
                                 content.push_str(&format!("; fn={}", fn_name));
@@ -543,8 +546,8 @@ impl CCOSEnvironment {
                                 timestamp_s: a.timestamp,
                                 summary,
                                 content,
-                                plan_id: Some(a.plan_id.clone()),
-                                intent_id: Some(a.intent_id.clone()),
+                                plan_id: a.plan_id.clone(),
+                                intent_id: a.intent_id.clone(),
                                 step_id: None,
                                 attestation_hash: att,
                                 content_hash: None,
@@ -1188,7 +1191,10 @@ impl CCOSEnvironment {
                 .unwrap_or_else(|| format!("{:?}", a.action_type));
             let mut content = format!(
                 "type={:?}; plan={}; intent={}; ts={}",
-                a.action_type, a.plan_id, a.intent_id, a.timestamp
+                a.action_type,
+                a.plan_id.as_deref().unwrap_or(""),
+                a.intent_id.as_deref().unwrap_or(""),
+                a.timestamp
             );
             if let Some(fn_name) = &a.function_name {
                 content.push_str(&format!("; fn={}", fn_name));
@@ -1213,8 +1219,8 @@ impl CCOSEnvironment {
                 timestamp_s: a.timestamp,
                 summary,
                 content,
-                plan_id: Some(a.plan_id.clone()),
-                intent_id: Some(a.intent_id.clone()),
+                plan_id: a.plan_id.clone(),
+                intent_id: a.intent_id.clone(),
                 step_id: None,
                 attestation_hash: att,
                 content_hash: None,

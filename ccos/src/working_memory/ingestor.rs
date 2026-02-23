@@ -158,7 +158,10 @@ impl WorkingMemorySink {
         let mut content = String::new();
         content.push_str(&format!(
             "type={:?}; plan={}; intent={}; ts={}",
-            action.action_type, action.plan_id, action.intent_id, action.timestamp
+            action.action_type,
+            action.plan_id.as_deref().unwrap_or(""),
+            action.intent_id.as_deref().unwrap_or(""),
+            action.timestamp
         ));
         if let Some(fn_name) = &action.function_name {
             content.push_str(&format!("; fn={}", fn_name));
@@ -180,8 +183,8 @@ impl WorkingMemorySink {
             timestamp_s: action.timestamp, // note: upstream may use ms; WM treats as opaque
             summary,
             content,
-            plan_id: Some(action.plan_id.clone()),
-            intent_id: Some(action.intent_id.clone()),
+            plan_id: action.plan_id.clone(),
+            intent_id: action.intent_id.clone(),
             step_id: None,
             attestation_hash: action.metadata.get("signature").and_then(|v| match v {
                 rtfs::runtime::values::Value::String(s) => Some(s.clone()),
@@ -298,10 +301,12 @@ mod tests {
         chain.record_result(a.clone(), result).unwrap();
 
         // Also log a plan lifecycle event, which also notifies sinks
+        let plan_id_str = a.plan_id.clone().unwrap_or_default();
+        let intent_id_str = a.intent_id.clone().unwrap_or_default();
         chain
             .log_plan_event(
-                &a.plan_id.clone(),
-                &a.intent_id.clone(),
+                &plan_id_str,
+                &intent_id_str,
                 ActionType::PlanStarted,
             )
             .unwrap();
