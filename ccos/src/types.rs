@@ -125,6 +125,7 @@ pub enum PlanLanguage {
 pub struct Plan {
     pub plan_id: PlanId,
     pub name: Option<String>,
+    pub session_id: Option<String>, // Session this plan belongs to
     pub intent_ids: Vec<IntentId>,
     pub language: PlanLanguage,
     pub body: PlanBody, // Flexible body representation
@@ -159,9 +160,9 @@ pub enum PlanBody {
 pub struct Action {
     pub action_id: ActionId,
     pub parent_action_id: Option<ActionId>,
-    pub session_id: Option<String>, // Session this action belongs to
-    pub plan_id: PlanId,
-    pub intent_id: IntentId,
+    pub session_id: Option<String>,   // Session this action belongs to
+    pub plan_id: Option<PlanId>,      // None for infra/system actions not tied to a plan
+    pub intent_id: Option<IntentId>,  // None for infra/system actions not tied to an intent
     pub action_type: ActionType,
     pub function_name: Option<String>, // e.g., step name, capability id
     pub arguments: Option<Vec<Value>>,
@@ -267,6 +268,7 @@ pub struct ExecutionResult {
 pub struct StorableIntent {
     pub intent_id: IntentId,
     pub name: Option<String>,
+    pub session_id: Option<String>, // Session this intent belongs to
     pub original_request: String,
     pub rtfs_intent_source: String, // Canonical RTFS intent form
     pub goal: String,
@@ -297,6 +299,7 @@ pub struct StorableIntent {
 pub struct RuntimeIntent {
     pub intent_id: IntentId,
     pub name: Option<String>,
+    pub session_id: Option<String>, // Session this intent belongs to
     pub original_request: String,
     pub rtfs_intent_source: String, // Canonical RTFS intent form
     pub goal: String,
@@ -403,6 +406,7 @@ impl Plan {
         Self {
             plan_id: format!("plan-{}", Uuid::new_v4()),
             name: None,
+            session_id: None,
             intent_ids,
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs_code),
@@ -448,6 +452,7 @@ impl Plan {
         Self {
             plan_id: format!("plan-{}", Uuid::new_v4()),
             name,
+            session_id: None,
             intent_ids,
             language: PlanLanguage::Rtfs20,
             body,
@@ -471,6 +476,7 @@ impl Default for Plan {
         Self {
             plan_id: format!("plan-{}", Uuid::new_v4()),
             name: None,
+            session_id: None,
             intent_ids: Vec::new(),
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(String::new()),
@@ -490,13 +496,18 @@ impl Default for Plan {
 }
 
 impl Action {
-    pub fn new(action_type: ActionType, plan_id: PlanId, intent_id: IntentId) -> Self {
+    /// Create an action with explicit plan and intent context.
+    pub fn new(
+        action_type: ActionType,
+        plan_id: impl Into<Option<PlanId>>,
+        intent_id: impl Into<Option<IntentId>>,
+    ) -> Self {
         Self {
             action_id: format!("action-{}", Uuid::new_v4()),
             parent_action_id: None,
             session_id: None,
-            plan_id,
-            intent_id,
+            plan_id: plan_id.into(),
+            intent_id: intent_id.into(),
             action_type,
             function_name: None,
             arguments: None,
@@ -509,6 +520,11 @@ impl Action {
                 .as_millis() as u64,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Create an infrastructure / system action not tied to any plan or intent.
+    pub fn new_system(action_type: ActionType) -> Self {
+        Self::new(action_type, None, None)
     }
 
     pub fn with_parent(mut self, parent_id: Option<String>) -> Self {
@@ -532,8 +548,8 @@ impl Action {
     }
 
     pub fn new_capability(
-        plan_id: PlanId,
-        intent_id: IntentId,
+        plan_id: impl Into<Option<PlanId>>,
+        intent_id: impl Into<Option<IntentId>>,
         name: &str,
         args: &[Value],
     ) -> Self {
@@ -594,6 +610,7 @@ impl StorableIntent {
         Self {
             intent_id: Uuid::new_v4().to_string(),
             name: None,
+            session_id: None,
             original_request: goal.clone(),
             rtfs_intent_source: String::new(),
             goal,
@@ -648,6 +665,7 @@ impl StorableIntent {
         Ok(RuntimeIntent {
             intent_id: self.intent_id.clone(),
             name: self.name.clone(),
+            session_id: self.session_id.clone(),
             original_request: self.original_request.clone(),
             rtfs_intent_source: self.rtfs_intent_source.clone(),
             goal: self.goal.clone(),
@@ -704,6 +722,7 @@ impl RuntimeIntent {
         Ok(StorableIntent {
             intent_id: self.intent_id.clone(),
             name: self.name.clone(),
+            session_id: self.session_id.clone(),
             original_request: self.original_request.clone(),
             rtfs_intent_source: self.rtfs_intent_source.clone(),
             goal: self.goal.clone(),
@@ -854,8 +873,8 @@ mod tests {
             "intent-1".to_string(),
         );
 
-        assert_eq!(action.plan_id, "plan-1");
-        assert_eq!(action.intent_id, "intent-1");
+        assert_eq!(action.plan_id.as_deref(), Some("plan-1"));
+        assert_eq!(action.intent_id.as_deref(), Some("intent-1"));
     }
 
     #[test]

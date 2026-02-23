@@ -71,6 +71,12 @@ pub struct ChatGatewayConfig {
     ///
     /// Defaults to "http://localhost:3000" for development.
     pub approval_ui_url: String,
+    /// Optional path to the SQLite database file for causal-chain persistence.
+    ///
+    /// When `Some`, actions are written to this file and reloaded on restart.
+    /// When `None`, the chain is kept in memory only (default).
+    /// The value can also be set via the `CCOS_CAUSAL_CHAIN_DB` environment variable.
+    pub causal_chain_db_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -869,7 +875,19 @@ impl ChatGateway {
             chrono::Duration::seconds(config.quarantine_default_ttl_seconds),
         )?) as Arc<dyn QuarantineStore>;
 
-        let chain = Arc::new(Mutex::new(CausalChain::new()?));
+        // Resolve the causal-chain db path: config field → env var → in-memory.
+        let db_path = config.causal_chain_db_path.clone().or_else(|| {
+            std::env::var("CCOS_CAUSAL_CHAIN_DB")
+                .ok()
+                .map(PathBuf::from)
+        });
+        let chain = Arc::new(Mutex::new(match db_path {
+            Some(ref p) => {
+                log::info!("[Gateway] Causal chain persistence: {}", p.display());
+                CausalChain::load_from_db(p)?
+            }
+            None => CausalChain::new()?,
+        }));
         let approvals = Some(UnifiedApprovalQueue::new(Arc::new(
             FileApprovalStorage::new(config.approvals_dir.clone()).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to init approval storage: {}", e))
@@ -2215,7 +2233,8 @@ async fn audit_handler(
     Ok(Json(ChatAuditResponse { events }))
 }
 
-/// Helper to record an audit event and evaluate completion predicates
+/// Helper to record an audit event and evaluate completion predicates.
+/// When the run exists, uses run.root_intent_id and run_id as plan_id for proper causal chain linkage.
 pub(crate) async fn record_run_event(
     state: &GatewayState,
     session_id: &str,
@@ -2224,10 +2243,20 @@ pub(crate) async fn record_run_event(
     event_type: &str,
     metadata: HashMap<String, Value>,
 ) -> RuntimeResult<()> {
+    let (plan_id, intent_id) = if let Ok(store) = state.run_store.lock() {
+        if let Some(run) = store.get_run(run_id) {
+            (run_id.to_string(), run.root_intent_id.clone())
+        } else {
+            ("chat".to_string(), "chat".to_string())
+        }
+    } else {
+        ("chat".to_string(), "chat".to_string())
+    };
+
     record_chat_audit_event(
         &state.chain,
-        "chat",
-        "chat",
+        &plan_id,
+        &intent_id,
         session_id,
         run_id,
         step_id,
@@ -3665,6 +3694,7 @@ async fn create_run_handler(
     }
 
     let run_id = run.id.clone();
+    let root_intent_id = run.root_intent_id.clone();
     let correlation_id = run.correlation_id.clone();
     let budget_audit = run.budget.clone();
     let state_str = format!("{:?}", run.state);
@@ -3710,6 +3740,10 @@ async fn create_run_handler(
         meta.insert(
             "rule_id".to_string(),
             Value::String("chat.run.create".to_string()),
+        );
+        meta.insert(
+            "root_intent_id".to_string(),
+            Value::String(root_intent_id),
         );
         meta.insert(
             "budget_max_steps".to_string(),
@@ -5179,8 +5213,8 @@ async fn agent_log_handler(
         action_id: action_id.clone(),
         parent_action_id: None,
         session_id: Some(payload.session_id.clone()),
-        plan_id,
-        intent_id: payload.run_id.clone(),
+        plan_id: Some(plan_id),
+        intent_id: Some(payload.run_id.clone()),
         action_type: crate::types::ActionType::AgentLlmConsultation,
         function_name: Some(format!(
             "agent.llm.{}",

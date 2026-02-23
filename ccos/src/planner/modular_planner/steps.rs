@@ -230,6 +230,7 @@ pub async fn step_store_intents(
         success_criteria: None,
         parent_intent: None,
         child_intents: vec![],
+        session_id: None,
         triggered_by: TriggerSource::HumanRequest,
         generation_context: GenerationContext {
             arbiter_version: "modular-planner-1.0".to_string(),
@@ -279,6 +280,7 @@ pub async fn step_store_intents(
             success_criteria: None,
             parent_intent: Some(root_id.clone()),
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::PlanExecution,
             generation_context: GenerationContext {
                 arbiter_version: "modular-planner-1.0".to_string(),

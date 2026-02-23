@@ -144,6 +144,7 @@ fn archive_plan(archive: &PlanArchive, plan_id: &str, intent_id: &str, rtfs_src:
         plan_id: plan_id.to_string(),
         name: Some("runtime demo plan".to_string()),
         intent_ids: vec![intent_id.to_string()],
+        session_id: None,
         language: PlanLanguage::Rtfs20,
         body: PlanBody::Rtfs(rtfs_src.to_string()),
         status: PlanStatus::Draft,

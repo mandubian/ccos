@@ -77,8 +77,8 @@ impl WmIngestionSink {
             timestamp_s: ts_s,
             summary,
             content,
-            plan_id: Some(action.plan_id.clone()),
-            intent_id: Some(action.intent_id.clone()),
+            plan_id: action.plan_id.clone(),
+            intent_id: action.intent_id.clone(),
             step_id: None, // Optionally populate if a step id is available via metadata
             attestation_hash,
             content_hash: None, // Let MemoryIngestor compute deterministic hash

@@ -1587,6 +1587,7 @@ impl Orchestrator {
             plan_id: archivable_plan.plan_id.clone(),
             name: archivable_plan.name.clone(),
             intent_ids: archivable_plan.intent_ids.clone(),
+            session_id: None,
             language: super::types::PlanLanguage::Rtfs20, // Default to RTFS 2.0
             body: super::types::PlanBody::Rtfs(plan_body),
             status: archivable_plan.status.clone(),
@@ -1655,20 +1656,24 @@ impl Orchestrator {
     /// This ensures causal chain consistency for replay
     pub fn validate_action_prerequisites(
         &self,
-        plan_id: &PlanId,
-        intent_id: &IntentId,
+        plan_id: Option<&PlanId>,
+        intent_id: Option<&IntentId>,
     ) -> RuntimeResult<()> {
-        // Validate plan exists in archive
-        if self.plan_archive.get_plan_by_id(plan_id).is_none() {
-            return Err(RuntimeError::Generic(format!(
-                "Plan {} referenced in action does not exist in PlanArchive - causal chain inconsistency",
-                plan_id
-            )));
+        // Validate plan exists in archive (when a plan is referenced)
+        if let Some(plan_id) = plan_id {
+            if self.plan_archive.get_plan_by_id(plan_id).is_none() {
+                return Err(RuntimeError::Generic(format!(
+                    "Plan {} referenced in action does not exist in PlanArchive - causal chain inconsistency",
+                    plan_id
+                )));
+            }
         }
 
-        // Validate intent exists (if provided)
-        if !intent_id.is_empty() {
-            self.ensure_intent_exists(intent_id)?;
+        // Validate intent exists (when an intent is referenced)
+        if let Some(intent_id) = intent_id {
+            if !intent_id.is_empty() {
+                self.ensure_intent_exists(intent_id)?;
+            }
         }
 
         Ok(())
@@ -1715,8 +1720,10 @@ impl Orchestrator {
         let mut referenced_intent_ids: std::collections::HashSet<String> =
             plan.intent_ids.iter().cloned().collect();
         for action in &actions {
-            if !action.intent_id.is_empty() {
-                referenced_intent_ids.insert(action.intent_id.clone());
+            if let Some(intent_id) = &action.intent_id {
+                if !intent_id.is_empty() {
+                    referenced_intent_ids.insert(intent_id.clone());
+                }
             }
         }
 
@@ -2202,7 +2209,7 @@ impl Orchestrator {
 
         if !skip_plan_validation {
             // Validate prerequisites before logging - ensures causal chain consistency
-            self.validate_action_prerequisites(&action.plan_id, &action.intent_id)?;
+            self.validate_action_prerequisites(action.plan_id.as_ref(), action.intent_id.as_ref())?;
         }
 
         let mut chain = self

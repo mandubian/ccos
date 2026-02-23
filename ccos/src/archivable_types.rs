@@ -175,8 +175,8 @@ impl Archivable for StorableIntent {
 pub struct ArchivableAction {
     pub action_id: String,
     pub parent_action_id: Option<String>,
-    pub plan_id: String,
-    pub intent_id: String,
+    pub plan_id: Option<String>,
+    pub intent_id: Option<String>,
     pub action_type: String, // Simplified as string
     pub status: String,      // Simplified as string
     pub created_at: u64,

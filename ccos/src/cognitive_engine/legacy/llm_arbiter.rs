@@ -444,6 +444,7 @@ Now generate the RTFS graph for this goal:"#;
             success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "llm-arbiter-1.0".to_string(),
@@ -566,6 +567,7 @@ impl CognitiveEngine for LlmArbiter {
             success_criteria: None,
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "llm-arbiter-1.0".to_string(),

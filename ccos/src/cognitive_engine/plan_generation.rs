@@ -239,6 +239,7 @@ impl PlanGenerationProvider for LlmRtfsPlanGenerationProvider {
             success_criteria: intent.success_criteria.as_ref().map(|v| format!("{}", v)),
             parent_intent: None,
             child_intents: vec![],
+            session_id: None,
             triggered_by: TriggerSource::HumanRequest,
             generation_context: GenerationContext {
                 arbiter_version: "llm-rtfs-provider-1.0".to_string(),

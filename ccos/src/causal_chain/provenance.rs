@@ -46,8 +46,8 @@ impl ProvenanceTracker {
 #[derive(Debug, Clone)]
 pub struct ActionProvenance {
     pub action_id: ActionId,
-    pub intent_id: IntentId,
-    pub plan_id: PlanId,
+    pub intent_id: Option<IntentId>,
+    pub plan_id: Option<PlanId>,
     pub capability_id: Option<CapabilityId>,
     pub execution_context: ExecutionContext,
     pub data_sources: Vec<String>,

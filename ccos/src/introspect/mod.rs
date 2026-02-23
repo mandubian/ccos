@@ -234,8 +234,8 @@ pub struct CausalChainInput {
 struct CausalChainAction {
     action_id: String,
     parent_action_id: Option<String>,
-    plan_id: String,
-    intent_id: String,
+    plan_id: Option<String>,
+    intent_id: Option<String>,
     action_type: String,
     function_name: Option<String>,
     timestamp: u64,
@@ -755,6 +755,7 @@ mod tests {
         let plan = Plan {
             plan_id: plan_id.to_string(),
             name: Some("test plan".to_string()),
+            session_id: None,
             intent_ids: vec!["intent1".to_string()],
             language: PlanLanguage::Rtfs20,
             body: PlanBody::Rtfs(rtfs.to_string()),

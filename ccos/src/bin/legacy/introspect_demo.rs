@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         plan_id: plan_id.clone(),
         name: Some("demo plan".to_string()),
         intent_ids: vec![intent_id.clone()],
+        session_id: None,
         language: PlanLanguage::Rtfs20,
         body: PlanBody::Rtfs(rtfs_src.to_string()),
         status: PlanStatus::Draft,

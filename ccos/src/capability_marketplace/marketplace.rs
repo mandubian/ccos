@@ -1146,8 +1146,8 @@ impl CapabilityMarketplace {
             let action = crate::types::Action {
                 action_id: uuid::Uuid::new_v4().to_string(),
                 session_id: None,
-                intent_id: "capability_marketplace".to_string(), // Use placeholder for capability events
-                plan_id: "capability_marketplace".to_string(), // Use placeholder for capability events
+                intent_id: None, // infrastructure event; not tied to a specific intent
+                plan_id: None,   // infrastructure event; not tied to a specific plan
                 action_type,
                 parent_action_id: None,
                 function_name: Some(capability_id.to_string()),
