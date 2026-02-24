@@ -25,4 +25,5 @@ pub use providers::firecracker::FirecrackerMicroVMProvider;
 pub use providers::gvisor::GvisorMicroVMProvider;
 pub use providers::mock::MockMicroVMProvider;
 pub use providers::process::ProcessMicroVMProvider;
+#[cfg(feature = "wasm-runtime")]
 pub use providers::wasm::WasmMicroVMProvider;

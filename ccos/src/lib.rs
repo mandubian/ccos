@@ -37,6 +37,7 @@ pub mod budget;
 pub mod catalog;
 pub mod causal_chain;
 pub mod checkpoint_archive;
+#[cfg(feature = "full")]
 pub mod cli;
 pub mod chat;
 pub mod config;

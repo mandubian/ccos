@@ -48,10 +48,12 @@ impl MicroVMFactory {
             self.register_provider("gvisor", Box::new(gvisor_provider));
         }
 
-        // Register WASM provider (if available)
-        let wasm_provider = crate::runtime::microvm::providers::wasm::WasmMicroVMProvider::new();
-        if wasm_provider.is_available() {
-            self.register_provider("wasm", Box::new(wasm_provider));
+        #[cfg(feature = "wasm-runtime")]
+        {
+            let wasm_provider = crate::runtime::microvm::providers::wasm::WasmMicroVMProvider::new();
+            if wasm_provider.is_available() {
+                self.register_provider("wasm", Box::new(wasm_provider));
+            }
         }
     }
 

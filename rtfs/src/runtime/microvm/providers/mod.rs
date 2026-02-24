@@ -4,6 +4,7 @@ pub mod firecracker;
 pub mod gvisor;
 pub mod mock;
 pub mod process;
+#[cfg(feature = "wasm-runtime")]
 pub mod wasm;
 
 use crate::runtime::error::RuntimeResult;

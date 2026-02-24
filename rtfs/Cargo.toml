@@ -13,6 +13,8 @@ default = ["pest", "regex"]
 pest = ["dep:pest", "dep:pest_derive"]
 # Regex-based intent extraction & validators
 regex = ["dep:regex"]
+# Optional Wasm runtime (wasmtime + WASI)
+wasm-runtime = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasi-common"]
 # REPL (line editing)
 repl = ["dep:rustyline"]
 # Local models with CUDA support
@@ -51,9 +53,9 @@ schemars = { workspace = true }
 toml = { workspace = true }
 jsonschema = { workspace = true }
 sha2 = { workspace = true }
-wasmtime = { workspace = true }
-wasmtime-wasi = { workspace = true }
-wasi-common = { workspace = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+wasi-common = { workspace = true, optional = true }
 flate2 = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }
