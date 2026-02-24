@@ -20,7 +20,7 @@ pub struct Skill {
     #[serde(default = "default_version")]
     pub version: String,
     /// Operations defined in this skill
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_operations")]
     pub operations: Vec<SkillOperation>,
     /// Required capability IDs that this skill uses
     pub capabilities: Vec<String>,
@@ -73,6 +73,69 @@ pub struct SkillOperation {
     pub input_schema: Option<rtfs::ast::TypeExpr>,
     #[serde(default)]
     pub output_schema: Option<rtfs::ast::TypeExpr>,
+}
+
+/// Custom deserializer for `operations` that handles both:
+/// - A YAML map: `operations: run: {command: python:run, description: ...}`
+/// - A YAML array: `operations: [{name: run, command: python:run, ...}]`
+fn deserialize_operations<'de, D>(deserializer: D) -> Result<Vec<SkillOperation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Intermediate struct for map-style operation values.
+    #[derive(Debug, Deserialize)]
+    struct OpMapValue {
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        endpoint: Option<String>,
+        #[serde(default)]
+        method: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        runtime: Option<String>,
+        #[serde(default)]
+        input_schema: Option<rtfs::ast::TypeExpr>,
+        #[serde(default)]
+        output_schema: Option<rtfs::ast::TypeExpr>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OperationsRepr {
+        /// Array of SkillOperation (has `name` field)
+        Array(Vec<SkillOperation>),
+        /// Map of operation_name → {command, description, ...}
+        Map(HashMap<String, OpMapValue>),
+    }
+
+    match OperationsRepr::deserialize(deserializer) {
+        Ok(OperationsRepr::Array(ops)) => Ok(ops),
+        Ok(OperationsRepr::Map(map)) => {
+            let mut ops: Vec<SkillOperation> = map
+                .into_iter()
+                .map(|(name, v)| SkillOperation {
+                    name,
+                    description: v.description,
+                    endpoint: v.endpoint,
+                    method: v.method,
+                    command: v.command,
+                    runtime: v.runtime,
+                    input_schema: v.input_schema,
+                    output_schema: v.output_schema,
+                })
+                .collect();
+            // Sort by name for deterministic ordering
+            ops.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(ops)
+        }
+        Err(_) => {
+            // If neither format matches, default to empty.
+            // This mirrors the previous `#[serde(default)]` behavior.
+            Ok(Vec::new())
+        }
+    }
 }
 
 fn default_version() -> String {

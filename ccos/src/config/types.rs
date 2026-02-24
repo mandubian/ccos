@@ -494,6 +494,9 @@ pub struct StoragePathsConfig {
     /// Subdirectory for generated/synthesized capabilities within capabilities_dir
     #[serde(default = "default_generated_subdir")]
     pub generated_subdir: String,
+    /// Subdirectory for learned/generated skills within capabilities_dir
+    #[serde(default = "default_learned_subdir")]
+    pub learned_subdir: String,
     /// Subdirectory for approved server capabilities within capabilities_dir
     #[serde(default = "default_servers_approved_subdir")]
     pub servers_approved_subdir: String,
@@ -514,6 +517,10 @@ fn default_capabilities_dir() -> String {
 
 fn default_generated_subdir() -> String {
     "generated".to_string()
+}
+
+fn default_learned_subdir() -> String {
+    "learned".to_string()
 }
 
 fn default_servers_approved_subdir() -> String {
@@ -537,6 +544,7 @@ impl Default for StoragePathsConfig {
         Self {
             capabilities_dir: default_capabilities_dir(),
             generated_subdir: default_generated_subdir(),
+            learned_subdir: default_learned_subdir(),
             servers_approved_subdir: default_servers_approved_subdir(),
             pending_synth_subdir: default_pending_synth_subdir(),
             approvals_dir: default_approvals_dir(),

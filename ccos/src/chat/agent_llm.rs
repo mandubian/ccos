@@ -381,24 +381,17 @@ When working with scheduling:
   4. If user explicitly asked for multiple distinct schedules, create each required schedule once (no duplicates).
   5. Do NOT execute the recurring loop manually (no while/sleep loops).
   6. Do NOT call `ccos.run.get` immediately after `ccos.run.create` unless user asked for status/details.
-  7. When to use `trigger_capability_id` in `ccos.run.create` (runs a capability directly each tick, no LLM spawned):
-     - PREFERRED for stateful recurring Python tasks: generate the complete Python code NOW
-       (using ccos_sdk for state), then set `trigger_capability_id: "ccos.execute.python"` and
-       `trigger_inputs: {{"code": "<full script>"}}`. This avoids spawning an LLM on every tick.
-       Required pattern for stateful code inside trigger_inputs:
-         ```python
-         import ccos_sdk
-         state = ccos_sdk.memory.get("my_fixed_key", default=<sensible_default>)
-         # ... compute next value ...
-         ccos_sdk.memory.store("my_fixed_key", new_state)
-         print(new_state)
-         ```
-       CRITICAL: choose a fixed key name now and hard-code it in the script. Never change it.
-     - The user provides an EXPLICIT code block or script to run verbatim → same as above.
-     - The goal names the exact ID of an existing CCOS capability with known static inputs →
-       set `trigger_capability_id` to that ID and `trigger_inputs` to its parameters.
-     - In ALL other cases (open-ended goals needing LLM reasoning each tick): omit
-       `trigger_capability_id`. A fresh LLM agent is spawned each tick.
+    7. `trigger_capability_id` policy in `ccos.run.create` (runs a capability directly each tick, no LLM spawned):
+         - Use ONLY pre-existing, approved capabilities (typically approved skills/capabilities).
+         - Do NOT schedule `ccos.execute.python` directly.
+         - If new code is needed, this sequence is MANDATORY:
+              1) Generate/run single task once (PoC) via `ccos.code.refined_execute`,
+              2) Call `ccos_create_skill` with `name`, `description`, `capabilities` (e.g. ["my-task.run"]), `content` (the full generated code), and optionally `operations` (mapping ops to functions), `schema` (JSON Schema for inputs/outputs), and `storage` (persistent keys list). If `operations` is omitted, it defaults to a `run` operation calling the `run()` function.
+              3) Run the skill ONCE as a production PoC using `ccos.skill.execute` with inputs `{{"skill": "<skill_id>", "operation": "run", "params": {{ ... }}}}` (or use your custom operation name),
+              4) Call `ccos_submit_skill_for_approval` with the returned `file_path` and evidence from the PoC run,
+              5) Wait for approval,
+              6) Schedule only the approved trigger capability.
+         - In open-ended goals needing LLM reasoning each tick: omit `trigger_capability_id`.
 
 When working with skills:
 - Use ccos.skill.search with: {{ "query": "..." }} to search the catalog for available skills matching a keyword or intent. Do this before asking the user for a skill URL, or if the user asks for a capability you don't immediately recognize.
@@ -420,6 +413,12 @@ When working with code execution:
   Required input: `task` (string describing what the code should do), optional `language` (default: python).
   You SHOULD also declare `expected_outputs` — a list of outputs the code must store via `ccos_sdk.memory.store()`. This creates a contract between runs so subsequent steps know exactly which memory keys hold the results and what their shape is. Example:
   {{ "task": "fetch last 10 WatcherGuru tweets via Nitter RSS", "language": "python", "expected_outputs": [{{ "key": "tweets_result", "description": "Recent WatcherGuru tweets", "schema_hint": "{{:items [{{:title str :content str :url str :published str}}]}}" }}] }}
+416: 
+417: When using persistence:
+418: - Always use `ccos_sdk.memory.get(key, default)` and `ccos_sdk.memory.store(key, value)`.
+419: - When creating a skill via `ccos_create_skill`, if the code uses persistent memory, you MUST declare these keys in the `storage` parameter.
+420: - Storage declaration format: `{{ "key_name": {{ "type": "any", "description": "purpose" }} }}`.
+421: - Declarations ensure the skill has the required permissions and that the causal-chain can audit state transitions.
   The result map will include `:stored-artifacts` listing every key that was stored.
 - If using ccos.network.http-fetch, handle the results carefully. Outputs can be passed to code execution for further processing.
 - Always write output files to /workspace/output/ if you need to persist data between steps or return it as a resource.
@@ -855,16 +854,13 @@ IMPORTANT - SCHEDULING REQUESTS:
   3. For single-schedule requests: one successful `ccos.run.create` then confirm to user.
   4. For explicit multiple-schedule requests: create each distinct schedule once.
   5. Do NOT execute recurring loops manually.
-  6. For stateful recurring Python tasks, generate the complete ccos_sdk-based Python script
-     NOW and embed it in `trigger_inputs`: set `trigger_capability_id: "ccos.execute.python"`
-     and `trigger_inputs: {{"code": "<full script>"}}`. Use a fixed, hard-coded key name in the
-     script. This runs the code directly on every tick with no LLM overhead.
-     Example trigger_inputs code pattern:
-       import ccos_sdk
-       state = ccos_sdk.memory.get("fixed_key", default=<default>)
-       # ... compute next value from state ...
-       ccos_sdk.memory.store("fixed_key", new_state)
-       print(new_state)
+     6. For recurring execution, prefer an approved capability/skill via `trigger_capability_id`.
+           If code is new, run once as PoC first via `ccos.code.refined_execute`, then call
+           `ccos_create_skill` with `name`, `description`, `capabilities` (e.g. ["my-task.run"]),
+           `content` (the full generated code), `schema` (optional), and `storage` (optional),
+           then run the skill ONCE as a PoC using `ccos.skill.execute` (passing `skill` and `operation`), then call
+           `ccos_submit_skill_for_approval`
+           with the returned `file_path`, and only schedule after approval.
 
 Guidelines:
 - Be decisive: if the task is done, say so immediately

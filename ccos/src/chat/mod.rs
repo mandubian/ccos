@@ -2453,8 +2453,8 @@ pub async fn register_chat_capabilities(
                                     match queue.add_network_approval(
                                         "ccos.execute.python".to_string(),
                                         req_hosts,
-                                        session_id,
-                                        run_id,
+                                        session_id.clone(),
+                                        run_id.clone(),
                                     ).await {
                                         Ok(approval_id) => {
                                             let hosts_msg = if final_allowed_hosts.contains(&"*".to_string()) { "ALL HOSTS".to_string() } else { final_allowed_hosts.join(", ") };
@@ -2477,46 +2477,55 @@ pub async fn register_chat_capabilities(
                     // we statically extract imports via Regex, filter out stdlib, and batch request them upfront.
                     let mut missing_packages = Vec::new();
                     if let Some(queue) = &approval_queue {
+                        // Combine detected imports and explicit dependencies for approval check
+                        let stdlib = std::collections::HashSet::from([
+                            "os", "sys", "time", "datetime", "json", "re", "math", "random",
+                            "itertools", "functools", "collections", "hashlib", "hmac",
+                            "base64", "urllib", "http", "socket", "ssl", "asyncio", "threading",
+                            "multiprocessing", "subprocess", "logging", "typing", "pathlib",
+                            "shutil", "glob", "tempfile", "sqlite3", "csv", "xml", "html",
+                            "uuid", "secrets", "dataclasses", "enum", "inspect", "ast",
+                            "traceback", "copy", "pickle", "zlib", "gzip", "tarfile", "zipfile",
+                            "argparse", "unittest", "mock", "warnings", "contextlib", "io",
+                            // We also ignore 'ccos_sdk' since it's injected
+                            "ccos_sdk",
+                        ]);
+
+                        let mut all_required_modules = std::collections::HashSet::new();
+                        
+                        // Add explicitly requested dependencies
+                        for dep in &dependencies {
+                            // Extract base package name if version is specified for basic check
+                            let base_pkg = dep.split(|c| c == '=' || c == '<' || c == '>' || c == '~').next().unwrap_or(dep).trim();
+                            all_required_modules.insert(base_pkg.to_string());
+                        }
+
                         use regex::Regex;
                         // Regex matches `import X`, `import X as Y`, `import X, Y`, `from X import Y`
                         if let Ok(re) = Regex::new(r"(?m)^(?:from\s+([a-zA-Z0-9_]+)(?:\.[a-zA-Z0-9_]+)*\s+import|import\s+([a-zA-Z0-9_]+))") {
-                            let stdlib = std::collections::HashSet::from([
-                                "os", "sys", "time", "datetime", "json", "re", "math", "random",
-                                "itertools", "functools", "collections", "hashlib", "hmac",
-                                "base64", "urllib", "http", "socket", "ssl", "asyncio", "threading",
-                                "multiprocessing", "subprocess", "logging", "typing", "pathlib",
-                                "shutil", "glob", "tempfile", "sqlite3", "csv", "xml", "html",
-                                "uuid", "secrets", "dataclasses", "enum", "inspect", "ast",
-                                "traceback", "copy", "pickle", "zlib", "gzip", "tarfile", "zipfile",
-                                "argparse", "unittest", "mock", "warnings", "contextlib", "io",
-                                // We also ignore 'ccos_sdk' since it's injected
-                                "ccos_sdk",
-                            ]);
-
-                            let mut detected_imports = std::collections::HashSet::new();
                             for caps in re.captures_iter(&code) {
                                 // Match group 1 is `from X`, group 2 is `import X`
                                 if let Some(m) = caps.get(1).or_else(|| caps.get(2)) {
                                     let module_name = m.as_str().split('.').next().unwrap_or(m.as_str());
-                                    detected_imports.insert(module_name.to_string());
+                                    all_required_modules.insert(module_name.to_string());
                                 }
                             }
+                        }
 
-                            for module in detected_imports {
-                                if !stdlib.contains(module.as_str()) && !dependencies.contains(&module) {
-                                    // If the module is in the config auto_approved list the DependencyManager
-                                    // will install it automatically — no queue approval needed.
-                                    let auto_approved = &sandbox_cfg.package_allowlist.auto_approved;
-                                    if auto_approved.iter().any(|a| a.to_lowercase() == module.to_lowercase()) {
-                                        log::debug!("[ccos.execute.python] Static check: {} is in auto_approved config, skipping approval gate.", module);
-                                        continue;
-                                    }
-                                    // Check if it's already approved via the persistent queue.
-                                    if !queue.is_package_approved(&module, "python").await.unwrap_or(false) {
-                                        missing_packages.push(module);
-                                    } else {
-                                        log::debug!("[ccos.execute.python] Static check: {} is already approved.", module);
-                                    }
+                        for module in all_required_modules {
+                            if !stdlib.contains(module.as_str()) {
+                                // If the module is in the config auto_approved list the DependencyManager
+                                // will install it automatically — no queue approval needed.
+                                let auto_approved = &sandbox_cfg.package_allowlist.auto_approved;
+                                if auto_approved.iter().any(|a| a.to_lowercase() == module.to_lowercase()) {
+                                    log::debug!("[ccos.execute.python] Static check: {} is in auto_approved config, skipping approval gate.", module);
+                                    continue;
+                                }
+                                // Check if it's already approved via the persistent queue.
+                                if !queue.is_package_approved(&module, "python").await.unwrap_or(false) {
+                                    missing_packages.push(module);
+                                } else {
+                                    log::debug!("[ccos.execute.python] Static check: {} is already approved.", module);
                                 }
                             }
                         }
@@ -4537,7 +4546,7 @@ mod tests {
         // It should return an error with a retry hint or containing "requires approval"
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.err().unwrap());
-        assert!(err_msg.contains("requires approval") || err_msg.contains("hint"));
+        assert!(err_msg.contains("unapproved packages") || err_msg.contains("requires approval") || err_msg.contains("hint"));
         
         // Verify that a package approval request was created in the queue
         let pending = approval_queue.list_pending_packages().await.unwrap();

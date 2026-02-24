@@ -49,7 +49,7 @@ use ccos::synthesis::mcp_introspector::MCPIntrospector;
 use ccos::ops::server_discovery_pipeline::{PipelineTarget, ServerDiscoveryPipeline};
 use futures::future::BoxFuture;
 use ccos::types::StorableIntent;
-use ccos::utils::fs::get_workspace_root;
+use ccos::utils::fs::{get_configured_learned_path, get_workspace_root, sanitize_filename};
 use ccos::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use ccos::mcp::session::{
     create_session_store, save_session, Session, SessionStore,
@@ -60,6 +60,181 @@ use rtfs::runtime::security::RuntimeContext;
 use ccos::working_memory::{
     AgentMemory, InMemoryJsonlBackend, LearnedPattern, WorkingMemory,
 };
+
+#[derive(Clone)]
+struct SkillApprovalAutoActivator {
+    skill_mapper: Arc<tokio::sync::Mutex<ccos::skills::SkillMapper>>,
+}
+
+impl SkillApprovalAutoActivator {
+    async fn activate_for_capability(&self, capability_id: &str) -> Result<(), String> {
+        let learned_dir = get_configured_learned_path();
+        if !learned_dir.exists() {
+            return Ok(());
+        }
+
+        let mut entries = tokio::fs::read_dir(&learned_dir)
+            .await
+            .map_err(|e| format!("Failed to read learned dir: {}", e))?;
+
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to iterate learned dir: {}", e))?
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if ext != "md" && ext != "yaml" && ext != "yml" {
+                continue;
+            }
+
+            let content = match tokio::fs::read_to_string(&path).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let parsed = match ccos::skills::loader::load_skill_from_content(
+                &format!("file://{}", path.display()),
+                &content,
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let skill_id = parsed.skill.id.clone();
+            let matches = parsed.skill.capabilities.iter().any(|c| c == capability_id)
+                || parsed
+                    .capabilities_to_register
+                    .iter()
+                    .any(|c| c == capability_id)
+                || capability_id == skill_id
+                || capability_id.starts_with(&format!("{}.", skill_id));
+
+            if !matches {
+                continue;
+            }
+
+            let source_hint = format!("file://{}", path.display());
+            let mut mapper = self.skill_mapper.lock().await;
+            if mapper.get_skill(&skill_id).is_some() {
+                return Ok(());
+            }
+
+            match mapper.load_from_content(&content, &source_hint).await {
+                Ok(_) => {
+                    eprintln!(
+                        "[ccos-mcp] Auto-activated approved skill '{}' from {}",
+                        skill_id,
+                        path.display()
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.to_lowercase().contains("already") {
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "Failed to activate approved skill '{}' from {}: {}",
+                        skill_id,
+                        path.display(),
+                        e
+                    ));
+                }
+            }
+        }
+
+        Err(format!(
+            "No learned skill file found matching approved capability '{}'",
+            capability_id
+        ))
+    }
+}
+
+#[async_trait]
+impl ccos::approval::ApprovalConsumer for SkillApprovalAutoActivator {
+    async fn on_approval_requested(&self, _request: &ccos::approval::ApprovalRequest) {}
+
+    async fn on_approval_resolved(&self, request: &ccos::approval::ApprovalRequest) {
+        if !request.status.is_approved() {
+            return;
+        }
+
+        match &request.category {
+            ccos::approval::ApprovalCategory::SynthesisApproval { capability_id, .. } => {
+                if let Err(e) = self.activate_for_capability(capability_id).await {
+                    eprintln!(
+                        "[ccos-mcp] Warning: approved skill auto-activation failed for '{}': {}",
+                        capability_id, e
+                    );
+                }
+            }
+            ccos::approval::ApprovalCategory::EffectApproval { capability_id, effects, .. } if effects.iter().any(|e| e == "skill.approval") => {
+                if let Err(e) = self.activate_for_capability(capability_id).await {
+                    eprintln!(
+                        "[ccos-mcp] Warning: approved skill auto-activation failed for '{}': {}",
+                        capability_id, e
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn reload_approved_learned_skills(
+    approval_queue: &UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
+    skill_mapper: Arc<tokio::sync::Mutex<ccos::skills::SkillMapper>>,
+) {
+    let approvals = match approval_queue.list(Default::default()).await {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[ccos-mcp] Warning: cannot list approvals for startup reload: {}", e);
+            return;
+        }
+    };
+
+    let approved_caps: std::collections::HashSet<String> = approvals
+        .into_iter()
+        .filter(|r| r.status.is_approved())
+        .filter_map(|r| match r.category {
+            ccos::approval::ApprovalCategory::SynthesisApproval { capability_id, .. } => {
+                Some(capability_id)
+            }
+            ccos::approval::ApprovalCategory::EffectApproval { capability_id, effects, .. } if effects.iter().any(|e| e == "skill.approval") => {
+                Some(capability_id)
+            }
+            _ => None,
+        })
+        .collect();
+
+    if approved_caps.is_empty() {
+        return;
+    }
+
+    let activator = SkillApprovalAutoActivator { skill_mapper };
+    let mut loaded = 0usize;
+    for cap_id in approved_caps {
+        if activator.activate_for_capability(&cap_id).await.is_ok() {
+            loaded += 1;
+        }
+    }
+
+    if loaded > 0 {
+        eprintln!(
+            "[ccos-mcp] Startup auto-reload activated {} approved learned skill(s)",
+            loaded
+        );
+    }
+}
 
 // ============================================================================
 // RTFS Teaching Tools Constants
@@ -650,6 +825,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         queue
     };
+
+    // Auto-activate approved synthesized skills when approvals resolve.
+    approval_queue
+        .add_consumer(Arc::new(SkillApprovalAutoActivator {
+            skill_mapper: skill_mapper.clone(),
+        }))
+        .await;
+
+    // Startup reload: restore approved learned skills from disk into runtime registry.
+    reload_approved_learned_skills(&approval_queue, skill_mapper.clone()).await;
 
     // Create MCP server with tool handlers
     let mut server = MCPServer::new("ccos", env!("CARGO_PKG_VERSION"));
@@ -1516,6 +1701,310 @@ fn register_ccos_tools(
         handler,
     );
 
+    // ccos_create_skill
+    let sm_create = skill_mapper.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let sm = sm_create.clone();
+        Box::pin(async move {
+            let name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "name is required".to_string())?;
+            let description = params
+                .get("description")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "description is required".to_string())?;
+            let content = params
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "content is required".to_string())?;
+            let safe_name = sanitize_filename(name).to_lowercase();
+            let skill_id = safe_name.replace('_', "-");
+
+            let mut capabilities: Vec<String> = params
+                .get("capabilities")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut operations = params.get("operations").cloned();
+
+            if capabilities.is_empty() {
+                capabilities.push(format!("{}.run", skill_id));
+            }
+
+            // Default to an operation derived from the capabilities list if none provided or explicitly null
+            if operations.is_none() || matches!(operations, Some(serde_json::Value::Null)) {
+                let first_cap = capabilities.first().expect("capabilities is not empty");
+                let op_name = first_cap.split('.').last().unwrap_or("run").to_lowercase().replace('_', "-");
+                operations = Some(json!({
+                    op_name: {
+                        "description": description,
+                        "command": "python:run"
+                    }
+                }));
+            }
+
+            let run_poc_first = params
+                .get("run_poc_first")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let schema = params.get("schema");
+            let storage = params.get("storage");
+
+            let learned_dir = get_configured_learned_path();
+            tokio::fs::create_dir_all(&learned_dir)
+                .await
+                .map_err(|e| format!("Failed to create learned skills directory: {}", e))?;
+
+            let file_path = learned_dir.join(format!("{}.md", safe_name));
+
+            let escaped_name = name.replace('"', "\\\"");
+            let escaped_description = description.replace('"', "\\\"");
+
+            let mut doc = String::new();
+            doc.push_str("---\n");
+            doc.push_str(&format!("id: {}\n", skill_id));
+            doc.push_str(&format!("name: \"{}\"\n", escaped_name));
+            doc.push_str(&format!("description: \"{}\"\n", escaped_description));
+            doc.push_str("version: \"1.0.0\"\n");
+            doc.push_str("capabilities:\n");
+            for cap in &capabilities {
+                doc.push_str(&format!("  - {}\n", cap));
+            }
+            doc.push_str("approval:\n");
+            doc.push_str("  required: true\n");
+            doc.push_str("  mode: Once\n");
+            if let Some(s) = schema {
+                if let Ok(yaml) = serde_yaml::to_string(s) {
+                    doc.push_str("schema:\n");
+                    for line in yaml.trim().lines() {
+                        if line == "---" || line == "..." { continue; }
+                        doc.push_str(&format!("  {}\n", line));
+                    }
+                }
+            }
+            if let Some(s) = storage {
+                if let Ok(yaml) = serde_yaml::to_string(s) {
+                    doc.push_str("storage:\n");
+                    for line in yaml.trim().lines() {
+                        if line == "---" || line == "..." { continue; }
+                        doc.push_str(&format!("  {}\n", line));
+                    }
+                }
+            }
+
+            if let Some(ops) = &operations {
+                if let Ok(yaml) = serde_yaml::to_string(ops) {
+                    doc.push_str("operations:\n");
+                    for line in yaml.trim().lines() {
+                        if line == "---" || line == "..." { continue; }
+                        doc.push_str(&format!("  {}\n", line));
+                    }
+                }
+            }
+
+            doc.push_str("instructions: |\n");
+            for line in description.lines() {
+                doc.push_str(&format!("  {}\n", line));
+            }
+            doc.push_str("---\n\n");
+            doc.push_str(content);
+
+            tokio::fs::write(&file_path, &doc)
+                .await
+                .map_err(|e| format!("Failed to write skill file: {}", e))?;
+
+            let mut mapper = sm.lock().await;
+            let loaded = mapper
+                .load_from_content(&doc, &format!("file://{}", file_path.display()))
+                .await
+                .map_err(|e| format!("Failed to register generated skill: {}", e))?;
+
+            let primary_capability = loaded
+                .capabilities_to_register
+                .first()
+                .cloned()
+                .or_else(|| loaded.skill.capabilities.first().cloned())
+                .unwrap_or_else(|| format!("{}.run", skill_id));
+
+            if run_poc_first {
+                return Ok(json!({
+                    "success": true,
+                    "status": "draft_ready_for_poc",
+                    "skill_id": loaded.skill.id,
+                    "file_path": file_path.display().to_string(),
+                    "primary_capability": primary_capability,
+                    "message": "Skill generated and loaded. Run it once as PoC, then call ccos_submit_skill_for_approval.",
+                    "next_steps": [
+                        "Execute the generated capability once with ccos_execute_capability.",
+                        "Then call ccos_submit_skill_for_approval with file_path and optional poc_summary."
+                    ]
+                }));
+            }
+
+            Ok(json!({
+                "success": true,
+                "status": "draft_loaded",
+                "skill_id": loaded.skill.id,
+                "file_path": file_path.display().to_string(),
+                "primary_capability": primary_capability,
+                "message": "Skill generated and loaded. Submit it for approval with ccos_submit_skill_for_approval."
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_create_skill",
+        "Create a generated skill file in the configured learned skills directory and load it for PoC execution. Default flow: run once as PoC, then submit for admin approval.",
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Skill name" },
+                "description": { "type": "string", "description": "Short skill description" },
+                "capabilities": { "type": "array", "items": { "type": "string" }, "description": "Base capability IDs this skill exposes" },
+                "content": { "type": "string", "description": "Markdown content/body for the skill" },
+                "operations": { "type": "object", "description": "Operations mapping for the skill" },
+                "schema": { "type": "object", "description": "JSON Schema for the skill inputs/outputs" },
+                "storage": { "type": "object", "description": "Storage keys declaration for the skill" },
+                "run_poc_first": { "type": "boolean", "default": true, "description": "If true (default), returns a PoC-first workflow before approval submission" }
+            },
+            "required": ["name", "description", "capabilities", "content"]
+        }),
+        handler.clone(),
+    );
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos.skill.create",
+        "Create a generated skill file in the configured learned skills directory and load it for PoC execution.",
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Skill name" },
+                "description": { "type": "string", "description": "Short skill description" },
+                "capabilities": { "type": "array", "items": { "type": "string" }, "description": "Base capability IDs this skill exposes" },
+                "content": { "type": "string", "description": "Markdown content/body for the skill" },
+                "run_poc_first": { "type": "boolean", "default": true, "description": "If true (default), returns a PoC-first workflow before approval submission" }
+            },
+            "required": ["name", "description", "capabilities", "content"]
+        }),
+        handler,
+    );
+
+    // ccos_submit_skill_for_approval
+    let sm_submit = skill_mapper.clone();
+    let aq_submit = approval_queue.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let sm = sm_submit.clone();
+        let aq = aq_submit.clone();
+        Box::pin(async move {
+            let file_path = params
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "file_path is required".to_string())?;
+            let capability_id_override = params
+                .get("capability_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let poc_summary = params
+                .get("poc_summary")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let content = tokio::fs::read_to_string(file_path)
+                .await
+                .map_err(|e| format!("Failed to read skill file: {}", e))?;
+
+            let mut mapper = sm.lock().await;
+            let loaded = mapper
+                .load_from_content(&content, &format!("file://{}", file_path))
+                .await
+                .map_err(|e| format!("Failed to load generated skill: {}", e))?;
+
+            let capability_id = capability_id_override
+                .or_else(|| loaded.capabilities_to_register.first().cloned())
+                .or_else(|| loaded.skill.capabilities.first().cloned())
+                .ok_or_else(|| "Unable to resolve capability_id from generated skill".to_string())?;
+
+            let generated_code = if let Some(summary) = &poc_summary {
+                format!(";; PoC Summary: {}\n{}", summary, content)
+            } else {
+                content
+            };
+
+            let request = ccos::approval::types::ApprovalRequest::new(
+                ccos::approval::types::ApprovalCategory::SynthesisApproval {
+                    capability_id: capability_id.clone(),
+                    generated_code,
+                    is_pure: false,
+                },
+                RiskAssessment {
+                    level: RiskLevel::Medium,
+                    reasons: vec!["Generated skill submitted after PoC run".to_string()],
+                },
+                24 * 7,
+                Some(format!(
+                    "Generated skill '{}' submitted for admin approval",
+                    loaded.skill.id
+                )),
+            );
+
+            let approval_id = request.id.clone();
+            aq.add(request)
+                .await
+                .map_err(|e| format!("Failed to queue approval request: {}", e))?;
+
+            Ok(json!({
+                "success": true,
+                "status": "pending_approval",
+                "approval_id": approval_id,
+                "skill_id": loaded.skill.id,
+                "capability_id": capability_id,
+                "file_path": file_path,
+                "message": "Skill submitted for admin approval. Once approved, it can be safely reused in scheduled tasks."
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_submit_skill_for_approval",
+        "Submit a generated skill (after one PoC run) to admin approval using SynthesisApproval.",
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": { "type": "string", "description": "Path to the generated skill file" },
+                "capability_id": { "type": "string", "description": "Optional override capability id for approval linking" },
+                "poc_summary": { "type": "string", "description": "Optional summary/evidence from the one-shot PoC run" }
+            },
+            "required": ["file_path"]
+        }),
+        handler.clone(),
+    );
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos.skill.submit_for_approval",
+        "Submit a generated skill (after one PoC run) to admin approval using SynthesisApproval.",
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": { "type": "string", "description": "Path to the generated skill file" },
+                "capability_id": { "type": "string", "description": "Optional override capability id for approval linking" },
+                "poc_summary": { "type": "string", "description": "Optional summary/evidence from the one-shot PoC run" }
+            },
+            "required": ["file_path"]
+        }),
+        handler,
+    );
+
     // ccos_skill_load
     let sm_load = skill_mapper.clone();
     let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
@@ -1574,11 +2063,36 @@ fn register_ccos_tools(
         let sm = sm_exec.clone();
         let mp = mp_exec.clone();
         Box::pin(async move {
-            let skill_id = params.get("skill_id").and_then(|v| v.as_str())
+            let get_control_val = |key: &str| {
+                let mut keys = vec![key.to_string()];
+                if key == "skill_id" { keys.push("skill".to_string()); }
+                if key == "operation" { keys.push("op".to_string()); keys.push("action".to_string()); }
+
+                for k in &keys {
+                    if let Some(v) = params.get(k).and_then(|v| v.as_str()) { return Some(v.to_string()); }
+                }
+
+                // Try nested
+                for nested_key in &["params", "parameters", "inputs"] {
+                    if let Some(inner) = params.get(nested_key).and_then(|v| v.as_object()) {
+                        for k in &keys {
+                            if let Some(v) = inner.get(k).and_then(|v| v.as_str()) { return Some(v.to_string()); }
+                        }
+                    }
+                }
+                None
+            };
+
+            let skill_id = get_control_val("skill_id")
                 .ok_or_else(|| "skill_id is required".to_string())?;
-            let operation = params.get("operation").and_then(|v| v.as_str())
+            let operation = get_control_val("operation")
                 .ok_or_else(|| "operation is required".to_string())?;
-            let args = params.get("params").unwrap_or(&json!({})).clone();
+            
+            let args = params.get("params")
+                .or_else(|| params.get("parameters"))
+                .or_else(|| params.get("inputs"))
+                .unwrap_or(&json!({}))
+                .clone();
             
             // Execute via marketplace (using the registered capability ID: skill_id.operation)
             let cap_id = if operation.contains('.') { operation.to_string() } else { format!("{}.{}", skill_id, operation) };
@@ -4688,4 +5202,203 @@ fn infer_api_query_from_intent(intent: &str) -> String {
     // Build query from found domains
     found_domains.truncate(2);
     found_domains.join(" ") + " API service"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ccos::approval::storage_file::FileApprovalStorage;
+    use ccos::approval::{ApprovalAuthority, ApprovalCategory, ApprovalFilter};
+    use ccos::capabilities::registry::CapabilityRegistry;
+    use ccos::capability_marketplace::types::{ApprovalStatus, CapabilityManifest, NativeCapability, ProviderType};
+    use ccos::utils::fs::set_workspace_root;
+    use rtfs::ast::MapKey;
+    use rtfs::runtime::error::RuntimeResult;
+    use rtfs::runtime::values::Value;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::RwLock;
+    use futures::future::BoxFuture;
+
+    static TEST_ENV_LOCK: once_cell::sync::Lazy<Mutex<()>> =
+        once_cell::sync::Lazy::new(|| Mutex::new(()));
+
+    async fn register_mock_http_fetch(marketplace: Arc<CapabilityMarketplace>) {
+        let handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync> =
+            Arc::new(|_inputs: &Value| {
+                Box::pin(async move {
+                    Ok(Value::Map(HashMap::from([
+                        (
+                            MapKey::String("body".to_string()),
+                            Value::String("{\"ok\":true}".to_string()),
+                        ),
+                        (MapKey::String("status".to_string()), Value::Integer(200)),
+                    ])))
+                })
+            });
+
+        let mut manifest = CapabilityManifest::new(
+            "ccos.network.http-fetch".to_string(),
+            "HTTP Fetch".to_string(),
+            "Mock HTTP fetch".to_string(),
+            ProviderType::Native(NativeCapability {
+                handler,
+                security_level: "test".to_string(),
+                metadata: HashMap::new(),
+            }),
+            "1.0.0".to_string(),
+        );
+        manifest.approval_status = ApprovalStatus::AutoApproved;
+
+        marketplace
+            .register_capability_manifest(manifest)
+            .await
+            .expect("register mock http-fetch");
+    }
+
+    #[tokio::test]
+    async fn approved_skill_reload_and_execute_chain_works() {
+        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let caps_dir = tmp.path().join("capabilities");
+        std::fs::create_dir_all(&caps_dir).expect("create capabilities dir");
+
+        let _ = set_workspace_root(tmp.path().to_path_buf());
+
+        std::env::set_var("CCOS_CAPABILITY_STORAGE", caps_dir.to_string_lossy().to_string());
+
+        let learned_dir = get_configured_learned_path();
+        std::fs::create_dir_all(&learned_dir).expect("create learned dir");
+
+                let skill_markdown = r#"# Basic Skill
+
+Basic reloadable skill.
+
+## Fetch
+
+Fetch via curl.
+
+```bash
+curl https://example.com
+```
+"#;
+
+                let skill_file = learned_dir.join("basic-skill.md");
+                std::fs::write(&skill_file, skill_markdown).expect("write skill file");
+
+        // Runtime 1: submit+approve synthesis request (simulates post-PoC approved skill)
+        let registry1 = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace1 = Arc::new(CapabilityMarketplace::new(registry1));
+        register_mock_http_fetch(marketplace1.clone()).await;
+
+        let mapper1 = Arc::new(tokio::sync::Mutex::new(ccos::skills::SkillMapper::new(
+            marketplace1.clone(),
+        )));
+
+        {
+            let mut m = mapper1.lock().await;
+            let loaded = m
+                .load_from_content(skill_markdown, &format!("file://{}", skill_file.display()))
+                .await
+                .expect("initial load from content");
+            assert_eq!(loaded.skill.id, "basic-skill");
+            assert!(m.get_skill("basic-skill").is_some());
+        }
+
+        let approvals_storage = Arc::new(
+            FileApprovalStorage::new(tmp.path().join("approvals")).expect("approval storage"),
+        );
+        let approval_queue = UnifiedApprovalQueue::new(approvals_storage);
+
+        let request = ccos::approval::ApprovalRequest::new(
+            ccos::approval::ApprovalCategory::SynthesisApproval {
+                capability_id: "basic-skill.fetch".to_string(),
+                generated_code: skill_markdown.to_string(),
+                is_pure: false,
+            },
+            RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec!["test".to_string()],
+            },
+            24,
+            Some("integration test".to_string()),
+        );
+        let approval_id = request.id.clone();
+        approval_queue.add(request).await.expect("add approval");
+        approval_queue
+            .approve(
+                &approval_id,
+                ApprovalAuthority::User("test".to_string()),
+                Some("approved".to_string()),
+            )
+            .await
+            .expect("approve synthesis approval");
+
+        // Runtime 2 (restart): empty mapper + startup reload of approved skills
+        let registry2 = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace2 = Arc::new(CapabilityMarketplace::new(registry2));
+        register_mock_http_fetch(marketplace2.clone()).await;
+
+        let mapper2 = Arc::new(tokio::sync::Mutex::new(ccos::skills::SkillMapper::new(
+            marketplace2.clone(),
+        )));
+
+        reload_approved_learned_skills(&approval_queue, mapper2.clone()).await;
+
+        {
+            let m = mapper2.lock().await;
+            assert!(
+                m.get_skill("basic-skill").is_some(),
+                "approved skill should be reloaded on startup"
+            );
+        }
+
+        let pending_effects = approval_queue
+            .list(ApprovalFilter {
+                category_type: Some("EffectApproval".to_string()),
+                status_pending: Some(true),
+                ..Default::default()
+            })
+            .await
+            .expect("list pending effect approvals");
+
+        for req in pending_effects {
+            if let ApprovalCategory::EffectApproval { capability_id, .. } = &req.category {
+                if capability_id == "basic-skill.fetch" {
+                    approval_queue
+                        .approve(
+                            &req.id,
+                            ApprovalAuthority::User("test".to_string()),
+                            Some("approve execution for test".to_string()),
+                        )
+                        .await
+                        .expect("approve effect approval for skill capability");
+                }
+            }
+        }
+
+        let result = marketplace2
+            .execute_capability(
+                "basic-skill.fetch",
+                &Value::Map(HashMap::from([(
+                    MapKey::String("url".to_string()),
+                    Value::String("https://example.com".to_string()),
+                )])),
+            )
+            .await
+            .expect("execute reloaded skill capability");
+
+        let body = match result {
+            Value::Map(map) => map
+                .get(&MapKey::String("body".to_string()))
+                .and_then(|v| v.as_string())
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        };
+        assert_eq!(body, "{\"ok\":true}");
+
+        std::env::remove_var("CCOS_CAPABILITY_STORAGE");
+    }
 }

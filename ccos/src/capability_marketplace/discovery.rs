@@ -397,12 +397,12 @@ impl CapabilityDiscovery for LocalFileDiscoveryAgent {
 }
 
 pub struct LocalSkillDiscoveryAgent {
-    pub(crate) discovery_path: std::path::PathBuf,
+    pub(crate) discovery_paths: Vec<std::path::PathBuf>,
 }
 
 impl LocalSkillDiscoveryAgent {
-    pub fn new(discovery_path: std::path::PathBuf) -> Self {
-        Self { discovery_path }
+    pub fn new(discovery_paths: Vec<std::path::PathBuf>) -> Self {
+        Self { discovery_paths }
     }
 }
 
@@ -415,53 +415,73 @@ impl CapabilityDiscovery for LocalSkillDiscoveryAgent {
         // We do *not* return capabilities. Instead we directly push Skills into the catalog!
         if let Some(mp) = marketplace {
             if let Some(catalog) = mp.get_catalog().await {
-                if let Ok(entries) = std::fs::read_dir(&self.discovery_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() {
-                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                            if ext == "md" || ext == "yaml" || ext == "yml" {
-                                if let Ok(content) = std::fs::read_to_string(&path) {
-                                    let url = format!("file://{}", path.display());
-                                    // Parse just the frontmatter using the permissive parser
-                                    match crate::skills::loader::load_skill_from_content(
-                                        &url, &content,
-                                    ) {
-                                        Ok(loaded) => {
-                                            let skill_id = loaded.skill.id.clone();
+                for discovery_path in &self.discovery_paths {
+                    if let Ok(entries) = std::fs::read_dir(discovery_path) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                                if ext == "md" || ext == "yaml" || ext == "yml" {
+                                    if let Ok(content) = std::fs::read_to_string(&path) {
+                                        let url = format!("file://{}", path.display());
+                                        match crate::skills::loader::load_skill_from_content(
+                                            &url, &content,
+                                        ) {
+                                            Ok(loaded) => {
+                                                let skill_id = loaded.skill.id.clone();
 
-                                            // Extract tags if present in description or name
-                                            let mut tags = Vec::new();
-                                            if loaded
-                                                .skill
-                                                .description
-                                                .to_lowercase()
-                                                .contains("agent")
-                                            {
-                                                tags.push("agent".to_string());
+                                                // Extract tags if present in description or name
+                                                let mut tags = Vec::new();
+                                                if loaded
+                                                    .skill
+                                                    .description
+                                                    .to_lowercase()
+                                                    .contains("agent")
+                                                {
+                                                    tags.push("agent".to_string());
+                                                }
+
+                                                catalog
+                                                    .register_skill(
+                                                        skill_id,
+                                                        Some(loaded.skill.name.clone()),
+                                                        Some(loaded.skill.description.clone()),
+                                                        Some(url.clone()),
+                                                        tags,
+                                                        crate::catalog::CatalogSource::Discovered,
+                                                    )
+                                                    .await;
+
+                                                // Register the executable capabilities into the marketplace
+                                                let mut mapper =
+                                                    crate::skills::SkillMapper::new(mp.clone());
+                                                mapper.register_skill(loaded.skill.clone());
+                                                if let Err(e) = mapper
+                                                    .register_skill_capabilities(
+                                                        &loaded.skill,
+                                                        Some(url.as_str()),
+                                                    )
+                                                    .await
+                                                {
+                                                    log::warn!(
+                                                        "LocalSkillDiscoveryAgent failed to register capabilities for {}: {:?}",
+                                                        url,
+                                                        e
+                                                    );
+                                                }
+
+                                                log::info!(
+                                                    "LocalSkillDiscoveryAgent registered skill: {}",
+                                                    url
+                                                );
                                             }
-
-                                            catalog
-                                                .register_skill(
-                                                    skill_id,
-                                                    Some(loaded.skill.name.clone()),
-                                                    Some(loaded.skill.description.clone()),
-                                                    Some(url.clone()),
-                                                    tags,
-                                                    crate::catalog::CatalogSource::Discovered,
-                                                )
-                                                .await;
-                                            log::info!(
-                                                "LocalSkillDiscoveryAgent registered skill: {}",
-                                                url
-                                            );
-                                        }
-                                        Err(e) => {
-                                            log::warn!(
-                                                "LocalSkillDiscoveryAgent failed to parse {}: {:?}",
-                                                path.display(),
-                                                e
-                                            );
+                                            Err(e) => {
+                                                log::warn!(
+                                                    "LocalSkillDiscoveryAgent failed to parse {}: {:?}",
+                                                    path.display(),
+                                                    e
+                                                );
+                                            }
                                         }
                                     }
                                 }
