@@ -1,0 +1,27 @@
+[package]
+name = "ccos-chat-cli"
+version.workspace = true
+edition.workspace = true
+description = "CCOS Chat TUI client - minimal dependency surface"
+license.workspace = true
+
+[[bin]]
+name = "ccos-chat"
+path = "src/main.rs"
+
+[dependencies]
+ccos = { path = "../ccos", default-features = false, features = ["chat-cli-runtime"] }
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+crossterm = "0.27"
+futures = "0.3"
+ratatui = "0.26"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+textwrap = "0.16"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+toml = "0.8"
+tracing = "0.1"

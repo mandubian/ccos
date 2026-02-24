@@ -1,0 +1,18 @@
+[package]
+name = "ccos-gateway"
+version.workspace = true
+edition.workspace = true
+description = "CCOS Chat Gateway binary - minimal dependency surface"
+license.workspace = true
+
+[[bin]]
+name = "ccos-chat-gateway"
+path = "src/main.rs"
+
+[dependencies]
+ccos = { path = "../ccos", default-features = false, features = ["gateway-runtime"] }
+clap = { version = "4.0", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs"] }
