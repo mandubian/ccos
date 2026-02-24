@@ -1249,6 +1249,13 @@ impl ChatGateway {
         )
         .await?;
 
+        // Register native capabilities (ccos.cli.*, ccos.llm.*)
+        crate::ops::native::register_native_capabilities(&marketplace).await?;
+        // Register filesystem capabilities (ccos.fs.*)
+        crate::ops::native::register_fs_capabilities(&marketplace).await?;
+        // Register sandbox capabilities (ccos.sandbox.*)
+        crate::capabilities::register_sandbox_ops_capabilities(Arc::clone(&marketplace)).await?;
+
         // Load coding_agents and sandbox config from agent config file so that
         // profile overrides in agent_config.toml are respected at runtime.
         let (sandbox_cfg, coding_agents_cfg) = {
