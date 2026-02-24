@@ -261,7 +261,7 @@ pub async fn register_skill_capabilities(
     let primitive_map_handler = Arc::new(move |input: &Value| {
         let payload: PrimitiveMapInput = parse_payload("ccos.primitive.map", input)?;
         let mapper = PrimitiveMapper::new();
-        if let Some(mapped) = mapper.map_command(&payload.command) {
+        if let Some(mapped) = mapper.map_command(&payload.command, None) {
             let output = PrimitiveMapOutput {
                 capability_id: mapped.capability_id,
                 params: mapped.params,

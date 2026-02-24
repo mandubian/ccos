@@ -125,9 +125,9 @@ pub fn load_skill_from_content(url: &str, content: &str) -> Result<LoadedSkillIn
 /// Fetch content from URL using reqwest
 async fn fetch_url_content(url: &str) -> Result<String, LoadError> {
     if let Some(path) = url.strip_prefix("file://") {
-        return tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| LoadError::Network(format!("Failed to read local file '{}': {}", path, e)));
+        return tokio::fs::read_to_string(path).await.map_err(|e| {
+            LoadError::Network(format!("Failed to read local file '{}': {}", path, e))
+        });
     }
 
     let client = reqwest::Client::builder()
@@ -206,7 +206,14 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
         if let Some(end_idx) = lines.iter().skip(1).position(|&l| l.trim() == "---") {
             let frontmatter: String = lines[1..=end_idx].join("\n");
             // Try to parse frontmatter as skill YAML
-            if let Ok(skill) = parse_skill_yaml(&frontmatter) {
+            if let Ok(mut skill) = parse_skill_yaml(&frontmatter) {
+                let body = lines[end_idx + 2..].join("\n");
+                let trimmed_body = body.trim();
+                if !trimmed_body.is_empty() {
+                    skill
+                        .metadata
+                        .insert("source_code".to_string(), trimmed_body.to_string());
+                }
                 return Ok(skill);
             }
         }

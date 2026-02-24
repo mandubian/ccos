@@ -66,7 +66,11 @@ impl PrimitiveMapper {
     }
 
     /// Map a command to a CCOS capability
-    pub fn map_command(&self, command: &str) -> Option<MappedCapability> {
+    pub fn map_command(
+        &self,
+        command: &str,
+        context_code: Option<&str>,
+    ) -> Option<MappedCapability> {
         let trimmed = command.trim();
         let first_word_raw = trimmed.split_whitespace().next()?;
         let first_word = first_word_raw.split(':').next().unwrap_or(first_word_raw);
@@ -81,11 +85,12 @@ impl PrimitiveMapper {
         };
 
         // Extract parameters based on command type
-        let (params, confidence, explanation) = match first_word {
+        let (mut params, confidence, explanation) = match first_word {
             "curl" => self.parse_curl_command(trimmed),
             "wget" => self.parse_wget_command(trimmed),
             "python" | "python3" => self.parse_python_command(trimmed),
             "jq" => self.parse_jq_command(trimmed),
+            "node" | "npm" | "npx" => self.parse_node_command(trimmed),
             "GET" | "POST" | "PUT" | "DELETE" => self.parse_http_command(trimmed),
             _ => (
                 HashMap::new(),
@@ -93,6 +98,16 @@ impl PrimitiveMapper {
                 format!("Mapped {} to {}", first_word, capability_id),
             ),
         };
+
+        // If the command is a run variant (like python:run or node:run) and context_code is provided, default to injecting it
+        if let Some(code) = context_code {
+            if first_word_raw.ends_with(":run") {
+                params.insert(
+                    "code".to_string(),
+                    serde_json::Value::String(code.to_string()),
+                );
+            }
+        }
 
         Some(MappedCapability {
             capability_id: capability_id.to_string(),
@@ -224,7 +239,7 @@ impl PrimitiveMapper {
                     "code".to_string(),
                     serde_json::Value::String(parts[2..].join(" ")),
                 );
-            } else {
+            } else if !parts[0].ends_with(":run") {
                 params.insert(
                     "script".to_string(),
                     serde_json::Value::String(parts[1].to_string()),
@@ -236,6 +251,35 @@ impl PrimitiveMapper {
             params,
             0.85,
             "python → ccos.sandbox.python (sandboxed execution)".to_string(),
+        )
+    }
+
+    /// Parse node command
+    fn parse_node_command(
+        &self,
+        command: &str,
+    ) -> (HashMap<String, serde_json::Value>, f64, String) {
+        let mut params = HashMap::new();
+
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.len() > 1 {
+            if parts[1] == "-e" && parts.len() > 2 {
+                params.insert(
+                    "code".to_string(),
+                    serde_json::Value::String(parts[2..].join(" ")),
+                );
+            } else if !parts[0].ends_with(":run") {
+                params.insert(
+                    "script".to_string(),
+                    serde_json::Value::String(parts[1].to_string()),
+                );
+            }
+        }
+
+        (
+            params,
+            0.85,
+            "node → ccos.sandbox.node (sandboxed execution)".to_string(),
         )
     }
 
@@ -358,7 +402,7 @@ mod tests {
     fn test_curl_mapping() {
         let mapper = PrimitiveMapper::new();
 
-        let result = mapper.map_command("curl -X POST https://api.example.com/v1/search -H 'Content-Type: application/json' -d '{\"query\": \"test\"}'");
+        let result = mapper.map_command("curl -X POST https://api.example.com/v1/search -H 'Content-Type: application/json' -d '{\"query\": \"test\"}'", None);
         assert!(result.is_some());
 
         let mapped = result.unwrap();
@@ -374,7 +418,7 @@ mod tests {
     fn test_simple_curl() {
         let mapper = PrimitiveMapper::new();
 
-        let result = mapper.map_command("curl https://httpbin.org/get");
+        let result = mapper.map_command("curl https://httpbin.org/get", None);
         assert!(result.is_some());
 
         let mapped = result.unwrap();
@@ -389,7 +433,7 @@ mod tests {
     fn test_python_mapping() {
         let mapper = PrimitiveMapper::new();
 
-        let result = mapper.map_command("python script.py");
+        let result = mapper.map_command("python script.py", None);
         assert!(result.is_some());
         assert_eq!(result.unwrap().capability_id, "ccos.sandbox.python");
     }
@@ -398,7 +442,7 @@ mod tests {
     fn test_jq_mapping() {
         let mapper = PrimitiveMapper::new();
 
-        let result = mapper.map_command("jq '.data.items[]'");
+        let result = mapper.map_command("jq '.data.items[]'", None);
         assert!(result.is_some());
 
         let mapped = result.unwrap();
@@ -413,7 +457,7 @@ mod tests {
     fn test_unknown_command() {
         let mapper = PrimitiveMapper::new();
 
-        let result = mapper.map_command("ffmpeg -i input.mp4 output.avi");
+        let result = mapper.map_command("ffmpeg -i input.mp4 output.avi", None);
         assert!(result.is_none()); // Unknown, should route to sandbox
     }
 

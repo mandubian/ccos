@@ -2167,7 +2167,7 @@ fn register_ccos_tools(
                 .ok_or_else(|| "command is required".to_string())?;
             
             let mapper = ccos::skills::PrimitiveMapper::new();
-            if let Some(mapped) = mapper.map_command(command) {
+            if let Some(mapped) = mapper.map_command(command, None) {
                 Ok(json!({
                     "capability_id": mapped.capability_id,
                     "params": mapped.params,
