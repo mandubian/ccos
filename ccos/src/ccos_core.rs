@@ -362,6 +362,9 @@ impl CCOS {
         crate::ops::native::register_native_capabilities(&capability_marketplace).await?;
         // Register filesystem capabilities (ccos.fs.*)
         crate::ops::native::register_fs_capabilities(&capability_marketplace).await?;
+        // Register sandbox capabilities (ccos.sandbox.*)
+        crate::capabilities::register_sandbox_ops_capabilities(Arc::clone(&capability_marketplace))
+            .await?;
 
         // 2. Initialize architectural components, injecting dependencies
         let plan_archive = Arc::new(match plan_archive_path {
