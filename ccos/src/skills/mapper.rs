@@ -354,8 +354,9 @@ impl SkillMapper {
 
             if let Some(cmd) = &op.command {
                 if let Some((first_cmd, second_cmd)) = split_pipeline(cmd) {
-                    if let Some(first_mapped) = primitive_mapper.map_command(first_cmd) {
-                        if let Some(second_mapped) = primitive_mapper.map_command(second_cmd) {
+                    if let Some(first_mapped) = primitive_mapper.map_command(first_cmd, None) {
+                        if let Some(second_mapped) = primitive_mapper.map_command(second_cmd, None)
+                        {
                             if first_mapped.capability_id == "ccos.network.http-fetch"
                                 && second_mapped.capability_id == "ccos.json.parse"
                             {
@@ -391,7 +392,7 @@ impl SkillMapper {
 
                                         let inputs = &inputs_cloned;
                                         let first_mapped = primitive_mapper
-                                            .map_command(&first_cmd)
+                                            .map_command(&first_cmd, None)
                                             .ok_or_else(|| {
                                                 RuntimeError::Generic(format!(
                                                     "Operation {}.{} has no valid command mapping",
@@ -492,7 +493,12 @@ impl SkillMapper {
                         }
                     }
                 }
-                if let Some(mapped) = primitive_mapper.map_command(cmd) {
+                let context_code = skill
+                    .metadata
+                    .get("source_code")
+                    .unwrap_or(&skill.instructions)
+                    .clone();
+                if let Some(mapped) = primitive_mapper.map_command(cmd, Some(&context_code)) {
                     metadata.insert("delegated_to".to_string(), mapped.capability_id.clone());
 
                     // Create handler for this capability
@@ -501,6 +507,7 @@ impl SkillMapper {
                     let op_name = op.name.clone();
                     let skill_id = skill.id.clone();
                     let skill_secrets = skill.secrets.clone();
+                    let context_code_for_handler = context_code.clone();
                     let cap_id_for_handler = cap_id.clone();
 
                     let handler = Arc::new(move |inputs: &Value| {
@@ -508,6 +515,7 @@ impl SkillMapper {
                         let command = command.clone();
                         let op_name = op_name.clone();
                         let skill_id = skill_id.clone();
+                        let context_code = context_code_for_handler.clone();
                         let primitive_mapper = PrimitiveMapper::new();
                         let skill_secrets = skill_secrets.clone();
                         let cap_id = cap_id_for_handler.clone();
@@ -520,7 +528,9 @@ impl SkillMapper {
                             let inputs = &inputs_cloned;
                             // 1. If we have a command, map it to a primitive
                             if let Some(cmd) = command {
-                                if let Some(mapped) = primitive_mapper.map_command(&cmd) {
+                                if let Some(mapped) =
+                                    primitive_mapper.map_command(&cmd, Some(&context_code))
+                                {
                                     // Merge inputs with mapped params
                                     let final_params = mapped.params.clone();
 
@@ -678,53 +688,75 @@ async fn check_approval_status(capability_id: &str) -> RuntimeResult<()> {
     };
     let queue = UnifiedApprovalQueue::new(std::sync::Arc::new(storage));
 
-    // Check for pending EffectApproval for this capability
-    let pending = queue
-        .list(ApprovalFilter {
-            category_type: Some("EffectApproval".to_string()),
-            status_pending: Some(true),
-            ..Default::default()
-        })
+    // Fetch all requests for this capability to check for redundancy
+    let all_requests = queue
+        .list(ApprovalFilter::default())
         .await
         .unwrap_or_default();
 
-    for req in pending {
-        if let ApprovalCategory::EffectApproval {
-            capability_id: ref cap_id,
-            ..
-        } = req.category
-        {
-            if cap_id == capability_id {
-                return Err(RuntimeError::Generic(format!(
-                    "Capability '{}' requires approval before execution (pending approval ID: {})",
-                    capability_id, req.id
-                )));
+    let relevant_requests: Vec<_> = all_requests
+        .into_iter()
+        .filter(|r| match &r.category {
+            ApprovalCategory::EffectApproval {
+                capability_id: id, ..
+            } => id == capability_id,
+            ApprovalCategory::SecretRequired {
+                capability_id: id, ..
+            } => id == capability_id,
+            _ => false,
+        })
+        .collect();
+
+    // Check EffectApproval
+    for req in &relevant_requests {
+        if let ApprovalCategory::EffectApproval { effects, .. } = &req.category {
+            if req.status.is_pending() {
+                // Check if there is an approved version with same effects
+                let already_approved = relevant_requests.iter().any(|r| {
+                    if let ApprovalCategory::EffectApproval {
+                        effects: approved_effects,
+                        ..
+                    } = &r.category
+                    {
+                        approved_effects == effects && r.status.is_approved()
+                    } else {
+                        false
+                    }
+                });
+
+                if !already_approved {
+                    return Err(RuntimeError::Generic(format!(
+                        "Capability '{}' requires approval before execution (pending approval ID: {})",
+                        capability_id, req.id
+                    )));
+                }
             }
         }
     }
 
-    // Check for pending SecretRequired for this capability
-    let pending_secrets = queue
-        .list(ApprovalFilter {
-            category_type: Some("SecretRequired".to_string()),
-            status_pending: Some(true),
-            ..Default::default()
-        })
-        .await
-        .unwrap_or_default();
+    // Check SecretRequired
+    for req in &relevant_requests {
+        if let ApprovalCategory::SecretRequired { secret_type, .. } = &req.category {
+            if req.status.is_pending() {
+                // Check if there is an approved version with same secret
+                let already_approved = relevant_requests.iter().any(|r| {
+                    if let ApprovalCategory::SecretRequired {
+                        secret_type: approved_secret,
+                        ..
+                    } = &r.category
+                    {
+                        approved_secret == secret_type && r.status.is_approved()
+                    } else {
+                        false
+                    }
+                });
 
-    for req in pending_secrets {
-        if let ApprovalCategory::SecretRequired {
-            capability_id: ref cap_id,
-            secret_type,
-            ..
-        } = req.category
-        {
-            if cap_id == capability_id {
-                return Err(RuntimeError::Generic(format!(
-                    "Capability '{}' requires secret '{}' approval before execution (pending approval ID: {})",
-                    capability_id, secret_type, req.id
-                )));
+                if !already_approved {
+                    return Err(RuntimeError::Generic(format!(
+                        "Capability '{}' requires secret '{}' approval before execution (pending approval ID: {})",
+                        capability_id, secret_type, req.id
+                    )));
+                }
             }
         }
     }
@@ -838,17 +870,48 @@ async fn ensure_skill_approvals(
         queue
     };
 
-    let mut context = format!(
+    let mut context_str = format!(
         "skill_id={} skill_name={} operation={}",
         skill.id, skill.name, capability_id
     );
     if let Some(url) = source_url {
-        context.push_str(&format!(" source_url={}", url));
+        context_str.push_str(&format!(" source_url={}", url));
     }
-    context.push_str(&format!(" command={}", command));
+    context_str.push_str(&format!(" command={}", command));
+
+    // Fetch all requests and filter in-memory since ApprovalFilter doesn't support capability_id
+    let all_requests = queue
+        .list(ApprovalFilter::default())
+        .await
+        .unwrap_or_default();
+
+    let existing_requests: Vec<_> = all_requests
+        .into_iter()
+        .filter(|r| match &r.category {
+            ApprovalCategory::EffectApproval {
+                capability_id: id, ..
+            } => id == capability_id,
+            ApprovalCategory::SecretRequired {
+                capability_id: id, ..
+            } => id == capability_id,
+            _ => false,
+        })
+        .collect();
 
     if !skill.secrets.is_empty() {
         for secret in &skill.secrets {
+            let already_exists = existing_requests.iter().any(|r| {
+                if let ApprovalCategory::SecretRequired { secret_type, .. } = &r.category {
+                    secret_type == secret && (r.status.is_pending() || r.status.is_approved())
+                } else {
+                    false
+                }
+            });
+
+            if already_exists {
+                continue;
+            }
+
             let request = ApprovalRequest::new(
                 ApprovalCategory::SecretRequired {
                     capability_id: capability_id.to_string(),
@@ -860,7 +923,7 @@ async fn ensure_skill_approvals(
                     reasons: vec!["Skill requires secret".to_string()],
                 },
                 24,
-                Some(context.clone()),
+                Some(context_str.clone()),
             );
             queue.add(request).await.map_err(|e| {
                 SkillError::Execution(format!("Failed to enqueue secret approval: {}", e))
@@ -869,47 +932,69 @@ async fn ensure_skill_approvals(
     }
 
     if skill.approval.required {
-        let effects = if skill.effects.is_empty() {
-            vec!["skill.approval".to_string()]
-        } else {
-            skill.effects.clone()
-        };
-        let request = ApprovalRequest::new(
-            ApprovalCategory::EffectApproval {
-                capability_id: capability_id.to_string(),
-                effects,
-                intent_description: format!("Skill '{}' requires approval", skill.name),
-            },
-            RiskAssessment {
-                level: RiskLevel::Medium,
-                reasons: vec!["Skill flagged for approval".to_string()],
-            },
-            24,
-            Some(context.clone()),
-        );
-        queue
-            .add(request)
-            .await
-            .map_err(|e| SkillError::Execution(format!("Failed to enqueue approval: {}", e)))?;
+        let already_exists = existing_requests.iter().any(|r| {
+            if let ApprovalCategory::EffectApproval { effects, .. } = &r.category {
+                effects.contains(&"skill.approval".to_string())
+                    && (r.status.is_pending() || r.status.is_approved())
+            } else {
+                false
+            }
+        });
+
+        if !already_exists {
+            let effects = if skill.effects.is_empty() {
+                vec!["skill.approval".to_string()]
+            } else {
+                skill.effects.clone()
+            };
+            let request = ApprovalRequest::new(
+                ApprovalCategory::EffectApproval {
+                    capability_id: capability_id.to_string(),
+                    effects,
+                    intent_description: format!("Skill '{}' requires approval", skill.name),
+                },
+                RiskAssessment {
+                    level: RiskLevel::Medium,
+                    reasons: vec!["Skill flagged for approval".to_string()],
+                },
+                24,
+                Some(context_str.clone()),
+            );
+            queue
+                .add(request)
+                .await
+                .map_err(|e| SkillError::Execution(format!("Failed to enqueue approval: {}", e)))?;
+        }
     }
 
     if sandboxed_unknown {
-        let request = ApprovalRequest::new(
-            ApprovalCategory::EffectApproval {
-                capability_id: capability_id.to_string(),
-                effects: vec!["sandbox".to_string()],
-                intent_description: "Unknown tool requires sandboxed execution".to_string(),
-            },
-            RiskAssessment {
-                level: RiskLevel::High,
-                reasons: vec!["Unknown tool routed to sandbox".to_string()],
-            },
-            24,
-            Some(context),
-        );
-        queue.add(request).await.map_err(|e| {
-            SkillError::Execution(format!("Failed to enqueue sandbox approval: {}", e))
-        })?;
+        let already_exists = existing_requests.iter().any(|r| {
+            if let ApprovalCategory::EffectApproval { effects, .. } = &r.category {
+                effects.contains(&"sandbox".to_string())
+                    && (r.status.is_pending() || r.status.is_approved())
+            } else {
+                false
+            }
+        });
+
+        if !already_exists {
+            let request = ApprovalRequest::new(
+                ApprovalCategory::EffectApproval {
+                    capability_id: capability_id.to_string(),
+                    effects: vec!["sandbox".to_string()],
+                    intent_description: "Unknown tool requires sandboxed execution".to_string(),
+                },
+                RiskAssessment {
+                    level: RiskLevel::High,
+                    reasons: vec!["Unknown tool routed to sandbox".to_string()],
+                },
+                24,
+                Some(context_str),
+            );
+            queue.add(request).await.map_err(|e| {
+                SkillError::Execution(format!("Failed to enqueue sandbox approval: {}", e))
+            })?;
+        }
     }
 
     Ok(())
