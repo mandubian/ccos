@@ -16,8 +16,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
-struct SandboxPythonInput {
+struct SandboxInput {
     code: String,
+    #[serde(default)]
+    runtime: Option<String>,
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
@@ -32,87 +34,115 @@ struct SandboxPythonInput {
     resources: Option<serde_json::Value>,
 }
 
-
 pub async fn register_sandbox_ops_capabilities(
     marketplace: Arc<CapabilityMarketplace>,
 ) -> RuntimeResult<()> {
+    register_sandbox_primitive(Arc::clone(&marketplace), "ccos.sandbox.python", "python").await?;
+    register_sandbox_primitive(
+        Arc::clone(&marketplace),
+        "ccos.sandbox.javascript",
+        "javascript",
+    )
+    .await?;
+    register_sandbox_primitive(Arc::clone(&marketplace), "ccos.sandbox.shell", "shell").await?;
+    Ok(())
+}
+
+async fn register_sandbox_primitive(
+    marketplace: Arc<CapabilityMarketplace>,
+    capability_id: &'static str,
+    default_runtime: &'static str,
+) -> RuntimeResult<()> {
     let handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync> =
         Arc::new(move |inputs: &Value| {
-        let inputs = inputs.clone();
-        Box::pin(async move {
-            let payload: SandboxPythonInput = parse_payload("ccos.sandbox.python", &inputs)?;
+            let inputs = inputs.clone();
+            Box::pin(async move {
+                let payload: SandboxInput = parse_payload(capability_id, &inputs)?;
 
-            let mut metadata = HashMap::new();
-            if let Some(hosts) = &payload.allowed_hosts {
-                if !hosts.is_empty() {
-                    metadata.insert("sandbox_allowed_hosts".to_string(), hosts.join(","));
+                let mut metadata = HashMap::new();
+                if let Some(hosts) = &payload.allowed_hosts {
+                    if !hosts.is_empty() {
+                        metadata.insert("sandbox_allowed_hosts".to_string(), hosts.join(","));
+                    }
                 }
-            }
-            if let Some(ports) = &payload.allowed_ports {
-                if !ports.is_empty() {
-                    let csv = ports
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    metadata.insert("sandbox_allowed_ports".to_string(), csv);
+                if let Some(ports) = &payload.allowed_ports {
+                    if !ports.is_empty() {
+                        let csv = ports
+                            .iter()
+                            .map(|p| p.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        metadata.insert("sandbox_allowed_ports".to_string(), csv);
+                    }
                 }
-            }
-            if let Some(secrets) = &payload.secrets {
-                if !secrets.is_empty() {
-                    metadata.insert("sandbox_required_secrets".to_string(), secrets.join(","));
+                if let Some(secrets) = &payload.secrets {
+                    if !secrets.is_empty() {
+                        metadata.insert("sandbox_required_secrets".to_string(), secrets.join(","));
+                    }
                 }
-            }
-            if let Some(fs) = &payload.filesystem {
-                let json = serde_json::to_string(fs).map_err(|e| {
-                    RuntimeError::Generic(format!("Invalid filesystem spec: {}", e))
-                })?;
-                metadata.insert("sandbox_filesystem".to_string(), json);
-            }
-            if let Some(resources) = &payload.resources {
-                let json = serde_json::to_string(resources).map_err(|e| {
-                    RuntimeError::Generic(format!("Invalid resources spec: {}", e))
-                })?;
-                metadata.insert("sandbox_resources".to_string(), json);
-            }
+                if let Some(fs) = &payload.filesystem {
+                    let json = serde_json::to_string(fs).map_err(|e| {
+                        RuntimeError::Generic(format!("Invalid filesystem spec: {}", e))
+                    })?;
+                    metadata.insert("sandbox_filesystem".to_string(), json);
+                }
+                if let Some(resources) = &payload.resources {
+                    let json = serde_json::to_string(resources).map_err(|e| {
+                        RuntimeError::Generic(format!("Invalid resources spec: {}", e))
+                    })?;
+                    metadata.insert("sandbox_resources".to_string(), json);
+                }
 
-            let provider = ProviderType::Sandboxed(SandboxedCapability {
-                runtime: "python".to_string(),
-                source: payload.code,
-                entry_point: None,
-                provider: payload.provider.or_else(|| Some("process".to_string())),
-                runtime_spec: None,
-                network_policy: None,
-                filesystem: None,
-                resources: None,
-                secrets: Vec::new(),
-            });
+                let provider = ProviderType::Sandboxed(SandboxedCapability {
+                    runtime: payload
+                        .runtime
+                        .unwrap_or_else(|| default_runtime.to_string()),
+                    source: payload.code,
+                    entry_point: None,
+                    provider: payload.provider.or_else(|| Some("process".to_string())),
+                    runtime_spec: None,
+                    network_policy: None,
+                    filesystem: None,
+                    resources: None,
+                    secrets: Vec::new(),
+                });
 
-            let executor = SandboxedExecutor::new();
-            let context = ExecutionContext::new("ccos.sandbox.python", &metadata, None);
+                let executor = SandboxedExecutor::new();
+                let context = ExecutionContext::new(capability_id, &metadata, None);
 
-            let result = executor.execute(&provider, &Value::Nil, &context).await?;
-            Ok(Value::Map({
-                let mut map = HashMap::new();
-                map.insert(
-                    rtfs::ast::MapKey::String("result".to_string()),
-                    result,
-                );
-                map
-            }))
-        }) as BoxFuture<'static, RuntimeResult<Value>>
-    });
+                let result = executor.execute(&provider, &Value::Nil, &context).await?;
+                Ok(Value::Map({
+                    let mut map = HashMap::new();
+                    map.insert(rtfs::ast::MapKey::String("result".to_string()), result);
+                    map
+                }))
+            }) as BoxFuture<'static, RuntimeResult<Value>>
+        });
+
+    let display_name = match default_runtime {
+        "python" => "Sandbox / Python",
+        "javascript" => "Sandbox / JavaScript",
+        "shell" => "Sandbox / Shell",
+        _ => "Sandbox / Runtime",
+    };
+
+    let description = format!("Execute {} code in a sandboxed runtime", default_runtime);
 
     marketplace
         .register_native_capability(
-            "ccos.sandbox.python".to_string(),
-            "Sandbox / Python".to_string(),
-            "Execute Python code in a sandboxed runtime".to_string(),
+            capability_id.to_string(),
+            display_name.to_string(),
+            description,
             handler,
             "default".to_string(),
         )
         .await
-        .map_err(|e| RuntimeError::Generic(format!("Failed to register sandbox python: {}", e)))
+        .map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to register sandbox primitive {}: {}",
+                capability_id, e
+            ))
+        })
 }
 
 fn parse_payload<T: serde::de::DeserializeOwned>(
@@ -127,4 +157,3 @@ fn parse_payload<T: serde::de::DeserializeOwned>(
         ))
     })
 }
-

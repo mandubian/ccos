@@ -3,10 +3,7 @@
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::ccos_println;
 use crate::discovery::config::DiscoveryConfig;
-use crate::config::types::AgentConfig;
 use crate::discovery::GoalDiscoveryAgent;
-use crate::ops::server_discovery_pipeline::{PipelineTarget, ServerDiscoveryPipeline};
-use crate::utils::fs::get_workspace_root;
 #[cfg(feature = "tui")]
 use dialoguer::theme::ColorfulTheme;
 use rtfs::runtime::error::RuntimeResult;
@@ -41,15 +38,6 @@ impl Default for DiscoverOptions {
 fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
-}
-
-fn load_agent_config_from_workspace() -> AgentConfig {
-    let config_path = get_workspace_root().join("config/agent_config.toml");
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        toml::from_str(&content).unwrap_or_default()
-    } else {
-        AgentConfig::default()
-    }
 }
 
 /// Goal-driven server discovery (simple API - uses defaults)
@@ -154,24 +142,29 @@ pub async fn discover_by_goal_with_options(
         ccos_println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
 
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
-        #[cfg(feature = "tui")]
-        let selections =
-            dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                .with_prompt("Select servers to queue")
-                .items(&items)
-                .defaults(&vec![true; items.len()]) // Pre-select all
-                .interact()
-                .map_err(|e| {
-                    rtfs::runtime::error::RuntimeError::Generic(format!(
-                        "Selection cancelled: {}",
-                        e
-                    ))
-                })?;
+        let selections: Vec<usize> = {
+            #[cfg(feature = "tui")]
+            {
+                dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Select servers to queue")
+                    .items(&items)
+                    .defaults(&vec![true; items.len()]) // Pre-select all
+                    .interact()
+                    .map_err(|e| {
+                        rtfs::runtime::error::RuntimeError::Generic(format!(
+                            "Selection cancelled: {}",
+                            e
+                        ))
+                    })?
+            }
 
-        #[cfg(not(feature = "tui"))]
-        return Err(rtfs::runtime::error::RuntimeError::Generic(
-            "Interactive mode not available".to_string(),
-        ));
+            #[cfg(not(feature = "tui"))]
+            {
+                return Err(rtfs::runtime::error::RuntimeError::Generic(
+                    "Interactive mode not available".to_string(),
+                ));
+            }
+        };
 
         if selections.is_empty() {
             ccos_println!("❌ No servers selected.");
@@ -689,10 +682,9 @@ async fn handle_manual_url_entry(
             "Done - no more URLs to add",
         ];
 
-        let url_type_idx: usize;
-        #[cfg(feature = "tui")]
-        {
-            url_type_idx =
+        let url_type_idx: usize = {
+            #[cfg(feature = "tui")]
+            {
                 dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("What type of URL are you providing?")
                     .items(&url_types)
@@ -703,33 +695,40 @@ async fn handle_manual_url_entry(
                             "Selection error: {}",
                             e
                         ))
-                    })?;
-        }
+                    })?
+            }
 
-        #[cfg(not(feature = "tui"))]
-        {
-            return Err(rtfs::runtime::error::RuntimeError::Generic(
-                "Interactive mode not available".to_string(),
-            ));
-        }
+            #[cfg(not(feature = "tui"))]
+            {
+                return Err(rtfs::runtime::error::RuntimeError::Generic(
+                    "Interactive mode not available".to_string(),
+                ));
+            }
+        };
 
         // Exit loop if user is done
         if url_type_idx == 2 {
             break;
         }
 
-        #[cfg(feature = "tui")]
-        let url: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Enter URL")
-            .interact_text()
-            .map_err(|e| {
-                rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e))
-            })?;
+        let url: String = {
+            #[cfg(feature = "tui")]
+            {
+                dialoguer::Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Enter URL")
+                    .interact_text()
+                    .map_err(|e| {
+                        rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e))
+                    })?
+            }
 
-        #[cfg(not(feature = "tui"))]
-        let url: String = return Err(rtfs::runtime::error::RuntimeError::Generic(
-            "Interactive mode not available".to_string(),
-        ));
+            #[cfg(not(feature = "tui"))]
+            {
+                return Err(rtfs::runtime::error::RuntimeError::Generic(
+                    "Interactive mode not available".to_string(),
+                ));
+            }
+        };
 
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
@@ -775,13 +774,14 @@ async fn handle_manual_url_entry(
 
 /// Handle MCP server URL - introspect and queue
 async fn handle_mcp_url(
-    _agent: &GoalDiscoveryAgent,
-    _goal: &str,
+    agent: &GoalDiscoveryAgent,
+    goal: &str,
     url: &str,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     ccos_println!("🔍 Introspecting MCP server at {}...", url);
 
+    // Derive server name from URL
     let name_guess = url
         .split("://")
         .nth(1)
@@ -791,27 +791,49 @@ async fn handle_mcp_url(
         .unwrap_or("unknown")
         .to_string();
 
-    let queue = create_queue(storage_path.to_path_buf())?;
-    let agent_config = load_agent_config_from_workspace();
-    let pipeline = ServerDiscoveryPipeline::new(
-        agent_config.server_discovery_pipeline.clone(),
-        agent_config.missing_capabilities.clone(),
-        queue,
-    )
-    .await?;
-
-    match pipeline
-        .stage_and_queue(PipelineTarget {
-            input: url.to_string(),
-            name: Some(name_guess),
-            auth_env_var: None,
-        })
-        .await
-    {
-        Ok(result) => {
+    match crate::ops::server::introspect_server_by_url(url, &name_guess, None).await {
+        Ok(introspection) => {
             ccos_println!("   ✅ Introspection successful!");
-            ccos_println!("   Approval ID: {}", result.approval_id);
-            Ok(vec![result.approval_id])
+            ccos_println!("   Server Name: {}", introspection.server_name);
+            ccos_println!("   Tools Found: {}", introspection.tools.len());
+
+            // Create a synthetic RegistrySearchResult
+            let result = crate::discovery::registry_search::RegistrySearchResult {
+                source: crate::approval::queue::DiscoverySource::Manual {
+                    user: "cli".to_string(),
+                },
+                server_info: crate::approval::queue::ServerInfo {
+                    name: introspection.server_name.clone(),
+                    endpoint: introspection.server_url.clone(),
+                    description: Some("Manually added MCP server".to_string()),
+                    auth_env_var: None,
+                    capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
+                    capability_files: None,
+                },
+                match_score: 1.0,
+                alternative_endpoints: Vec::new(),
+                category: crate::discovery::registry_search::DiscoveryCategory::Mcp,
+            };
+
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
+
+            // Save tools
+            if let Err(e) = crate::ops::server::save_discovered_tools(
+                storage_path.to_path_buf(),
+                introspection.tools.clone(),
+                &introspection,
+                &result.server_info,
+                Some(id.clone()),
+            )
+            .await
+            {
+                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
+            } else {
+                ccos_println!("   💾 Capabilities saved to RTFS file");
+            }
+
+            Ok(vec![id])
         }
         Err(e) => {
             ccos_println!("❌ Failed to introspect MCP server: {}", e);
@@ -822,39 +844,106 @@ async fn handle_mcp_url(
 
 /// Handle documentation URL - use LLM to parse API docs
 async fn handle_documentation_url(
-    _agent: &GoalDiscoveryAgent,
-    _goal: &str,
+    agent: &GoalDiscoveryAgent,
+    goal: &str,
     url: &str,
     _llm_enabled: bool,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     ccos_println!("🔍 Fetching API documentation from {}...", url);
-    ccos_println!("🤖 Using discovery pipeline for introspection...");
+    ccos_println!("🤖 Using LLM to extract API endpoints...");
 
-    let queue = create_queue(storage_path.to_path_buf())?;
-    let agent_config = load_agent_config_from_workspace();
-    let pipeline = ServerDiscoveryPipeline::new(
-        agent_config.server_discovery_pipeline.clone(),
-        agent_config.missing_capabilities.clone(),
-        queue,
-    )
-    .await?;
+    // Get LLM provider from arbiter (async)
+    let llm_provider = match crate::arbiter::get_default_llm_provider().await {
+        Some(provider) => provider,
+        None => {
+            ccos_println!("❌ No LLM provider configured.");
+            ccos_println!("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.");
+            return Ok(vec![]);
+        }
+    };
 
-    match pipeline
-        .stage_and_queue(PipelineTarget {
-            input: url.to_string(),
-            name: None,
-            auth_env_var: None,
-        })
+    // Parse documentation with LLM
+    let parser = crate::synthesis::introspection::llm_doc_parser::LlmDocParser::new();
+
+    // Extract domain from URL for context
+    let domain = url
+        .split("://")
+        .nth(1)
+        .unwrap_or("unknown")
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+
+    match parser
+        .parse_from_url(url, &domain, llm_provider.as_ref())
         .await
     {
-        Ok(result) => {
+        Ok(api_result) => {
             ccos_println!("   ✅ Documentation parsed successfully!");
-            ccos_println!("   Approval ID: {}", result.approval_id);
-            Ok(vec![result.approval_id])
+            ccos_println!(
+                "   API: {} v{}",
+                api_result.api_title,
+                api_result.api_version
+            );
+            ccos_println!("   Base URL: {}", api_result.base_url);
+            ccos_println!("   Endpoints found: {}", api_result.endpoints.len());
+
+            for endpoint in api_result.endpoints.iter().take(5) {
+                ccos_println!(
+                    "      • {} {} - {}",
+                    endpoint.method,
+                    endpoint.path,
+                    endpoint.name
+                );
+            }
+            if api_result.endpoints.len() > 5 {
+                ccos_println!("      ... and {} more", api_result.endpoints.len() - 5);
+            }
+
+            // Create a synthetic RegistrySearchResult for the API
+            let result = crate::discovery::registry_search::RegistrySearchResult {
+                source: crate::approval::queue::DiscoverySource::Manual {
+                    user: "cli".to_string(),
+                },
+                server_info: crate::approval::queue::ServerInfo {
+                    name: api_result.api_title.clone(),
+                    endpoint: api_result.base_url.clone(),
+                    description: Some(format!("HTTP API parsed from documentation: {}", url)),
+                    auth_env_var: api_result.auth_requirements.env_var_name.clone(),
+                    capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
+                    capability_files: None,
+                },
+                match_score: 1.0,
+                alternative_endpoints: Vec::new(),
+                category: crate::discovery::registry_search::DiscoveryCategory::WebApi,
+            };
+
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
+
+            // Save the parsed API as capabilities
+            if let Err(e) = crate::ops::server::save_api_capabilities(
+                storage_path.to_path_buf(),
+                &api_result,
+                &id,
+            )
+            .await
+            {
+                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
+            } else {
+                ccos_println!("   💾 Capabilities saved to RTFS file");
+            }
+
+            Ok(vec![id])
         }
         Err(e) => {
             ccos_println!("❌ Failed to parse documentation: {}", e);
+            ccos_println!("   💡 Tips:");
+            ccos_println!("      • Ensure the URL points to API documentation");
+            ccos_println!("      • Check that LLM API key is valid");
+            ccos_println!("      • Try a more specific documentation page");
             Ok(vec![])
         }
     }

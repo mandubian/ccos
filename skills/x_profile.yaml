@@ -1,0 +1,30 @@
+skill:
+  id: "x_profile"
+  name: "X Account Data Fetcher"
+  description: "Fetches public profile data for X (Twitter) accounts without needing the X website."
+  version: "1.0.0"
+  capabilities:
+    - "x.profile.fetch"
+  data_classifications:
+    - Public
+  approval:
+    required: false
+    mode: Once
+  instructions: |
+    Use this skill to fetch detailed account metadata from X (formerly Twitter).
+    The underlying system uses an API wrapper endpoint (`api.vxtwitter.com`).
+    When providing the input JSON for the `fetch` operation, you MUST pass the parameter `url` formatted precisely as:
+    `"https://api.vxtwitter.com/<handle>"`
+    (replace `<handle>` with the actual Twitter username, e.g., `elonmusk`).
+  operations:
+    - name: "fetch"
+      description: "Fetches profile info (followers, following, description, tweet count, etc)."
+      command: "curl -s"
+      input_schema:
+        type: "object"
+        properties:
+          url:
+            type: "string"
+            description: "The constructed URL for the X/Twitter handle, e.g. https://api.vxtwitter.com/elonmusk"
+        required: ["url"]
+      output_schema: null

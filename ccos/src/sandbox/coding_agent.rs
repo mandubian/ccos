@@ -366,12 +366,100 @@ Respond ONLY with the JSON object, no additional text.
             response.trim()
         };
 
-        serde_json::from_str(json_str).map_err(|e| {
-            format!(
-                "Failed to parse coding response: {}. Response: {}",
-                e, json_str
-            )
+        match serde_json::from_str::<CodingResponse>(json_str) {
+            Ok(parsed) => Ok(parsed),
+            Err(json_err) => {
+                if let Some(fallback) = Self::parse_as_raw_code_response(response) {
+                    return Ok(fallback);
+                }
+                Err(format!(
+                    "Failed to parse coding response: {}. Response: {}",
+                    json_err, json_str
+                ))
+            }
+        }
+    }
+
+    fn parse_as_raw_code_response(response: &str) -> Option<CodingResponse> {
+        let trimmed = response.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let (language_hint, code_body) = if let Some(fence_start) = trimmed.find("```") {
+            let after_open = &trimmed[fence_start + 3..];
+            if let Some(fence_end) = after_open.find("```") {
+                let fenced = after_open[..fence_end].trim();
+                let mut lines = fenced.lines();
+                if let Some(first_line) = lines.next() {
+                    let first = first_line.trim();
+                    let rest = lines.collect::<Vec<_>>().join("\n");
+                    if !rest.trim().is_empty() && Self::looks_like_language_tag(first) {
+                        (Some(first.to_lowercase()), rest)
+                    } else {
+                        (None, fenced.to_string())
+                    }
+                } else {
+                    (None, String::new())
+                }
+            } else {
+                (None, trimmed.to_string())
+            }
+        } else {
+            let mut lines = trimmed.lines();
+            if let Some(first_line) = lines.next() {
+                let first = first_line.trim();
+                let rest = lines.collect::<Vec<_>>().join("\n");
+                if !rest.trim().is_empty() && Self::looks_like_language_tag(first) {
+                    (Some(first.to_lowercase()), rest)
+                } else {
+                    (None, trimmed.to_string())
+                }
+            } else {
+                (None, String::new())
+            }
+        };
+
+        let code = code_body.trim().to_string();
+        if code.is_empty() {
+            return None;
+        }
+
+        let language = language_hint.unwrap_or_else(|| Self::infer_language(&code));
+        Some(CodingResponse {
+            code,
+            language,
+            dependencies: vec![],
+            explanation: "Generated code response (fallback parse from non-JSON LLM output)."
+                .to_string(),
+            tests: None,
+            stored_artifacts: vec![],
         })
+    }
+
+    fn looks_like_language_tag(s: &str) -> bool {
+        !s.is_empty()
+            && s.len() <= 24
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-')
+    }
+
+    fn infer_language(code: &str) -> String {
+        let lower = code.to_lowercase();
+        if lower.contains("def ")
+            || lower.contains("import ")
+            || lower.contains("print(")
+            || lower.contains("ccos_sdk")
+        {
+            "python".to_string()
+        } else if lower.contains("function ")
+            || lower.contains("const ")
+            || lower.contains("let ")
+            || lower.contains("console.log")
+        {
+            "javascript".to_string()
+        } else {
+            "python".to_string()
+        }
     }
 
     /// Generate code for the given request
@@ -466,6 +554,34 @@ mod tests {
 
         let parsed = agent.parse_response(response).unwrap();
         assert_eq!(parsed.code, "print('hello')");
+        assert_eq!(parsed.language, "python");
+    }
+
+    #[test]
+    fn test_parse_response_fenced_python_code_fallback() {
+        let config = CodingAgentsConfig::default();
+        let agent = CodingAgent::new(config);
+
+        let response = r#"```python
+import ccos_sdk
+print('hello')
+```"#;
+
+        let parsed = agent.parse_response(response).unwrap();
+        assert!(parsed.code.contains("import ccos_sdk"));
+        assert_eq!(parsed.language, "python");
+        assert!(parsed.dependencies.is_empty());
+    }
+
+    #[test]
+    fn test_parse_response_prefixed_language_code_fallback() {
+        let config = CodingAgentsConfig::default();
+        let agent = CodingAgent::new(config);
+
+        let response = "python\nimport ccos_sdk\nprint('hello')";
+
+        let parsed = agent.parse_response(response).unwrap();
+        assert!(parsed.code.contains("import ccos_sdk"));
         assert_eq!(parsed.language, "python");
     }
 

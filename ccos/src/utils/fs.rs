@@ -205,6 +205,15 @@ pub fn get_configured_generated_path() -> PathBuf {
     base.join("generated")
 }
 
+/// Get the configured learned skills path (capabilities_dir/learned_subdir).
+pub fn get_configured_learned_path() -> PathBuf {
+    let base = get_configured_capabilities_path();
+    if let Some(config) = load_agent_config() {
+        return base.join(&config.storage.learned_subdir);
+    }
+    base.join("learned")
+}
+
 /// Get the configured sessions path (capabilities_dir/sessions_subdir).
 pub fn get_configured_sessions_path() -> PathBuf {
     // Check environment variable first
@@ -258,6 +267,7 @@ mod tests {
         std::env::set_var("CCOS_CAPABILITY_STORAGE", test_path);
         assert_eq!(get_configured_capabilities_path(), PathBuf::from(test_path));
         assert!(get_configured_generated_path().starts_with(test_path));
+        assert!(get_configured_learned_path().starts_with(test_path));
 
         // Clean up env var for next tests
         std::env::remove_var("CCOS_CAPABILITY_STORAGE");
@@ -269,5 +279,6 @@ mod tests {
             get_configured_generated_path(),
             default_path.join("generated")
         );
+        assert_eq!(get_configured_learned_path(), default_path.join("learned"));
     }
 }

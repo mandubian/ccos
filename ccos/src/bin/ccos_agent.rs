@@ -875,6 +875,12 @@ impl AgentRuntime {
 
     /// Process a single event
     async fn process_event(&mut self, event: ChatEvent) -> anyhow::Result<()> {
+        // Refresh capabilities before each event so newly registered gateway tools
+        // (e.g., ccos_create_skill) become immediately available without agent restart.
+        if let Err(e) = self.fetch_capabilities().await {
+            warn!("Failed to refresh capabilities before processing event: {}", e);
+        }
+
         let redacted_preview = redact_text_for_logs(&event.content);
         info!(
             "[Agent] Received event from {} (ID: {}): {}",

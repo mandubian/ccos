@@ -335,7 +335,8 @@ mod tests {
 
     #[test]
     fn test_load_openweathermap() {
-        let registry = KnownApisRegistry::new().unwrap();
+        let mut registry = KnownApisRegistry::default();
+        let _ = registry.load_from_directory(Path::new("examples"));
 
         if let Some(api) = registry.find_by_domain("openweathermap") {
             assert_eq!(api.api.name, "openweathermap");
@@ -345,7 +346,8 @@ mod tests {
 
     #[test]
     fn test_search_by_domain() {
-        let registry = KnownApisRegistry::new().unwrap();
+        let mut registry = KnownApisRegistry::default();
+        let _ = registry.load_from_directory(Path::new("examples"));
 
         let results = registry.search("weather");
         // Should find openweathermap

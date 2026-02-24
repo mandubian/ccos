@@ -308,9 +308,9 @@ impl CCOS {
         let skills_path =
             std::env::var("CCOS_SKILLS_PATH").unwrap_or_else(|_| "skills".to_string());
         capability_marketplace_orig.add_discovery_agent(Box::new(
-            crate::capability_marketplace::discovery::LocalSkillDiscoveryAgent::new(PathBuf::from(
-                skills_path,
-            )),
+            crate::capability_marketplace::discovery::LocalSkillDiscoveryAgent::new(vec![
+                PathBuf::from(skills_path),
+            ]),
         ));
 
         let capability_marketplace = Arc::new(capability_marketplace_orig);

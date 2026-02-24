@@ -68,7 +68,8 @@ impl PrimitiveMapper {
     /// Map a command to a CCOS capability
     pub fn map_command(&self, command: &str) -> Option<MappedCapability> {
         let trimmed = command.trim();
-        let first_word = trimmed.split_whitespace().next()?;
+        let first_word_raw = trimmed.split_whitespace().next()?;
+        let first_word = first_word_raw.split(':').next().unwrap_or(first_word_raw);
 
         // Look up mapping
         let capability_id = match self.mappings.get(first_word) {
@@ -334,7 +335,8 @@ impl PrimitiveMapper {
 
     /// Check if a command is a known primitive
     pub fn is_known_primitive(&self, command: &str) -> bool {
-        let first_word = command.trim().split_whitespace().next().unwrap_or("");
+        let first_word_raw = command.trim().split_whitespace().next().unwrap_or("");
+        let first_word = first_word_raw.split(':').next().unwrap_or(first_word_raw);
         if self.mappings.contains_key(first_word) {
             return true;
         }
