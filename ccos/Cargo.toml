@@ -26,7 +26,6 @@ toml = { workspace = true }
 jsonschema = { workspace = true }
 sha2 = { workspace = true }
 serde_yaml = "0.9"
-wasmtime = { workspace = true }
 flate2 = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }
@@ -40,24 +39,23 @@ log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1.10"
-croner = "2"  # Cron expression parsing for recurring schedules
 
 # Networking/API
 reqwest = { version = "0.11", features = ["json", "blocking", "cookies"] }
 urlencoding = "2.1"
-tokio = { version = "1.0", features = ["full"] }
-tokio-stream = "0.1"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "net", "fs", "io-util", "process", "signal"] }
+croner = "2"
+libc = "0.2.180"
 uuid = { version = "1.0", features = ["v4"] }
 base64 = { workspace = true }
 url = "2.5"
-atty = "0.2"
 
 # MCP (Model Context Protocol) dependencies
 reqwest-eventsource = "0.5"
 eventsource-stream = "0.2"
 
 # REPL dependencies
-clap = { version = "4.0", features = ["derive", "env"] }
+clap = { version = "4.0", features = ["derive", "env"], optional = true }
 rustyline = { version = "13.0", optional = true }
 
 # Utilities
@@ -65,7 +63,6 @@ indexmap = "2.0"
 tempfile = "3.10"
 llama_cpp = { version = "0.3.2", optional = true }
 num_cpus = "1.17.0"
-yansi = "1.0"
 
 # Caching dependencies
 rand = "0.8"
@@ -75,22 +72,26 @@ chacha20poly1305 = "0.10"
 # TUI/CLI dependencies
 ratatui = { version = "0.26", optional = true }
 crossterm = { version = "0.27", optional = true }
-colored = "2.1"
-textwrap = "0.16"
+colored = { version = "2.1", optional = true }
+textwrap = { version = "0.16", optional = true }
 dialoguer = { version = "0.11", features = ["fuzzy-select"], optional = true }
 
 # Web server and websockets
 axum = { version = "0.7", features = ["ws"], optional = true }
 tokio-tungstenite = { version = "0.23", features = ["native-tls"], optional = true }
 tower-http = { version = "0.5", features = ["fs"], optional = true }
-libc = "0.2.180"
-tracing-log = "0.2.0"
 
 [features]
-default = ["repl", "tui", "server"]
+default = ["full"]
+full = ["cli", "repl", "tui", "server"]
+cli = ["dep:clap", "dep:colored", "dep:textwrap"]
 repl = ["dep:rustyline", "rtfs/repl"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:dialoguer"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:dialoguer", "dep:colored"]
 server = ["dep:axum", "dep:tokio-tungstenite", "dep:tower-http"]
+wasm-runtime = ["rtfs/wasm-runtime"]
+agent-runtime = ["server"]
+gateway-runtime = ["server"]
+chat-cli-runtime = ["server"]
 llm = ["dep:llama_cpp"]
 minimal = []
 ccos-integration = []
@@ -178,18 +179,8 @@ name = "mock-moltbook"
 path = "src/bin/mock_moltbook.rs"
 
 [[bin]]
-name = "ccos-chat"
-path = "src/bin/ccos-chat.rs"
-required-features = ["tui"]
-
-[[bin]]
 name = "ccos-agent"
 path = "src/bin/ccos_agent.rs"
-
-[[bin]]
-name = "ccos-gateway-monitor"
-path = "src/bin/ccos-gateway-monitor.rs"
-required-features = ["tui"]
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

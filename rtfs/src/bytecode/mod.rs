@@ -1,6 +1,8 @@
 use crate::ir::core::IrNode;
 use crate::runtime::{RuntimeError, RuntimeResult, Value};
+#[cfg(feature = "wasm-runtime")]
 use std::sync::Arc;
+#[cfg(feature = "wasm-runtime")]
 use wasmtime::{Engine, Instance, Module, Store, Val};
 
 /// Trait for pluggable back-ends that turn RTFS IR modules into machine-executable bytecode.
@@ -50,10 +52,15 @@ pub trait BytecodeExecutor: Send + Sync + std::fmt::Debug {
 
 /// A very thin placeholder executor that accepts WASM modules but doesn't actually run them yet.
 /// It simply returns Nil until a real engine (e.g. wasmtime) is wired in.
+#[cfg(feature = "wasm-runtime")]
 #[derive(Clone)]
 pub struct WasmExecutor {
     engine: Arc<Engine>,
 }
+
+#[cfg(not(feature = "wasm-runtime"))]
+#[derive(Clone, Default)]
+pub struct WasmExecutor;
 
 impl std::fmt::Debug for WasmExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,29 +69,40 @@ impl std::fmt::Debug for WasmExecutor {
 }
 
 impl WasmExecutor {
+    #[cfg(feature = "wasm-runtime")]
     pub fn new() -> Self {
         Self {
             engine: Arc::new(Engine::default()),
         }
     }
+
+    #[cfg(not(feature = "wasm-runtime"))]
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 // Utility to simplify float conversions
+#[cfg(feature = "wasm-runtime")]
 fn f64_to_bits(f: f64) -> u64 {
     f.to_bits()
 }
+#[cfg(feature = "wasm-runtime")]
 fn bits_to_f64(b: u64) -> f64 {
     f64::from_bits(b)
 }
 #[allow(dead_code)]
+#[cfg(feature = "wasm-runtime")]
 fn f32_to_bits(f: f64) -> u32 {
     (f as f32).to_bits()
 }
+#[cfg(feature = "wasm-runtime")]
 fn bits_to_f32(b: u32) -> f64 {
     f32::from_bits(b) as f64
 }
 
 impl BytecodeExecutor for WasmExecutor {
+    #[cfg(feature = "wasm-runtime")]
     fn execute_module(
         &self,
         bytecode: &[u8],
@@ -133,6 +151,18 @@ impl BytecodeExecutor for WasmExecutor {
         } else {
             Ok(Value::Nil)
         }
+    }
+
+    #[cfg(not(feature = "wasm-runtime"))]
+    fn execute_module(
+        &self,
+        _bytecode: &[u8],
+        _fn_name: &str,
+        _args: &[Value],
+    ) -> RuntimeResult<Value> {
+        Err(RuntimeError::Generic(
+            "WASM runtime disabled: enable rtfs feature 'wasm-runtime'".to_string(),
+        ))
     }
 
     fn target_id(&self) -> &'static str {
