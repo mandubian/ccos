@@ -1298,19 +1298,28 @@ impl CapabilityExecutor for HttpExecutor {
             // Check if this is a skill capability and inject secret if available
             // SECURITY: Only inject secrets from SecretStore (which requires approval)
             // Secrets pending approval in SECRET_INJECTION are NOT injected until approved
-            log::info!("[HttpExecutor] Checking for skill_id in metadata: {:?}", context.metadata.get("skill_id"));
+            log::info!(
+                "[HttpExecutor] Checking for skill_id in metadata: {:?}",
+                context.metadata.get("skill_id")
+            );
             if let Some(skill_id) = context.metadata.get("skill_id") {
-                log::info!("[HttpExecutor] Found skill_id: {}, looking for approved secret", skill_id);
-                
+                log::info!(
+                    "[HttpExecutor] Found skill_id: {}, looking for approved secret",
+                    skill_id
+                );
+
                 let secret_key = format!("{}.secret", skill_id);
-                
+
                 // Only use SecretStore - which requires approval
                 // This ensures governance is enforced
                 let cwd = std::env::current_dir().ok();
                 let secret_store = crate::secrets::SecretStore::new(cwd).ok();
-                
+
                 if let Some(secret_value) = secret_store.and_then(|store| store.get(&secret_key)) {
-                    log::info!("[HttpExecutor] Injecting APPROVED secret for skill '{}'", skill_id);
+                    log::info!(
+                        "[HttpExecutor] Injecting APPROVED secret for skill '{}'",
+                        skill_id
+                    );
                     req = req.bearer_auth(secret_value);
                 } else {
                     log::info!("[HttpExecutor] No approved secret found for skill '{}'. Secret may be pending approval.", skill_id);
@@ -1327,10 +1336,8 @@ impl CapabilityExecutor for HttpExecutor {
             if is_write && body.is_empty() {
                 body = "{}".to_string();
                 if !has_content_type {
-                    headers_owned.insert(
-                        "Content-Type".to_string(),
-                        "application/json".to_string(),
-                    );
+                    headers_owned
+                        .insert("Content-Type".to_string(), "application/json".to_string());
                 }
             }
 
@@ -1394,24 +1401,38 @@ impl CapabilityExecutor for HttpExecutor {
                     if returns_secret == "true" {
                         if let Some(skill_id) = context.metadata.get("skill_id") {
                             // Try to extract secret from response
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp_body) {
-                                if let Some(secret_value) = json.get("secret").and_then(|v| v.as_str()) {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp_body)
+                            {
+                                if let Some(secret_value) =
+                                    json.get("secret").and_then(|v| v.as_str())
+                                {
                                     // Store secret in shared in-memory store for auto-injection
                                     let secret_key = format!("{}.secret", skill_id);
-                                    SECRET_INJECTION.write().await.insert(secret_key.clone(), secret_value.to_string());
+                                    SECRET_INJECTION
+                                        .write()
+                                        .await
+                                        .insert(secret_key.clone(), secret_value.to_string());
                                     log::info!("[HttpExecutor] Auto-stored secret for skill '{}' (pending approval)", skill_id);
 
                                     // Replace secret value in response to hide from agent
                                     // Agent only sees that a secret exists, not its value
-                                    if let Ok(mut json_obj) = serde_json::from_str::<serde_json::Value>(&processed_body) {
+                                    if let Ok(mut json_obj) =
+                                        serde_json::from_str::<serde_json::Value>(&processed_body)
+                                    {
                                         if let Some(obj) = json_obj.as_object_mut() {
-                                            obj.insert("secret".to_string(), serde_json::Value::String("***PENDING_APPROVAL***".to_string()));
+                                            obj.insert(
+                                                "secret".to_string(),
+                                                serde_json::Value::String(
+                                                    "***PENDING_APPROVAL***".to_string(),
+                                                ),
+                                            );
                                             // Add helpful message
                                             obj.insert("message".to_string(), serde_json::Value::String(format!(
                                                 "Secret received and stored pending approval. Use /approve to approve the '{}' secret, then subsequent skill operations will use it automatically.",
                                                 secret_key
                                             )));
-                                            processed_body = serde_json::to_string(&json_obj).unwrap_or(processed_body);
+                                            processed_body = serde_json::to_string(&json_obj)
+                                                .unwrap_or(processed_body);
                                         }
                                     }
                                 }
@@ -1423,7 +1444,10 @@ impl CapabilityExecutor for HttpExecutor {
 
             let mut response_map = std::collections::HashMap::new();
             response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
-            response_map.insert(MapKey::String("body".to_string()), Value::String(processed_body));
+            response_map.insert(
+                MapKey::String("body".to_string()),
+                Value::String(processed_body),
+            );
             let mut headers_map = std::collections::HashMap::new();
             for (k, v) in response_headers.iter() {
                 headers_map.insert(
@@ -1501,27 +1525,40 @@ impl CapabilityExecutor for SandboxedExecutor {
                 }
             };
 
-            let mut sandbox_config = crate::sandbox::SandboxConfig::default();
-            sandbox_config.provider = sandboxed.provider.clone();
-            sandbox_config.capability_id = Some(context.capability_id.to_string());
-            sandbox_config.required_secrets =
-                parse_csv_list(context.metadata, "sandbox_required_secrets");
-            sandbox_config.allowed_hosts = parse_csv_set(context.metadata, "sandbox_allowed_hosts");
-            sandbox_config.allowed_ports =
-                parse_csv_ports(context.metadata, "sandbox_allowed_ports");
+            let mut sandbox_config = crate::sandbox::SandboxConfig::from_sandboxed_capability(
+                sandboxed,
+                Some(context.capability_id.to_string()),
+            );
+
+            // Override with any explicit execution context metadata overrides
+            let context_secrets = parse_csv_list(context.metadata, "sandbox_required_secrets");
+            if !context_secrets.is_empty() {
+                sandbox_config.required_secrets = context_secrets;
+            }
+            let context_hosts = parse_csv_set(context.metadata, "sandbox_allowed_hosts");
+            if !context_hosts.is_empty() {
+                sandbox_config.allowed_hosts = context_hosts;
+            }
+            let context_ports = parse_csv_ports(context.metadata, "sandbox_allowed_ports");
+            if !context_ports.is_empty() {
+                sandbox_config.allowed_ports = context_ports;
+            }
 
             if let Some(raw) = context.metadata.get("sandbox_filesystem") {
-                sandbox_config.filesystem = Some(parse_json_metadata::<VirtualFilesystem>(
+                if let Ok(fs) = parse_json_metadata::<crate::sandbox::VirtualFilesystem>(
                     raw,
                     "sandbox_filesystem",
-                )?);
+                ) {
+                    sandbox_config.filesystem = Some(fs);
+                }
             }
 
             if let Some(raw) = context.metadata.get("sandbox_resources") {
-                sandbox_config.resources = Some(parse_json_metadata::<ResourceLimits>(
-                    raw,
-                    "sandbox_resources",
-                )?);
+                if let Ok(res) =
+                    parse_json_metadata::<crate::sandbox::ResourceLimits>(raw, "sandbox_resources")
+                {
+                    sandbox_config.resources = Some(res);
+                }
             }
 
             let result = self

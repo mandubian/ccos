@@ -27,6 +27,16 @@ impl SandboxManager {
         let mut runtimes = HashMap::new();
         runtimes.insert(SandboxRuntimeType::MicroVM, microvm_runtime);
 
+        // Attempt to initialize BubblewrapSandbox and register if available
+        if let Ok(bwrap) = crate::sandbox::BubblewrapSandbox::new() {
+            let bwrap_arc: Arc<dyn SandboxRuntime> = Arc::new(bwrap);
+            runtimes.insert(SandboxRuntimeType::Bubblewrap, Arc::clone(&bwrap_arc));
+            // Also fall back to Bubblewrap for "process" type by default
+            runtimes.insert(SandboxRuntimeType::Process, bwrap_arc);
+        } else {
+            log::warn!("BubblewrapSandbox is unvailable. `ccos.sandbox.python` will fail if requested with `bubblewrap`.");
+        }
+
         let secret_store = crate::secrets::SecretStore::new(Some(get_workspace_root()))
             .or_else(|_| crate::secrets::SecretStore::new(None))
             .unwrap_or_else(|e| {

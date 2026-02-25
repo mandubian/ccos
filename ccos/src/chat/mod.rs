@@ -17,7 +17,7 @@ use sha2::Digest;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
-use base64::Engine as _;
+
 
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::UnifiedApprovalQueue;
@@ -2256,798 +2256,80 @@ pub async fn register_chat_capabilities(
     // Python Code Execution Capability
     // -----------------------------------------------------------------
     {
-        use crate::sandbox::bubblewrap::{BubblewrapSandbox, InputFile};
-        use crate::sandbox::config::{SandboxConfig, SandboxRuntimeType};
-        use crate::sandbox::resources::ResourceLimits;
-        use crate::sandbox::DependencyManager;
+        use crate::capability_marketplace::types::SandboxedCapability;
 
-        // Clone config for capture in closure
-        let sandbox_cfg = sandbox_config.clone();
-        let approval_queue = approval_queue.clone();
-        // Clone marketplace so the sandbox can dispatch ccos_sdk.py CCOS_CALL:: requests.
-        let sandbox_marketplace = marketplace.clone();
+        let cap = SandboxedCapability {
+            runtime: "python".to_string(),
+            source: "".to_string(), // Replaced at execution time
+            entry_point: None,
+            provider: Some(sandbox_config.runtime.clone()),
+            runtime_spec: None,
+            network_policy: Some(crate::capability_marketplace::types::NetworkPolicy {
+                mode: crate::capability_marketplace::types::NetworkMode::Direct,
+                allowed_hosts: vec![],
+                allowed_ports: vec![],
+                egress_rate_limit: None,
+            }),
+            filesystem: None,
+            resources: Some(crate::capability_marketplace::types::ResourceSpec {
+                memory_mb: 512,
+                cpu_shares: 1024,
+                timeout_ms: 60000,
+                network_bytes: None,
+            }),
+            secrets: vec![],
+        };
 
-        register_native_chat_capability(
-            &*marketplace,
-            "ccos.execute.python",
-            "Execute Python Code",
-            "Execute Python code in a secure sandboxed environment with file mounting support. Input files are mounted read-only at /workspace/input/. Output files should be written to /workspace/output/. Supports: pandas, numpy, matplotlib, requests. Optional dependencies can be specified for auto-installation (if in allowlist).",
-            Arc::new(move |inputs: &Value| {
-                let inputs = inputs.clone();
-                let sandbox_cfg = sandbox_cfg.clone();
-                let approval_queue = approval_queue.clone();
-                let sandbox_marketplace = sandbox_marketplace.clone();
-                Box::pin(async move {
-                    // Check if bubblewrap is available (or CCOS_EXECUTE_NO_SANDBOX allows unjailed execution)
-                    let bwrap_available = std::process::Command::new("which")
-                        .arg("bwrap")
-                        .output()
-                        .map(|output| output.status.success())
-                        .unwrap_or(false);
+        let mut manifest = crate::capability_marketplace::types::CapabilityManifest::new(
+            "ccos.execute.python".to_string(),
+            "ccos.execute.python".to_string(),
+            "Execute Python code in a secure sandboxed environment with file mounting support. Input files are mounted read-only at /workspace/input/. Output files should be written to /workspace/output/. Supports: pandas, numpy, matplotlib, requests. Optional dependencies can be specified for auto-installation (if in allowlist).".to_string(),
+            crate::capability_marketplace::types::ProviderType::Sandboxed(cap),
+            "1.0.0".to_string(),
+        );
+        manifest.approval_status = crate::capability_marketplace::types::ApprovalStatus::Approved;
 
-                    if !bwrap_available && !crate::sandbox::no_sandbox_requested() {
-                        return Err(RuntimeError::Generic(
-                            "Python execution not available (bubblewrap not installed)".to_string()
-                        ));
-                    }
-
-                    let sandbox = BubblewrapSandbox::new()
-                        .map_err(|e| RuntimeError::Generic(format!("Failed to create sandbox: {}", e)))?;
-
-                    // Parse inputs
-                    let map = match &inputs {
-                        Value::Map(m) => m,
-                        _ => return Err(RuntimeError::Generic("Expected map inputs".to_string())),
-                    };
-
-                    // Get code
-                    let code = map
-                        .get(&MapKey::Keyword(Keyword("code".to_string())))
-                        .or_else(|| map.get(&MapKey::String("code".to_string())))
-                        .and_then(|v| v.as_string())
-                        .ok_or_else(|| RuntimeError::Generic("Missing 'code' parameter".to_string()))?
-                        .to_string();
-
-                    // Get input files
-                    let mut input_files = Vec::new();
-                    if let Some(files_value) = map
-                        .get(&MapKey::Keyword(Keyword("input_files".to_string())))
-                        .or_else(|| map.get(&MapKey::String("input_files".to_string())))
-                    {
-                        if let Value::Map(files_map) = files_value {
-                            for (key, value) in files_map {
-                                let name = match key {
-                                    MapKey::String(s) | MapKey::Keyword(Keyword(s)) => s.clone(),
-                                    MapKey::Integer(i) => i.to_string(),
-                                };
-                                let path = value.as_string()
-                                    .ok_or_else(|| RuntimeError::Generic(
-                                        format!("Invalid path for file '{}'", name)
-                                    ))?;
-                                input_files.push(InputFile {
-                                    name,
-                                    host_path: std::path::PathBuf::from(path),
-                                });
-                            }
-                        }
-                    }
-
-                    // Validate input files exist
-                    for file in &input_files {
-                        if !file.host_path.exists() {
-                            return Err(RuntimeError::Generic(format!(
-                                "Input file '{}' does not exist at path '{}'",
-                                file.name,
-                                file.host_path.display()
-                            )));
-                        }
-                    }
-
-                    // Get timeout and memory limits
-                    let timeout_ms = map
-                        .get(&MapKey::Keyword(Keyword("timeout_ms".to_string())))
-                        .or_else(|| map.get(&MapKey::String("timeout_ms".to_string())))
-                        .and_then(|v| match v {
-                            Value::Float(f) => Some(*f as u32),
-                            _ => None,
-                        })
-                        .unwrap_or(60000); // 60s default — enough for network I/O inside the sandbox
-
-                    let max_memory_mb = map
-                        .get(&MapKey::Keyword(Keyword("max_memory_mb".to_string())))
-                        .or_else(|| map.get(&MapKey::String("max_memory_mb".to_string())))
-                        .and_then(|v| match v {
-                            Value::Float(f) => Some(*f as u32),
-                            _ => None,
-                        })
-                        .unwrap_or(512);
-
-                    // Parse dependencies (optional, Phase 2)
-                    let mut dependencies = Vec::new();
-                    if let Some(deps_value) = map
-                        .get(&MapKey::Keyword(Keyword("dependencies".to_string())))
-                        .or_else(|| map.get(&MapKey::String("dependencies".to_string())))
-                    {
-                        if let Value::Vector(deps_vec) = deps_value {
-                            for dep in deps_vec {
-                                if let Some(dep_str) = dep.as_string() {
-                                    let dep_str = dep_str.to_string();
-                                    // Ignore ccos-sdk/ccos_sdk as it's injected by the sandbox
-                                    if dep_str != "ccos-sdk" && dep_str != "ccos_sdk" {
-                                        dependencies.push(dep_str);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Parse allowed_hosts
-                    let mut allowed_hosts = Vec::new();
-                    if let Some(hosts_value) = map
-                        .get(&MapKey::Keyword(Keyword("allowed_hosts".to_string())))
-                        .or_else(|| map.get(&MapKey::String("allowed_hosts".to_string())))
-                    {
-                        if let Value::Vector(hosts_vec) = hosts_value {
-                            for host in hosts_vec {
-                                if let Some(host_str) = host.as_string() {
-                                    allowed_hosts.push(host_str.to_string());
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Code Introspection for Network Usage ---
-                    let mut network_required = !allowed_hosts.is_empty();
-                    
-                    // Check dependencies for network libs
-                    let network_deps = ["requests", "httpx", "aiohttp", "urllib3", "websockets"];
-                    for dep in &dependencies {
-                        if network_deps.iter().any(|nd| dep.contains(nd)) {
-                            network_required = true;
-                            break;
-                        }
-                    }
-
-                    // Check code for network imports
-                    let network_imports = [
-                        "import urllib", "from urllib",
-                        "import requests", "from requests",
-                        "import http.client", "from http",
-                        "import socket", "from socket",
-                        "import httpx", "from httpx",
-                        "import aiohttp", "from aiohttp",
-                        "import websockets", "from websockets"
-                    ];
-                    for imp in &network_imports {
-                        if code.contains(imp) {
-                            network_required = true;
-                            break;
-                        }
-                    }
-
-                    let mut final_allowed_hosts = allowed_hosts.clone();
-                    if network_required {
-                        if final_allowed_hosts.is_empty() {
-                            final_allowed_hosts.push("*".to_string());
-                        }
-
-                        if let Some(queue) = &approval_queue {
-                            // Extract session_id and run_id
-                            let session_id = map.get(&MapKey::String("session_id".to_string()))
-                                .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
-                                .and_then(|v| v.as_string())
-                                .map(|s| s.to_string());
-
-                            let run_id = map.get(&MapKey::String("run_id".to_string()))
-                                .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
-                                .and_then(|v| v.as_string())
-                                .map(|s| s.to_string());
-
-                            match queue.is_network_approved("ccos.execute.python", &final_allowed_hosts).await {
-                                Ok(true) => {
-                                    log::debug!("[ccos.execute.python] Network access to {:?} is approved.", final_allowed_hosts);
-                                }
-                                Ok(false) | Err(_) => {
-                                    log::info!("[ccos.execute.python] Network access to {:?} requires approval.", final_allowed_hosts);
-                                    let req_hosts = final_allowed_hosts.clone();
-                                    match queue.add_network_approval(
-                                        "ccos.execute.python".to_string(),
-                                        req_hosts,
-                                        session_id.clone(),
-                                        run_id.clone(),
-                                    ).await {
-                                        Ok(approval_id) => {
-                                            let hosts_msg = if final_allowed_hosts.contains(&"*".to_string()) { "ALL HOSTS".to_string() } else { final_allowed_hosts.join(", ") };
-                                            return Err(RuntimeError::Generic(format!(
-                                                "Sandbox network access to {} requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this network request, then retry your request.",
-                                                hosts_msg, approval_id, approval_id
-                                            )));
-                                        }
-                                        Err(ae) => {
-                                            log::error!("[ccos.execute.python] Failed to create network approval: {}", ae);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Code Introspection for Missing Packages (Static Batching) ---
-                    // Instead of failing and requesting approval one by one at runtime (which causes a tedious loop),
-                    // we statically extract imports via Regex, filter out stdlib, and batch request them upfront.
-                    let mut missing_packages = Vec::new();
-                    if let Some(queue) = &approval_queue {
-                        // Combine detected imports and explicit dependencies for approval check
-                        let stdlib = std::collections::HashSet::from([
-                            "os", "sys", "time", "datetime", "json", "re", "math", "random",
-                            "itertools", "functools", "collections", "hashlib", "hmac",
-                            "base64", "urllib", "http", "socket", "ssl", "asyncio", "threading",
-                            "multiprocessing", "subprocess", "logging", "typing", "pathlib",
-                            "shutil", "glob", "tempfile", "sqlite3", "csv", "xml", "html",
-                            "uuid", "secrets", "dataclasses", "enum", "inspect", "ast",
-                            "traceback", "copy", "pickle", "zlib", "gzip", "tarfile", "zipfile",
-                            "argparse", "unittest", "mock", "warnings", "contextlib", "io",
-                            // We also ignore 'ccos_sdk' since it's injected
-                            "ccos_sdk",
-                        ]);
-
-                        let mut all_required_modules = std::collections::HashSet::new();
-                        
-                        // Add explicitly requested dependencies
-                        for dep in &dependencies {
-                            // Extract base package name if version is specified for basic check
-                            let base_pkg = dep.split(|c| c == '=' || c == '<' || c == '>' || c == '~').next().unwrap_or(dep).trim();
-                            all_required_modules.insert(base_pkg.to_string());
-                        }
-
-                        use regex::Regex;
-                        // Regex matches `import X`, `import X as Y`, `import X, Y`, `from X import Y`
-                        if let Ok(re) = Regex::new(r"(?m)^(?:from\s+([a-zA-Z0-9_]+)(?:\.[a-zA-Z0-9_]+)*\s+import|import\s+([a-zA-Z0-9_]+))") {
-                            for caps in re.captures_iter(&code) {
-                                // Match group 1 is `from X`, group 2 is `import X`
-                                if let Some(m) = caps.get(1).or_else(|| caps.get(2)) {
-                                    let module_name = m.as_str().split('.').next().unwrap_or(m.as_str());
-                                    all_required_modules.insert(module_name.to_string());
-                                }
-                            }
-                        }
-
-                        for module in all_required_modules {
-                            if !stdlib.contains(module.as_str()) {
-                                // If the module is in the config auto_approved list the DependencyManager
-                                // will install it automatically — no queue approval needed.
-                                let auto_approved = &sandbox_cfg.package_allowlist.auto_approved;
-                                if auto_approved.iter().any(|a| a.to_lowercase() == module.to_lowercase()) {
-                                    log::debug!("[ccos.execute.python] Static check: {} is in auto_approved config, skipping approval gate.", module);
-                                    continue;
-                                }
-                                // Check if it's already approved via the persistent queue.
-                                if !queue.is_package_approved(&module, "python").await.unwrap_or(false) {
-                                    missing_packages.push(module);
-                                } else {
-                                    log::debug!("[ccos.execute.python] Static check: {} is already approved.", module);
-                                }
-                            }
-                        }
-
-                        // If unapproved packages are detected, batch request them now.
-                        if !missing_packages.is_empty() {
-                            let mut approval_messages = Vec::new();
-                            let session_id = map.get(&MapKey::String("session_id".to_string()))
-                                .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
-                                .and_then(|v| v.as_string())
-                                .map(|s| s.to_string());
-                            let run_id = map.get(&MapKey::String("run_id".to_string()))
-                                .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
-                                .and_then(|v| v.as_string())
-                                .map(|s| s.to_string());
-
-                            for pkg in &missing_packages {
-                                match queue.add_package_approval(
-                                    pkg.clone(),
-                                    "python".to_string(),
-                                    session_id.clone(),
-                                    run_id.clone(),
-                                ).await {
-                                    Ok(approval_id) => {
-                                        approval_messages.push(format!("- {} (Use: `/approve {}`)", pkg, approval_id));
-                                    }
-                                    Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
-                                        // Package was approved between static analysis and here - silently skip.
-                                        log::info!("[ccos.execute.python] Package {} is already approved, skipping approval request.", pkg);
-                                    }
-                                    Err(ae) => {
-                                        log::error!("[ccos.execute.python] Failed to batch package approval for {}: {}", pkg, ae);
-                                    }
-                                }
-                            }
-
-                            if !approval_messages.is_empty() {
-                                return Err(RuntimeError::Generic(format!(
-                                    "Execution paused. The script requires the following unapproved packages:\n\n{}\n\nPlease visit the Approval UI or use the slash commands above to approve them, then retry.",
-                                    approval_messages.join("\n")
-                                )));
-                            }
-                        }
-                    }
-
-                    // Build sandbox execution config (different from config::types::SandboxConfig)
-                    let exec_sandbox_config = SandboxConfig {
-                        runtime_type: SandboxRuntimeType::Process,
-                        capability_id: Some("ccos.execute.python".to_string()),
-                        resources: Some(ResourceLimits {
-                            memory_mb: max_memory_mb as u64,
-                            timeout_ms: timeout_ms as u64,
-                            ..Default::default()
-                        }),
-                        network_enabled: network_required,
-                        allowed_hosts: final_allowed_hosts.into_iter().collect(),
-                        ..Default::default()
-                    };
-
-                    let mut current_dependencies = dependencies.clone();
-                    let mut max_retries = 3;
-
-                    let result_json = loop {
-                        // Create dependency manager using captured config
-                        let mut effective_sandbox_cfg = sandbox_cfg.clone();
-                        
-                        // Pre-check for approved packages and add them to temporary auto_approved list
-                        if let Some(queue) = &approval_queue {
-                            for dep in &current_dependencies {
-                                if queue.is_package_approved(dep, "python").await.unwrap_or(false) {
-                                    log::debug!("[ccos.execute.python] Package {} is already approved, adding to temporary allowlist", dep);
-                                    effective_sandbox_cfg.package_allowlist.auto_approved.push(dep.clone());
-                                }
-                            }
-                        }
-
-                        let dep_manager = DependencyManager::new(effective_sandbox_cfg);
-
-                    // Capture session/run context from outer inputs so the dispatcher can
-                    // inject them into every SDK-originated ccos.memory.* call, enabling
-                    // session tagging (D) for entries written from inside the sandbox.
-                    let sdk_session_id = map
-                        .get(&MapKey::String("session_id".to_string()))
-                        .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
-                        .and_then(|v| v.as_string())
-                        .map(|s| s.to_string());
-                    let sdk_run_id = map
-                        .get(&MapKey::String("run_id".to_string()))
-                        .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
-                        .and_then(|v| v.as_string())
-                        .map(|s| s.to_string());
-
-                    // Execute using the interactive path which now supports dependencies.
-                    // This ensures SDK capabilities (memory, log) work even when packages are installed.
-                    let result = {
-                        use std::pin::Pin;
-                        use crate::sandbox::bubblewrap::CapabilityDispatcher;
-                        use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
-                        let mp = sandbox_marketplace.clone();
-                        let dispatch_session_id = sdk_session_id.clone();
-                        let dispatch_run_id = sdk_run_id.clone();
-                        let dispatcher: CapabilityDispatcher = std::sync::Arc::new(
-                            move |cap_id: String, mut json_inputs: serde_json::Value| {
-                                let mp = mp.clone();
-                                let session_id = dispatch_session_id.clone();
-                                let run_id = dispatch_run_id.clone();
-                                Box::pin(async move {
-                                    // Inject session_id and run_id so WM entries are tagged
-                                    // correctly (enables C2 cross-run query to find them).
-                                    if let Some(obj) = json_inputs.as_object_mut() {
-                                        if let Some(ref sid) = session_id {
-                                            obj.entry("session_id")
-                                                .or_insert_with(|| serde_json::json!(sid));
-                                        }
-                                        if let Some(ref rid) = run_id {
-                                            obj.entry("run_id")
-                                                .or_insert_with(|| serde_json::json!(rid));
-                                        }
-                                    }
-                                    let rtfs_inputs = json_to_rtfs_value(&json_inputs)
-                                        .map_err(|e| RuntimeError::Generic(
-                                            format!("SDK inputs conversion: {}", e),
-                                        ))?;
-                                    let result = mp.execute_capability(&cap_id, &rtfs_inputs).await?;
-                                    rtfs_value_to_json(&result).map_err(|e| RuntimeError::Generic(
-                                        format!("SDK result conversion: {}", e),
-                                    ))
-                                }) as Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, RuntimeError>> + Send>>
-                            },
-                        );
-                        sandbox
-                            .execute_python_interactive(
-                                &code, 
-                                &input_files, 
-                                &exec_sandbox_config, 
-                                if current_dependencies.is_empty() { None } else { Some(&current_dependencies) },
-                                if current_dependencies.is_empty() { None } else { Some(&dep_manager) },
-                                dispatcher
-                            )
-                            .await
-                    };
-
-                    let result = match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            let err_msg = e.to_string();
-                            // Check if this is a "requires approval" error
-                            if err_msg.contains("requires approval") {
-                                // Extract package name: "Package 'mpmath' requires approval..."
-                                if let Some(pkg) = err_msg.split('\'').nth(1) {
-                                    if let Some(queue) = &approval_queue {
-                                        // Extract session_id and run_id from inputs if available
-                                        let session_id = map.get(&MapKey::String("session_id".to_string()))
-                                            .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
-                                            .and_then(|v| v.as_string())
-                                            .map(|s| s.to_string());
-
-                                        let run_id = map.get(&MapKey::String("run_id".to_string()))
-                                            .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
-                                            .and_then(|v| v.as_string())
-                                            .map(|s| s.to_string());
-
-                                        match queue.add_package_approval(
-                                            pkg.to_string(), 
-                                            "python".to_string(), 
-                                            session_id,
-                                            run_id,  // Pass run_id for approval resolution
-                                        ).await {
-                                            Ok(approval_id) => {
-                                                return Err(RuntimeError::Generic(format!(
-                                                    "Package '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this package, then retry your request.",
-                                                    pkg, approval_id, approval_id
-                                                )));
-                                            }
-                                            Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
-                                                // Package is already approved - the static pre-check likely missed it.
-                                                // We don't block execution here; the retry loop will handle installing it.
-                                                log::info!("[ccos.execute.python] Runtime path: package {} is already approved, allowing retry.", pkg);
-                                            }
-                                            Err(ae) => {
-                                                log::error!("[ccos.execute.python] Failed to create package approval: {}", ae);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            return Err(RuntimeError::Generic(format!("Execution failed: {}", e)));
-                        }
-                    };
-
-                    // Check for ModuleNotFoundError in stderr (missing dependency detection)
-                    // This handles cases where the code runs but imports a missing module
-                    if !result.success {
-                        let stderr = &result.stderr;
-                        // Pattern: "ModuleNotFoundError: No module named 'X'" or "ImportError: No module named X"
-                        if stderr.contains("ModuleNotFoundError") || stderr.contains("ImportError") {
-                            // Try to extract the module name
-                            let module_name = if let Some(rest) = stderr.split("No module named '").nth(1) {
-                                rest.split('\'').next().map(|s| s.to_string())
-                            } else if let Some(rest) = stderr.split("No module named \"").nth(1) {
-                                rest.split('"').next().map(|s| s.to_string())
-                            } else if let Some(rest) = stderr.split("No module named ").nth(1) {
-                                // Handle unquoted module names
-                                rest.split_whitespace().next()
-                                    .map(|s| s.trim_end_matches(',').trim_end_matches('.').to_string())
-                            } else {
-                                None
-                            };
-
-                            if let Some(module) = module_name {
-                                // Ignore ccos-sdk/ccos_sdk as it's injected by the sandbox
-                                if module == "ccos-sdk" || module == "ccos_sdk" {
-                                    log::warn!("[ccos.execute.python] Detected missing module '{}' in stderr, but it is an injected SDK. Ignoring.", module);
-                                    continue;
-                                }
-
-                                log::info!(
-                                    "[ccos.execute.python] Detected missing module '{}' in stderr, creating package approval",
-                                    module
-                                );
-
-                                if let Some(queue) = &approval_queue {
-                                    // Extract session_id and run_id from inputs if available
-                                    let session_id = map.get(&MapKey::String("session_id".to_string()))
-                                        .or_else(|| map.get(&MapKey::Keyword(Keyword("session_id".to_string()))))
-                                        .and_then(|v| v.as_string())
-                                        .map(|s| s.to_string());
-
-                                    let run_id = map.get(&MapKey::String("run_id".to_string()))
-                                        .or_else(|| map.get(&MapKey::Keyword(Keyword("run_id".to_string()))))
-                                        .and_then(|v| v.as_string())
-                                        .map(|s| s.to_string());
-
-                                    if queue.is_package_approved(&module, "python").await.unwrap_or(false) {
-                                        if max_retries > 0 {
-                                            log::info!("[ccos.execute.python] Detected missing module '{}', but it is already approved. Retrying execution with it added to dependencies.", module);
-                                            current_dependencies.push(module.clone());
-                                            max_retries -= 1;
-                                            continue;
-                                        } else {
-                                            log::warn!("[ccos.execute.python] Max retries reached for missing approved module '{}'", module);
-                                        }
-                                    }
-
-                                    match queue.add_package_approval(
-                                        module.clone(),
-                                        "python".to_string(),
-                                        session_id,
-                                        run_id,
-                                    ).await {
-                                        Ok(approval_id) => {
-                                            return Err(RuntimeError::Generic(format!(
-                                                "Package '{}' requires approval. Approval ID: {}\n\nUse: /approve {}\n\nOr visit the approval UI to approve this package, then retry your request.",
-                                                module, approval_id, approval_id
-                                            )));
-                                        }
-                                        Err(ae) if ae.to_string().starts_with("ALREADY_APPROVED:") => {
-                                            // Package is approved — cache was stale when is_package_approved
-                                            // was called above. Retry with it added to the dependency list.
-                                            if max_retries > 0 {
-                                                log::info!(
-                                                    "[ccos.execute.python] Package '{}' confirmed approved (stale cache), retrying with it in dependencies.",
-                                                    module
-                                                );
-                                                current_dependencies.push(module.clone());
-                                                max_retries -= 1;
-                                                continue;
-                                            } else {
-                                                return Err(RuntimeError::Generic(format!(
-                                                    "Package '{}' is approved but install keeps failing (max retries exhausted). Check uv is installed and network is reachable.",
-                                                    module
-                                                )));
-                                            }
-                                        }
-                                        Err(ae) => {
-                                            log::error!("[ccos.execute.python] Failed to create package approval for '{}': {}", module, ae);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Build output
-                    let mut output_map = HashMap::new();
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("success".to_string())),
-                        Value::Boolean(result.success),
-                    );
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("stdout".to_string())),
-                        Value::String(result.stdout),
-                    );
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("stderr".to_string())),
-                        Value::String(result.stderr),
-                    );
-                    
-                    if let Some(exit_code) = result.exit_code {
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("exit_code".to_string())),
-                            Value::Float(exit_code as f64),
-                        );
-                    } else {
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("exit_code".to_string())),
-                            Value::Nil,
-                        );
-                    }
-
-                    // Encode output files
-                    if !result.output_files.is_empty() {
-                        let mut files_map = HashMap::new();
-                        for (name, content) in result.output_files {
-                            let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
-                            files_map.insert(
-                                MapKey::String(name),
-                                Value::String(encoded),
-                            );
-                        }
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("files".to_string())),
-                            Value::Map(files_map),
-                        );
-                    }
-
-                    // Return the successful result from the loop
-                    break Ok(Value::Map(output_map));
-                };
-
-                result_json
-            })
-        }),
-        "high",
-        vec!["compute".to_string()],
-        EffectType::Effectful,
-    )
-    .await?;
-}
+        marketplace.register_capability_manifest(manifest).await?;
+    }
 
     // -----------------------------------------------------------------
     // JavaScript Code Execution Capability (Phase 6)
     // -----------------------------------------------------------------
     {
-        use crate::sandbox::{BubblewrapSandbox, InputFile, SandboxConfig, SandboxRuntimeType};
-        use crate::sandbox::resources::ResourceLimits;
-        use crate::sandbox::dependency_manager::DependencyManager;
+        use crate::capability_marketplace::types::SandboxedCapability;
 
-        let sandbox = Arc::new(BubblewrapSandbox::new()?);
-        let marketplace = Arc::clone(&marketplace);
-        // Clone config for capture in closure
-        let sandbox_cfg = sandbox_config.clone();
-
-        register_native_chat_capability(
-            &*marketplace,
-            "ccos.execute.javascript",
-            "Execute JavaScript Code",
-            "Execute Node.js snippets in a secure sandbox. Input should include 'code'. Optional: 'input_files' (map of name to host_path), 'dependencies' (list), 'timeout_ms', 'max_memory_mb'.",
-            Arc::new(move |inputs: &Value| {
-                let inputs = inputs.clone();
-                let sandbox = Arc::clone(&sandbox);
-                let sandbox_cfg = sandbox_cfg.clone();
-                Box::pin(async move {
-                    let map = match &inputs {
-                        Value::Map(m) => m,
-                        _ => return Err(RuntimeError::Generic("Input must be a map".to_string())),
-                    };
-
-                    let code = map
-                        .get(&MapKey::Keyword(Keyword("code".to_string())))
-                        .or_else(|| map.get(&MapKey::String("code".to_string())))
-                        .and_then(|v| v.as_string())
-                        .ok_or_else(|| RuntimeError::Generic("Missing 'code' parameter".to_string()))?
-                        .to_string();
-
-                    // Parse input files (Phase 1)
-                    let mut input_files = Vec::new();
-                    if let Some(files_value) = map
-                        .get(&MapKey::Keyword(Keyword("input_files".to_string())))
-                        .or_else(|| map.get(&MapKey::String("input_files".to_string())))
-                    {
-                        if let Value::Map(files_map) = files_value {
-                            for (key, value) in files_map {
-                                let name = match key {
-                                    MapKey::String(s) | MapKey::Keyword(Keyword(s)) => s.clone(),
-                                    MapKey::Integer(i) => i.to_string(),
-                                };
-                                let path = value.as_string()
-                                    .ok_or_else(|| RuntimeError::Generic(
-                                        format!("Invalid path for file '{}'", name)
-                                    ))?;
-                                input_files.push(InputFile {
-                                    name,
-                                    host_path: std::path::PathBuf::from(path),
-                                });
-                            }
-                        }
-                    }
-
-                    // Validate input files exist
-                    for file in &input_files {
-                        if !file.host_path.exists() {
-                            return Err(RuntimeError::Generic(format!(
-                                "Input file '{}' does not exist at path '{}'",
-                                file.name,
-                                file.host_path.display()
-                            )));
-                        }
-                    }
-
-                    // Get timeout and memory limits
-                    let timeout_ms = map
-                        .get(&MapKey::Keyword(Keyword("timeout_ms".to_string())))
-                        .or_else(|| map.get(&MapKey::String("timeout_ms".to_string())))
-                        .and_then(|v| match v {
-                            Value::Float(f) => Some(f.clone() as u32),
-                            Value::Integer(i) => Some(i.clone() as u32),
-                            _ => None,
-                        })
-                        .unwrap_or(30000);
-
-                    let max_memory_mb = map
-                        .get(&MapKey::Keyword(Keyword("max_memory_mb".to_string())))
-                        .or_else(|| map.get(&MapKey::String("max_memory_mb".to_string())))
-                        .and_then(|v| match v {
-                            Value::Float(f) => Some(f.clone() as u32),
-                            Value::Integer(i) => Some(i.clone() as u32),
-                            _ => None,
-                        })
-                        .unwrap_or(512);
-
-                    // Parse dependencies (optional, Phase 6)
-                    let mut dependencies = Vec::new();
-                    if let Some(deps_value) = map
-                        .get(&MapKey::Keyword(Keyword("dependencies".to_string())))
-                        .or_else(|| map.get(&MapKey::String("dependencies".to_string())))
-                    {
-                        if let Value::Vector(deps_vec) = deps_value {
-                            for dep in deps_vec {
-                                if let Some(dep_str) = dep.as_string() {
-                                    dependencies.push(dep_str.to_string());
-                                }
-                            }
-                        }
-                    }
-
-                    // Build sandbox execution config
-                    let exec_sandbox_config = SandboxConfig {
-                        runtime_type: SandboxRuntimeType::Process,
-                        capability_id: Some("ccos.execute.javascript".to_string()),
-                        resources: Some(ResourceLimits {
-                            memory_mb: max_memory_mb as u64,
-                            timeout_ms: timeout_ms as u64,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    };
-
-                    // Create dependency manager
-                    let dep_manager = DependencyManager::new(sandbox_cfg.clone());
-
-                    // Execute with optional dependencies
-                    let result = sandbox.execute_javascript(
-                        &code, 
-                        &input_files, 
-                        &exec_sandbox_config,
-                        if dependencies.is_empty() { None } else { Some(&dependencies) },
-                        Some(&dep_manager)
-                    ).await
-                        .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
-
-                    // Build output
-                    let mut output_map = HashMap::new();
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("success".to_string())),
-                        Value::Boolean(result.success),
-                    );
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("stdout".to_string())),
-                        Value::String(result.stdout),
-                    );
-                    output_map.insert(
-                        MapKey::Keyword(Keyword("stderr".to_string())),
-                        Value::String(result.stderr),
-                    );
-                    
-                    if let Some(exit_code) = result.exit_code {
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("exit_code".to_string())),
-                            Value::Float(exit_code as f64),
-                        );
-                    } else {
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("exit_code".to_string())),
-                            Value::Nil,
-                        );
-                    }
-
-                    // Encode output files
-                    if !result.output_files.is_empty() {
-                        let mut files_map = HashMap::new();
-                        for (name, content) in result.output_files {
-                            let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
-                            files_map.insert(
-                                MapKey::String(name),
-                                Value::String(encoded),
-                            );
-                        }
-                        output_map.insert(
-                            MapKey::Keyword(Keyword("files".to_string())),
-                            Value::Map(files_map),
-                        );
-                    }
-
-                    Ok(Value::Map(output_map))
-                })
+        let cap = SandboxedCapability {
+            runtime: "javascript".to_string(),
+            source: "".to_string(),
+            entry_point: None,
+            provider: Some(sandbox_config.runtime.clone()),
+            runtime_spec: None,
+            network_policy: Some(crate::capability_marketplace::types::NetworkPolicy {
+                mode: crate::capability_marketplace::types::NetworkMode::Direct,
+                allowed_hosts: vec![],
+                allowed_ports: vec![],
+                egress_rate_limit: None,
             }),
-            "high",
-            vec!["compute".to_string()],
-            EffectType::Effectful,
-        )
-        .await?;
+            filesystem: None,
+            resources: Some(crate::capability_marketplace::types::ResourceSpec {
+                memory_mb: 512,
+                cpu_shares: 1024,
+                timeout_ms: 30000,
+                network_bytes: None,
+            }),
+            secrets: vec![],
+        };
+
+        let mut manifest = crate::capability_marketplace::types::CapabilityManifest::new(
+            "ccos.execute.javascript".to_string(),
+            "ccos.execute.javascript".to_string(),
+            "Execute Node.js snippets in a secure sandbox. Input should include 'code'. Optional: 'input_files' (map of name to host_path), 'dependencies' (list), 'timeout_ms', 'max_memory_mb'.".to_string(),
+            crate::capability_marketplace::types::ProviderType::Sandboxed(cap),
+            "1.0.0".to_string(),
+        );
+        manifest.approval_status = crate::capability_marketplace::types::ApprovalStatus::Approved;
+
+        marketplace.register_capability_manifest(manifest).await?;
     }
 
 
@@ -4277,7 +3559,7 @@ mod tests {
     use crate::capability_marketplace::CapabilityMarketplace;
     use crate::chat::quarantine::InMemoryQuarantineStore;
     use tokio::sync::RwLock;
-    use serde_json::json;
+
 
     #[tokio::test]
     async fn test_ccos_run_create_capability() {

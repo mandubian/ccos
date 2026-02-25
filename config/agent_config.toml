@@ -271,6 +271,22 @@ model = "stub-mini"
 
 # New: grouped model set
 [[llm_profiles.model_sets]]
+name = "lmstudio"
+provider = "lmstudio"
+api_key_env = "LMSTUDIO_API_KEY"
+base_url = "http://192.168.1.19:1234"
+default = "qwen_35_35_a10"
+
+   [[llm_profiles.model_sets.models]]
+    name = "qwen_35_35_a10"
+    model = "qwen/qwen3.5-35b-a3b"
+    max_prompt_cost_per_1k = 0.0
+    max_completion_cost_per_1k = 0.0
+    quality = "speed"
+    notes = "Good latency / cheaper."
+
+# New: grouped model set
+[[llm_profiles.model_sets]]
 name = "openrouter"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
