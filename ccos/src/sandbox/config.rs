@@ -15,6 +15,7 @@ pub enum SandboxRuntimeType {
     MicroVM,
     Wasm,
     Container,
+    Bubblewrap,
     Native,
 }
 
@@ -79,6 +80,7 @@ impl SandboxConfig {
         } else if let Some(provider) = &cap.provider {
             config.runtime_type = match provider.to_lowercase().as_str() {
                 "firecracker" | "microvm" => SandboxRuntimeType::MicroVM,
+                "bwrap" | "bubblewrap" => SandboxRuntimeType::Bubblewrap,
                 "wasm" | "wasmtime" => SandboxRuntimeType::Wasm,
                 "container" | "docker" | "nsjail" => SandboxRuntimeType::Container,
                 "process" => SandboxRuntimeType::Process,

@@ -695,7 +695,151 @@ impl BubblewrapSandbox {
             output_files,
         })
     }
+}
 
+use crate::sandbox::SandboxRuntime;
+use async_trait::async_trait;
+use rtfs::runtime::microvm::{ExecutionResult, Program};
+use rtfs::runtime::values::Value;
+
+#[async_trait]
+impl SandboxRuntime for BubblewrapSandbox {
+    fn name(&self) -> &str {
+        "bubblewrap"
+    }
+
+    async fn execute(
+        &self,
+        config: &SandboxConfig,
+        program: Program,
+        inputs: Vec<Value>,
+    ) -> rtfs::runtime::error::RuntimeResult<ExecutionResult> {
+        // Extract language and code from Program
+        let (runtime_str, code) = match program {
+            Program::ScriptSource { language, source } => {
+                let lang_str = match language {
+                    rtfs::runtime::microvm::ScriptLanguage::Python => "python",
+                    rtfs::runtime::microvm::ScriptLanguage::JavaScript => "javascript",
+                    rtfs::runtime::microvm::ScriptLanguage::Shell => "shell",
+                    rtfs::runtime::microvm::ScriptLanguage::Ruby => "ruby",
+                    rtfs::runtime::microvm::ScriptLanguage::Lua => "lua",
+                    rtfs::runtime::microvm::ScriptLanguage::Custom { interpreter, .. } => {
+                        if interpreter == "node" {
+                            "javascript"
+                        } else if interpreter == "python3" {
+                            "python"
+                        } else {
+                            // Default to python if unknown, or return error?
+                            "python"
+                        }
+                    }
+                    _ => "python",
+                };
+                (lang_str, source)
+            }
+            _ => {
+                return Err(RuntimeError::Generic(
+                    "BubblewrapSandbox requires source code".to_string(),
+                ))
+            }
+        };
+
+        // We don't have dep_manager injected directly here, but we can extract `requirements` from config resources
+        // or just pass None for now. `NativeCapability` actually used the CodingAgent DependencyManager.
+        // For standard `SandboxedCapability`, if it needs dependencies in bwrap, we will need to inject them,
+        // but for now we extract `input_files` if they exist in `inputs` map (similar to `execute_python` native capability logic).
+
+        let mut extracted_input_files = Vec::new();
+        let mut extracted_dependencies: Option<Vec<String>> = None;
+
+        for val in &inputs {
+            if let Value::Map(m) = val {
+                if let Some(files_value) = m
+                    .get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                        "input_files".to_string(),
+                    )))
+                    .or_else(|| m.get(&rtfs::ast::MapKey::String("input_files".to_string())))
+                {
+                    if let Value::Map(files_map) = files_value {
+                        for (key, path_val) in files_map {
+                            let name = match key {
+                                rtfs::ast::MapKey::String(s)
+                                | rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(s)) => s.clone(),
+                                rtfs::ast::MapKey::Integer(i) => i.to_string(),
+                            };
+                            if let Some(path) = path_val.as_string() {
+                                extracted_input_files.push(InputFile {
+                                    name,
+                                    host_path: std::path::PathBuf::from(path.clone()),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // If the capability manifest provides 'dependencies' metadata or parameter:
+                if let Some(deps_value) = m
+                    .get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                        "dependencies".to_string(),
+                    )))
+                    .or_else(|| m.get(&rtfs::ast::MapKey::String("dependencies".to_string())))
+                {
+                    if let Value::List(deps_list) = deps_value {
+                        let mut deps = Vec::new();
+                        for d in deps_list {
+                            if let Some(s) = d.as_string() {
+                                deps.push(s.to_string());
+                            }
+                        }
+                        extracted_dependencies = Some(deps);
+                    }
+                }
+            }
+        }
+
+        // We don't have the DependencyManager in standard sandbox manager right now,
+        // so dependency autoinstall for generic SandboxedCapability falls back to the static bwrap without it,
+        // unless we instantiate a fresh one or add it to SandboxManager. Let's pass None.
+
+        let execution_result = self
+            .execute_with_runtime(
+                runtime_str,
+                &code,
+                &extracted_input_files,
+                config,
+                extracted_dependencies.as_deref(),
+                None, // No dep_manager for now
+            )
+            .await?;
+
+        use rtfs::runtime::microvm::ExecutionMetadata;
+        use std::time::Duration;
+
+        let metadata = ExecutionMetadata {
+            duration: Duration::from_secs(0),
+            memory_used_mb: 0,
+            cpu_time: Duration::from_secs(0),
+            network_requests: vec![],
+            file_operations: vec![],
+        };
+
+        // Return output files as values in a map or list if present
+        let mut output_content = String::new();
+        output_content.push_str(&execution_result.stdout);
+
+        if !execution_result.success {
+            output_content.push_str("\n--- STDERR ---\n");
+            output_content.push_str(&execution_result.stderr);
+        }
+
+        Ok(ExecutionResult {
+            value: Value::String(output_content),
+            metadata,
+        })
+    }
+}
+
+impl BubblewrapSandbox {
     /// Generic execution method for different runtimes
     async fn execute_with_runtime(
         &self,
@@ -707,6 +851,7 @@ impl BubblewrapSandbox {
         dep_manager: Option<&super::DependencyManager>,
     ) -> Result<SandboxExecutionResult, RuntimeError> {
         use tracing::{info, warn};
+
         // Security scan
         self.scanner
             .scan(code)

@@ -127,7 +127,7 @@ pub fn parse_skill_directory(dir: impl AsRef<Path>) -> Result<Vec<Skill>, ParseE
 }
 
 /// Validate a skill definition
-fn validate_skill(skill: &Skill) -> Result<(), ParseError> {
+fn validate_skill(_skill: &Skill) -> Result<(), ParseError> {
     // TEMPORARY: disabled strict validation to allow AgentSkills spec
     Ok(())
 }

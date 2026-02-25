@@ -564,16 +564,30 @@ impl GatewayState {
                     store.update_run_state(run_id, RunState::Active);
                 }
 
-                if let Err(e) = self
-                    .spawn_agent_for_run(&session_id, run_id, Some(budget))
+                let agent_running = self
+                    .session_registry
+                    .get_session(&session_id)
                     .await
-                {
-                    log::error!(
-                        "[Gateway] Failed to spawn agent for resume {}: {}",
-                        run_id,
-                        e
+                    .map(|s| s.is_agent_running())
+                    .unwrap_or(false);
+
+                if !agent_running {
+                    if let Err(e) = self
+                        .spawn_agent_for_run(&session_id, run_id, Some(budget))
+                        .await
+                    {
+                        log::error!(
+                            "[Gateway] Failed to spawn agent for resume {}: {}",
+                            run_id,
+                            e
+                        );
+                        return Err("INTERNAL_SERVER_ERROR".to_string());
+                    }
+                } else {
+                    log::info!(
+                        "[Gateway] Agent for session {} is already running; skipping re-spawn during checkpoint resume.",
+                        session_id
                     );
-                    return Err("INTERNAL_SERVER_ERROR".to_string());
                 }
 
                 let channel_id = session_id
@@ -621,19 +635,34 @@ impl GatewayState {
                     store.update_run_state(run_id, RunState::Active);
                 }
 
-                // Re-spawn the agent to resume execution.
+                // Re-spawn the agent to resume execution ONLY if it has exited.
                 // Since PausedApproval happens when a capability call fails with "requires approval",
-                // the agent process might have exited. Re-spawning ensures it picks up the run state.
-                if let Err(e) = self
-                    .spawn_agent_for_run(&session_id, run_id, Some(budget))
+                // the agent process might have exited, but usually it just waits for user input.
+                // Re-spawning ensures it picks up the run state if it died, but prevents duplicates if it's alive.
+                let agent_running = self
+                    .session_registry
+                    .get_session(&session_id)
                     .await
-                {
-                    log::error!(
-                        "[Gateway] Failed to spawn agent for resume {}: {}",
-                        run_id,
-                        e
+                    .map(|s| s.is_agent_running())
+                    .unwrap_or(false);
+
+                if !agent_running {
+                    if let Err(e) = self
+                        .spawn_agent_for_run(&session_id, run_id, Some(budget))
+                        .await
+                    {
+                        log::error!(
+                            "[Gateway] Failed to spawn agent for resume {}: {}",
+                            run_id,
+                            e
+                        );
+                        return Err("INTERNAL_SERVER_ERROR".to_string());
+                    }
+                } else {
+                    log::info!(
+                        "[Gateway] Agent for session {} is already running; skipping re-spawn during resume.",
+                        session_id
                     );
-                    return Err("INTERNAL_SERVER_ERROR".to_string());
                 }
 
                 let channel_id = session_id

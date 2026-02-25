@@ -369,7 +369,8 @@ mod tests {
 
     #[test]
     fn test_is_in_base_image() {
-        let config = SandboxConfig::default();
+        let mut config = SandboxConfig::default();
+        config.runtime = "microvm".to_string();
         let manager = DependencyManager::new(config);
 
         assert!(manager.is_in_base_image("pandas"));
@@ -379,7 +380,8 @@ mod tests {
 
     #[test]
     fn test_resolve_dependency() {
-        let config = SandboxConfig::default();
+        let mut config = SandboxConfig::default();
+        config.runtime = "microvm".to_string();
         let manager = DependencyManager::new(config);
 
         // Should be already available
