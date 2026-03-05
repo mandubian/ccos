@@ -1,10 +1,10 @@
-# CCOS-NG: Architecture & Modules Specification
+# Autonoetic: Architecture & Modules Specification
 
-This document defines the physical and logical boundaries, system topology, and concurrency model of the CCOS-NG platform, as outlined in the core concepts.
+This document defines the physical and logical boundaries, system topology, and concurrency model of the Autonoetic platform, as outlined in the core concepts.
 
 ## 1. High-Level System Topology
 
-CCOS-NG operates on a strictly segregated architecture designed to maximize security, observability, and flexibility. 
+Autonoetic operates on a strictly segregated architecture designed to maximize security, observability, and flexibility. 
 
 The system consists of three primary domains:
 1. **The Gateway (Trust Anchor)**: The core Rust binary that manages network connections, API keys, routing, and access control. 
@@ -19,18 +19,19 @@ graph TD
         adapters --> router["Message Router & Policy Engine"]
         router --> vault[("The Vault / Secrets")]
         router --> observability["Observability Stream"]
+        router --> artifactStore[("Artifact Store / Capsule Cache")]
         router --> scheduler["Cron / Hot Path / Fast Route"]
     end
 
     subgraph Agent ["Agent Orchestrator (Directory + LLM)"]
         router <-->|"Prompt / Tool Use"| event_loop["Agent Event Loop"]
-        event_loop --> state[("Manifest: task.md, config.yaml")]
+        event_loop --> state[("Manifest: task.md, SKILL.md")]
         event_loop <--> llm[("LLM Provider<br>OpenAI / Local")]
     end
 
     subgraph Sandbox ["Sandbox Workers (Bwrap / MicroVM)"]
         router <-->|"stdin/stdout"| runner["Skill Execution Environment"]
-        runner <--> sdk["ccos_sdk Client"]
+        runner <--> sdk["autonoetic_sdk Client"]
         sdk -.->|"Local Unix Socket"| router
     end
 ```
@@ -40,24 +41,33 @@ graph TD
 The Gateway is a lightweight, heavily optimized Rust binary. It is the sole entity that holds raw network sockets and controls the physical machine.
 
 ### Core Modules
-* **Network & Multi-Channel Adapters**: Translates external proprietary protocols (e.g., Discord WebSocket, HTTP endpoints) into the internal, unified CCOS-NG message protocol. 
+* **Network & Multi-Channel Adapters**: Translates external proprietary protocols (e.g., Discord WebSocket, HTTP endpoints) into the internal, unified Autonoetic message protocol. 
 * **Message Router & Policy Engine**: Every message, whether from the outside world, from an Agent, or from a Sandbox, passes through here. It evaluates requests against declarative textual policies (e.g., `policy.yaml`) before routing them.
 * **The Vault (Secret Management)**: Securely stores API keys and credentials. The Vault can source secrets from multiple backends: a local encrypted store, a remote secret manager, or **the host machine's own environment variables** (e.g., `$GITHUB_TOKEN` already configured on the server). At startup, the Gateway reads permitted host environment variables into its internal Vault — the host environment is never directly exposed to any Agent or Sandbox process. No raw keys are ever passed to the LLM. Keys are injected directly into Sandbox processes as scoped, ephemeral environment variables or fetched securely via the SDK upon explicitly authorized requests.
   - **Secret Zeroization**: All secret values held in Gateway memory use automatic zeroization (e.g., Rust's `zeroize` crate). When a secret handle is dropped, the underlying memory is wiped, preventing secrets from lingering in process memory after use.
 * **Observability & Causal Chain Logger**: Quietly logs every action, request, and Sandbox artifact into an immutable, append-only JSON/text stream.
+* **Artifact Store & Capsule Manager**: Maintains a content-addressed store for binaries, skill sidecars, shared datasets, and exported Capsules. Artifacts are resolved by `{name, version, digest}` and optionally signature/attestation before execution or sharing.
 * **Cold Path Scheduler**: A lightweight cron-like scheduler capable of directly invoking Sandbox Skills at intervals without waking up the Agent LLM, routing failures back to the relevant Agent only when necessary.
 
 ### LLM Driver Abstraction
 The Gateway abstracts the LLM provider entirely via a unified driver interface.
 - **Provider Agnosticism**: The driver handles Anthropic, OpenAI-compatible (covering OpenAI, DeepSeek, Groq, Mistral, Together, OpenRouter, local Ollama/vLLM), and Google Gemini APIs behind a single trait.
 - **Streaming Support**: Drivers support both synchronous request/response and streaming (via event channels) for real-time token delivery to Channel Adapters.
-- **Per-Agent Driver Resolution**: Each Agent's `config.yaml` can override the Gateway's default provider, model, and API key. The Gateway reuses a shared driver instance when possible, creating a dedicated one only when the Agent specifies a custom endpoint or key.
-- **Graceful Fallback**: If the primary LLM provider returns errors or is unreachable, the Gateway automatically falls back to a secondary provider defined in the Agent's `config.yaml`. The Agent never knows the switch happened.
+- **Per-Agent Driver Resolution**: Each Agent's `SKILL.md` frontmatter can override the Gateway's default provider, model, and API key. The Gateway reuses a shared driver instance when possible, creating a dedicated one only when the Agent specifies a custom endpoint or key.
+- **Graceful Fallback**: If the primary LLM provider returns errors or is unreachable, the Gateway automatically falls back to a secondary provider defined in the Agent's `SKILL.md` frontmatter. The Agent never knows the switch happened.
 
 ### Gateway Topology (Singleton vs. Federated)
 The Gateway architecture is not restricted to a local singleton process.
 - **Singleton**: Runs as a single process managing local Agents and Sandboxes for a single user/server.
 - **Federated**: Gateways can be clustered across different trust boundaries or machines. Agent Manifests can be serialized and transmitted to remote Gateways for execution, allowing heavy workloads (e.g., massive Sandbox tests) to burst into cloud infrastructure while retaining local privacy for the Primary Agent.
+
+### Runtime Closures and Cognitive Capsules
+Autonoetic separates the Agent's logical identity from the runtime required to execute it reproducibly:
+- **Agent Bundle**: `SKILL.md`, `state/`, `history/`, `skills/`, `metrics.json`.
+- **Runtime Lock**: A pinned `runtime.lock` describing the required Gateway version, SDK version, sandbox backend, and artifact dependencies.
+- **Cognitive Capsule**: A portable export that wraps the Agent Bundle plus its Runtime Lock, artifact references or embedded cached artifacts, and optionally the exact Gateway binary needed for hermetic relaunch.
+
+This model lets an Agent remain conceptually independent from the Gateway while still being exportable as a self-contained autonomous unit.
 
 ## 3. The Agent Orchestrator
 
@@ -67,14 +77,15 @@ An Agent is not a long-running system thread, but a conceptual loop bound to a d
 2.  **Manifest Processing**: 
     -   The Gateway parses the Agent's directory.
     -   It reads the `SKILL.md` file (AgentSkills.io compliant), which perfectly encapsulates both the configuration (YAML frontmatter) and the persona (Markdown body).
-    -   **Frontmatter (`config.yaml` equivalent)**: Defines capabilities, LLM engine preferences, identity constraints, and UI settings.
-    -   **Body (`persona.md` equivalent)**: The static System Prompt and core behavioral rules.
+    -   **Frontmatter (runtime config)**: Defines capabilities, LLM engine preferences, identity constraints, and UI settings.
+    -   **Body (persona)**: The static System Prompt and core behavioral rules.
 3.  **Authentication & Sandboxing**: The Gateway verifies the Agent's identity and sets up its isolated execution environment.
 
 ### The Manifest Directory
 ```text
 my_agent/
 ├── SKILL.md       # Unified config (YAML frontmatter) and persona (Markdown body)
+├── runtime.lock   # Pinned runtime closure for reproducible execution
 ├── state/         # Agent working memory (e.g., task.md, scratchpad.md)
 ├── history/       # Context window backup / summarizations
 ├── skills/        # The Agent's capability bundles (agentskills.io standard)
@@ -91,26 +102,28 @@ An Agent Manifest is a fully self-contained directory. It can be `git commit`-ed
 - **Version Control**: Because the Agent is just a directory, its entire history (skills learned, persona changes, state evolution) can be tracked in Git.
 
 ### Multi-Agent Communities & Peer-to-Peer
-CCOS-NG natively supports complex Agent interactions beyond simple parent-child relationships:
+Autonoetic natively supports complex Agent interactions beyond simple parent-child relationships:
 - **Communities**: Multiple Agents can serve the same human (e.g., a "DevOps Agent" and a "Finance Agent"), or different users' Agents can collaborate (e.g., User A's Agent shares a generated PDF with User B's Agent).
 - **Peer-to-Peer Message Bus**: Sub-Agents do not have to route their intermediate results back through their spawning parent. The Gateway acts as a message bus, allowing a "Researcher" Sub-Agent to send data directly to a "Coder" Sub-Agent without exhausting the primary Agent's context window.
 
 ### The Concept of "Skills" (AgentSkills Standard)
-CCOS-NG adopts the **[AgentSkills open standard](https://agentskills.io/)** for defining capabilities. Skills are not just single scripts; they are file bundles built around a unifying `SKILL.md` file.
+Autonoetic adopts the **[AgentSkills open standard](https://agentskills.io/)** for defining capabilities. Skills are not just single scripts; they are file bundles built around a unifying `SKILL.md` file.
 - **Instructional Focus:** The core `SKILL.md` is a Markdown guide that teaches the LLM *how* to perform a task, formatted with necessary YAML frontmatter (`name`, `description`, `allowed-tools`).
 - **One Skill, Multiple Tools (1-to-Many):** A Skill is a holistic capability (e.g., "GitHub Management"), not a single tool. A single `SKILL.md` file can instruct the LLM on how to use *multiple distinct tools* (e.g., `github_search_issues`, `github_create_pr`, `github_merge`).
 - **Code as an Optional Sidecar (From Snippets to Full Projects):** If a Skill requires arbitrary execution, it is bundled with helper code placed inside the `scripts/` directory. **This directory is not restricted to tiny single-file scripts.** A Coder Agent can generate and bundle an entire fully-fledged project (e.g., a Python project managed by `uv`, a Node.js module with a `package.json`, or a Rust binary). The `SKILL.md` teaches the LLM how to invoke the entry points of that complex project, and the Gateway executes it synchronously in the Sandbox Worker.
 - **Self-Sufficiency & Discovery:** Because skills are self-documenting, the Agent loads just the name and description from the `SKILL.md` frontmatter during discovery, reading the full Markdown body only when the skill is actually needed.
 
 ### Strict Constraints for Dynamically Generated Skills
-When Agents dynamically generate and persist new Skills into the Global Skill Engine Repository, CCOS-NG forces them to populate the AgentSkills `metadata` field with strict execution contracts. This prevents unbounded hallucination or resource exhaustion when other agents blindly consume the generated skill.
+When Agents dynamically generate and persist new Skills into the Global Skill Engine Repository, Autonoetic forces them to populate the AgentSkills `metadata` field with strict execution contracts. This prevents unbounded hallucination or resource exhaustion when other agents blindly consume the generated skill.
 A dynamically generated `SKILL.md` must include:
   - **`metadata.input_schema` / `metadata.output_schema`**: A strict JSON Schema defining exactly what parameters the script expects and what format the artifacts will take.
   - **`metadata.resource_limits`**: Declared thresholds (`max_memory_mb`, `timeout_seconds`) that the Gateway will physically enforce on the Sandbox process running the `scripts/` payload.
+  - **`metadata.declared_effects`**: The intended effect surface of the Skill (`memory_write`, `net_connect`, `secrets_get`, `agent_message`, etc.). The Gateway intersects these with the Agent's granted capabilities before execution.
+  - **`metadata.artifact_dependencies`**: Pinned binary or bundle dependencies referenced by `{name, version, digest}` so generated Skills remain reproducible and auditable.
 
 ### Lifecycle & Event Loop
 1. **Wake**: An incoming event from the Gateway loads the Manifest directory into memory.
-2. **Context Assembly**: The Agent reads its `persona.md`, current `state/task.md`, and relevant `history` into the LLM context.
+2. **Context Assembly**: The Agent reads the `SKILL.md` body, current `state/task.md`, and relevant `history` into the LLM context.
 3. **Reasoning & Execution**: The Agent outputs structured requests (e.g., skill executions, inter-agent messages, file read/writes) back to the Gateway.
 4. **Hibernate**: If the task is delegated (spawning a Sub-Agent) or completed, the Gateway flushes the state back to disk and unloads the context, freeing up system memory.
 
@@ -119,12 +132,12 @@ A dynamically generated `SKILL.md` must include:
 Untrusted text scripts dynamically generated by the Primary Agent, or complex execution environments bounded within an AgentSkills `scripts/` directory, are executed here.
 
 ### Beyond Tiny Scripts (Full Project Runtimes)
-CCOS-NG intentionally does not limit the Agent's output to simple, 50-line Python snippets. If a problem is highly complex, a specialist Coder Agent is free to scaffold an entire project inside the Sandbox.
+Autonoetic intentionally does not limit the Agent's output to simple, 50-line Python snippets. If a problem is highly complex, a specialist Coder Agent is free to scaffold an entire project inside the Sandbox.
 - **Dependency Management**: The process runner can inherently trigger package managers (like `uv run`, `npm start`) as the entry point.
 - **Directory Mounting**: The entire `scripts/` directory of the Skill bundle is mounted into the ephemeral worker, giving the executing code access to its multi-file architecture, localized `assets/`, and internal modules.
 
 ### Isolation Strategy
-CCOS-NG allows configurable backend runners:
+Autonoetic allows configurable backend runners:
 * **Bubblewrap (bwrap)**: For lightweight, fast Linux namespace sandboxing. Read-only root filesystem, ephemeral `/tmp`, isolated network namespaces.
 * **Docker / Podman**: For heavier dependencies, full project toolchains (e.g., requiring a specific Node version), or reproducible container images.
 * **MicroVMs (e.g., Firecracker)**: For absolute hardware-level tenant isolation in hosted cluster deployments.
@@ -132,14 +145,15 @@ CCOS-NG allows configurable backend runners:
 ### Standardized Execution
 The Gateway executes the codebase as a standard process:
 1. It creates an isolated directory and mounts the relevant Skill payload.
-2. It injects the `ccos_sdk` into the environment.
-3. It pipes the task instructions into standard input (`stdin`) of the primary entry point script.
-4. It streams standard output (`stdout`) and standard error (`stderr`) to the Causal Chain.
-5. On exit, the Gateway retrieves the resulting artifacts and the exit code, packaging it for the parent Agent.
+2. It resolves and mounts any declared artifact dependencies from the content-addressed Artifact Store.
+3. It injects the `autonoetic_sdk` into the environment.
+4. It pipes the task instructions into standard input (`stdin`) of the primary entry point script.
+5. It streams standard output (`stdout`) and standard error (`stderr`) to the Causal Chain.
+6. On exit, the Gateway retrieves the resulting artifacts and the exit code, packaging it for the parent Agent.
 
 ## 5. Two-Tier Memory Architecture
 
-CCOS-NG uses a layered memory model. The Agent's *active reasoning* happens in text files. The Gateway provides a *searchable substrate* behind the SDK for long-term recall.
+Autonoetic uses a layered memory model. The Agent's *active reasoning* happens in text files. The Gateway provides a *searchable substrate* behind the SDK for long-term recall.
 
 ### Tier 1 — Textual Working State (Agent-Side)
 The LLM reads and edits plain text files directly inside its Manifest directory:
@@ -160,6 +174,13 @@ For long-term recall, semantic search, and multi-agent coordination, the Gateway
 ### Why Both Tiers?
 The Agent never *knows* there is a database. It works in text for its active reasoning (Tier 1), and when it needs to recall something from the past, it calls `sdk.memory.recall()` — which returns *text*. The Gateway handles indexing internally. The LLM stays in text-land the whole time.
 
+### Shared Artifact Plane
+Large shared content does not travel inline through agent messages. Instead, the Gateway exposes a shared artifact plane:
+- **Immutable blobs**: Content-addressed by digest for deduplication and auditability.
+- **Artifact handles**: Agents exchange references plus summaries instead of copying bytes.
+- **Zero-copy local mounts**: On the same host, the Gateway can mount artifacts read-only into another sandbox instead of re-streaming them.
+- **Portable closures**: The same store can hold tool binaries, skill sidecars, datasets, and Gateway runtimes referenced by a Capsule.
+
 ### Horizontal Scaling (Sub-Agents)
 Instead of one massive LLM request trying to do everything, the Primary Agent delegates steps by dispatching standard events to the Gateway, which spawns autonomous, fire-and-forget Sub-Agents (each with their own Manifests).
 
@@ -168,20 +189,20 @@ When an Agent delegates a task and hibernates, the Gateway manages the wait. Onc
 
 ## 6. Execution Paradigms
 
-CCOS-NG classifies workloads into three distinct execution paths to conserve tokens and reduce latency:
+Autonoetic classifies workloads into three distinct execution paths to conserve tokens and reduce latency:
 1. **Single Action (The Hot Path)**: Synchronous, single-shot execution. The Agent immediately generates a tool call, the Gateway runs it rapidly in a Sandbox, and the result is returned directly to the user.
 2. **Scheduled Action (The Cold Path)**: Long-running or recurring tasks (e.g., Cron jobs). The Gateway executes predefined Scripts directly without polling the LLM, only waking the Agent if an anomalous error occurs or a summary is explicitly requested.
 3. **Complex Goal (The Orchestration Path)**: Asynchronous, multi-step execution. The Primary LLM breaks the request into a `task.md` plan and delegates chunks to specialized Sub-Agents.
 
 ## 7. Learning & Evolution
 
-Agents in CCOS-NG improve continuously:
+Agents in Autonoetic improve continuously:
 - **Conceptual Learning (Primary Agent)**: Distills episodic events from the Causal Chain into long-term Semantic Memory (e.g., user preferences, project context) to enhance future routing or tone.
 - **Procedural Learning (Sub-Agents & Skill Engine)**: When a specialized Agent invents a highly successful script or prompt to solve an edge case, the platform can formally capture it. The resulting generated package is saved to the **Global Skill Engine Repository**, instantly expanding the capabilities of all other Agents in the ecosystem.
 
 ## 8. Capability-Based Security Model
 
-Every Agent operation is subject to capability checks. Capabilities are declared in the Agent's `config.yaml` Manifest and enforced at runtime by the Gateway before every operation.
+Every Agent operation is subject to capability checks. Capabilities are declared in the Agent's `SKILL.md` frontmatter and enforced at runtime by the Gateway before every operation.
 
 ### Capability Types
 * `ToolInvoke(name)` — Access to a specific tool (e.g., `file_read`).
@@ -196,13 +217,13 @@ When an Agent spawns a child via `ecosystem.spawn_agent`, the Gateway runs `vali
 
 ### Enforcement Flow
 1. The Agent requests an action (e.g., tool call, message send).
-2. The Gateway's `CapabilityManager` checks the Agent's granted capabilities.
-3. **Granted** → validate parameters (path traversal, SSRF) → execute.
+2. The Gateway's `CapabilityManager` checks the Agent's granted capabilities and, if the action originates from a Skill, intersects them with the Skill's declared effects.
+3. **Granted** → validate parameters (path traversal, SSRF, artifact digest/signature) → execute.
 4. **Denied** → return a typed `PermissionDenied` error to the LLM.
 
 ## 9. Agent Loop Stability
 
-Production LLM agent loops are prone to degeneracy. CCOS-NG implements multiple stability guards:
+Production LLM agent loops are prone to degeneracy. Autonoetic implements multiple stability guards:
 
 ### Loop Guard
 The Gateway hashes `(tool_name, params)` for each tool call. If the Agent calls the same tool with the same parameters repeatedly:
@@ -227,8 +248,8 @@ Relying on autonomous LLMs introduces attack vectors. The Gateway is designed to
 ### Attack Vector Mitigations
 1. **Prompt Injection & The "Confused Deputy"**: The Gateway's strict textual `policy.yaml` rules supersede the LLM's commands. Even if tricked, the Primary Agent cannot bypass the Gateway's hardcoded network or file boundaries.
 2. **Economic Exhaustion**: The Gateway enforces per-user and per-agent Token Spending Hard-Caps and Rate Limits (GCRA algorithm).
-3. **Sandbox Escapes**: CCOS-NG relies on zero-trust runtimes without host loopback access, read-only root filesystems, and minimal kernel capabilities.
-4. **Knowledge Poisoning & The Auditor Agent**: A malicious skill could contain an obfuscated backdoor. CCOS-NG employs a completely out-of-band **Auditor Agent**. This "immune system" agent wakes up periodically (e.g., overnight) and uses heavy LLM reasoning to deeply inspect the Causal Chain logs and every dynamically generated script in the Global Skill Repository. If toxicity or a backdoor is detected, it quarantines the Skill.
+3. **Sandbox Escapes**: Autonoetic relies on zero-trust runtimes without host loopback access, read-only root filesystems, and minimal kernel capabilities.
+4. **Knowledge Poisoning & The Auditor Agent**: A malicious skill could contain an obfuscated backdoor. Autonoetic employs a completely out-of-band **Auditor Agent**. This "immune system" agent wakes up periodically (e.g., overnight) and uses heavy LLM reasoning to deeply inspect the Causal Chain logs and every dynamically generated script in the Global Skill Repository. If toxicity or a backdoor is detected, it quarantines the Skill.
 5. **SDK Abuse (Lateral Movement)**: Every SDK call is a Gateway request subject to Capability checks. The Gateway rate-limits SDK calls per Sandbox, enforces least-privilege on secret access, and caps the number of inter-agent messages a single skill execution can send.
 
 ### Proactive Defenses
@@ -238,4 +259,4 @@ Relying on autonomous LLMs introduces attack vectors. The Gateway is designed to
 * **Path Traversal Prevention**: All file paths are validated and resolved safely before any file operation.
 * **Secret Zeroization**: See §2 (The Vault).
 * **Manifest Signing**: See §3 (Ed25519).
-* **Merkle Audit Trail**: See Protocols spec (§4).
+* **Hash-Chain Audit Trail**: See Protocols spec (§4).

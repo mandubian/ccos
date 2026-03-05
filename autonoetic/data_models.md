@@ -1,10 +1,10 @@
-# CCOS-NG: Data Models & Schemas
+# Autonoetic: Data Models & Schemas
 
 This document defines the strict, concrete data models that form the contract between the Rust Gateway, the Agent Orchestrator, the SDK, and the external ecosystem. All components MUST adhere to these schemas.
 
 ## 1. Agent Manifest (`SKILL.md`)
 
-The Manifest defines an Agent's identity, routing, UI configuration, and access control. It lives at the root of the Agent's directory. By natively adopting the `SKILL.md` format (YAML frontmatter + Markdown body), CCOS-NG perfectly aligns with the AgentSkills.io standard, treating Agents themselves as highly capable, persistent skills.
+The Manifest defines an Agent's identity, routing, UI configuration, and access control. It lives at the root of the Agent's directory. By natively adopting the `SKILL.md` format (YAML frontmatter + Markdown body), Autonoetic aligns with the AgentSkills.io standard, treating Agents themselves as highly capable, persistent skills.
 
 ```markdown
 ---
@@ -12,11 +12,12 @@ version: "1.0"
 
 # Runtime declaration — what engine runs this Agent
 runtime:
-  engine: "ccos-ng"                # Declares this as a CCOS-NG managed agent
+  engine: "autonoetic"            # Declares this as an Autonoetic-managed agent
   gateway_version: ">=0.1.0"       # Minimum compatible Gateway binary version
   sdk_version: ">=0.1.0"           # Minimum compatible SDK version
   type: "stateful"                 # stateful (Agent with memory/loop) vs stateless (Tool)
   sandbox: "bubblewrap"            # Execution environment: bubblewrap | docker | microvm | wasm
+  runtime_lock: "runtime.lock"     # Pinned runtime closure file bundled with the agent
 
 agent:
   id: "agent_research_alpha"
@@ -85,7 +86,35 @@ You are an autonomous research agent. Your goal is to fetch, synthesize, and for
 3. Output findings strictly in the format defined in your UI settings.
 ```
 
-## 2. Dynamic Skill Metadata (`SKILL.md` Frontmatter)
+## 2. Runtime Lock (`runtime.lock`)
+
+The Runtime Lock pins the execution closure required to reproduce an Agent or Skill on another Gateway.
+
+```yaml
+gateway:
+  artifact: "marketplace://gateway/ccos-gateway"
+  version: "0.1.0"
+  sha256: "abc123..."
+  signature: "ed25519:deadbeef..."
+
+sdk:
+  version: "0.1.0"
+
+sandbox:
+  backend: "bubblewrap"
+
+artifacts:
+  - name: "ripgrep"
+    version: "14.1.0"
+    sha256: "def456..."
+    source: "marketplace://tools/ripgrep"
+  - name: "pdf-parser-bundle"
+    version: "0.3.2"
+    sha256: "987654..."
+    source: "marketplace://skills/pdf-parser-bundle"
+```
+
+## 3. Dynamic Skill Metadata (`SKILL.md` Frontmatter)
 
 When an Agent autonomously generates a new skill in the `skills/` directory, it MUST provide strict YAML frontmatter defining execution constraints for the Sandbox.
 
@@ -118,12 +147,72 @@ resource_limits:
   max_memory_mb: 256
   timeout_seconds: 30
   net_access: false
+
+declared_effects:
+  memory_read: ["self.state.*"]
+  memory_write: ["self.state.output.*"]
+  net_connect: ["api.ocr.com"]
+  secrets_get: []
+  message_send: ["agent_research_*"]
+  agent_spawn: false
+
+artifact_dependencies:
+  - name: "ocr-engine"
+    version: "2.4.1"
+    sha256: "deadbeef..."
+    source: "marketplace://tools/ocr-engine"
 ---
 ```
 
-## 3. Causal Chain Log Entry (`.jsonl`)
+## 4. Artifact Handle
 
-The fundamental unit of observability in CCOS-NG. Every API call, message, and SDK action is appended to the immutable Causal Chain.
+Large files, binaries, datasets, and shared outputs are represented as immutable content-addressed artifact handles.
+
+```json
+{
+  "artifact_id": "artifact_01jabc...",
+  "sha256": "7d865e959b2466918c9863a465f1...",
+  "kind": "dataset",                      // binary, skill_bundle, dataset, gateway_runtime, report
+  "owner_id": "agent_research_alpha",
+  "visibility": "shared",                 // private, shared, capsule
+  "size_bytes": 104857600,
+  "mime_type": "application/parquet",
+  "created_at": "2026-03-05T10:12:00Z",
+  "summary": "Competitor dataset extracted from Q1 filings",
+  "source_runtime": {
+    "gateway_version": "0.1.0",
+    "skill_name": "pdf_table_extractor"
+  }
+}
+```
+
+## 5. Cognitive Capsule Manifest (`capsule.json`)
+
+A Cognitive Capsule packages an Agent bundle together with its runtime closure for portable relaunch.
+
+```json
+{
+  "capsule_id": "capsule_01jdef...",
+  "agent_id": "agent_research_alpha",
+  "mode": "hermetic",                     // thin or hermetic
+  "created_at": "2026-03-05T10:20:00Z",
+  "entrypoint": "SKILL.md",
+  "runtime_lock": "runtime.lock",
+  "included_artifacts": [
+    {"artifact_id": "artifact_01jabc...", "sha256": "7d865e959b2466918c9863a465f1..."}
+  ],
+  "gateway_runtime": {
+    "artifact": "marketplace://gateway/ccos-gateway",
+    "version": "0.1.0",
+    "sha256": "abc123..."
+  },
+  "redactions": ["secrets", "channel_sessions"]
+}
+```
+
+## 6. Causal Chain Log Entry (`.jsonl`)
+
+The fundamental unit of observability in Autonoetic. Every API call, message, and SDK action is appended to the immutable Causal Chain.
 
 ```json
 {
@@ -138,11 +227,11 @@ The fundamental unit of observability in CCOS-NG. Every API call, message, and S
   "payload": {
     "attempted_key": "GITHUB_API_TOKEN"
   },
-  "prev_hash": "a3f8c2b7e1...hash...9x1z" // Merkle tree chaining
+  "prev_hash": "a3f8c2b7e1...hash...9x1z" // Hash-chain linkage
 }
 ```
 
-## 4. OFP WireMessage (Federation & IPC)
+## 7. OFP WireMessage (Federation & IPC)
 
 The base envelope used for all TCP Gateway-to-Gateway Federation, and internal Unix Socket communication where applicable.
 
@@ -167,7 +256,7 @@ The base envelope used for all TCP Gateway-to-Gateway Federation, and internal U
 }
 ```
 
-## 5. Tier 2 Memory Object (Gateway Substrate)
+## 8. Tier 2 Memory Object (Gateway Substrate)
 
 When an agent uses `sdk.memory.remember()` or `recall()`, the Gateway persists this internal schema in its database (SQLite/KV).
 
@@ -183,7 +272,7 @@ When an agent uses `sdk.memory.remember()` or `recall()`, the Gateway persists t
 }
 ```
 
-## 6. Task Board Entry
+## 9. Task Board Entry
 
 When an agent posts to the shared `.tasks` queue natively.
 

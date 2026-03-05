@@ -1,10 +1,10 @@
-# CCOS-NG: System Protocols
+# Autonoetic: System Protocols
 
-This document defines the core data formats and communication standards governing interactions between the fundamental architectural components of CCOS-NG.
+This document defines the core data formats and communication standards governing interactions between the fundamental architectural components of Autonoetic.
 
 ## 1. Context & Motivation
 
-CCOS-NG abandons bespoke RPC mechanisms and thick client architectures inside Sandboxes and Agents. Instead, to maximize security and portability, all components interact using JSON-based message passing over standard I/O pipes (stdin/stdout) or simple local Unix sockets.
+Autonoetic abandons bespoke RPC mechanisms and thick client architectures inside Sandboxes and Agents. Instead, to maximize security and portability, all components interact using JSON-based message passing over standard I/O pipes (stdin/stdout) or simple local Unix sockets.
 
 ## 2. Gateway <-> Agent Protocol
 
@@ -44,17 +44,20 @@ For example:
 * `system.terminate_agent`: A forced termination (Death & GC). The agent has exceeded its TTL or completed its overarching objective. Memory is flushed, and the Gateway marks the Manifest for archiving.
 
 #### 2. Outbound from Agent (to Gateway)
-* `ecosystem.send_message`: Routes a text/multimedia payload to another entity (Sub-Agent or Human) via the message bus.
+* `ecosystem.send_message`: Routes a text/multimedia payload to another entity (Sub-Agent or Human) via the message bus. Large content is passed by artifact handle, not inline payload.
 * `ecosystem.spawn_agent`: Requests the manifestation of a new subordinate Agent loop, returning a new `agent_id`.
   - **External CLI Wrapping**: The payload can specify wrapping a third-party CLI tool (e.g., `aider`, `claude-code`) instead of a generic LLM. The Gateway automatically sandboxes the process, piping the parent Agent's instructions to `stdin` and routing the tool's output back to the ecosystem.
 * `ecosystem.schedule_cron`: Requests the Gateway to invoke a specific Sandbox Skill at a regular interval (The Cold Path) without waking the LLM up unless an error occurs.
 * `ecosystem.skill_describe`: Requests the Gateway to load the full body of a specific `SKILL.md` file into the agent's context window. (Discovery is done upfront via the YAML frontmatter).
 * `ecosystem.sandbox_execute`: Requests the asynchronous/synchronous execution of arbitrary code or a specific tool script residing in a Skill's `scripts/` sidecar directory. Because a single Skill can offer multiple tools, this payload contains the specific tool/script name alongside the `stdin` payload.
-* `ecosystem.request_approval`: Suspends the current execution thread, lifting metadata about an attempted boundary violation up to the parent or Human to manually authorize.
+* `ecosystem.request_approval`: Requests human or policy approval for a boundary-crossing action. The Agent is expected to pause its own loop and retry after approval is granted.
+* `ecosystem.artifact_publish`: Persists a file or sandbox output into the Gateway's content-addressed Artifact Store, returning an immutable handle.
+* `ecosystem.artifact_mount`: Requests a previously published artifact handle to be mounted into a sandbox or made visible to another Agent.
+* `ecosystem.capsule_export` / `ecosystem.capsule_import`: Packages or restores an Agent bundle together with its runtime closure for portable relaunch.
 
 ## 3. Agent <-> Sandbox Protocol (The SDK Layer)
 
-A Sandbox process executing a generated Python text script does not speak directly to the Agent. All SDK calls (`ccos_sdk.memory.read()`) actually flow to the Gateway as JSON-RPC requests over a local Unix socket mounted in the Sandbox.
+A Sandbox process executing a generated Python text script does not speak directly to the Agent. All SDK calls (`autonoetic_sdk.memory.read()`) actually flow to the Gateway as JSON-RPC requests over a local Unix socket mounted in the Sandbox.
 
 ### The Sandbox Event Stream
 
@@ -63,6 +66,9 @@ Sandboxes are ephemeral, stateless tasks. While running, they only emit and cons
 #### Methods (Sandbox to Gateway)
 * `sdk.secret.get(name)`: Asks the Gateway to fetch an API Key. If the Policy Engine rejects it, the Gateway returns an immediate RPC error.
 * `sdk.files.upload(path)` / `sdk.files.download(url)`: Requests the Gateway's networking stack to handle the actual bytes.
+* `sdk.artifact.put(path)`: Stores large outputs or local files in the Artifact Store and returns an immutable handle.
+* `sdk.artifact.mount(ref, target_path)`: Requests a handle to be mounted read-only inside the current sandbox.
+* `sdk.artifact.share(ref, target_agent_id)`: Grants another Agent read access to an existing artifact handle.
 * `sdk.emit_log(level, string)`: Pushes standard output logs directly to the Gateway's Observability stream without waiting on the parent Agent.
 
 #### Terminal Artifact Emission
@@ -72,9 +78,30 @@ When a Sandbox script attempts to `sys.exit()`, the Gateway intercepts the final
 3. Specially designated return schemas written to `.ccos/out.json`.
 The Gateway then packs these together into an `ecosystem.skill_completed` method and routes it back to the parent Agent.
 
-## 4. External Ecosystem Protocols (MCP)
+## 4. Artifact and Capsule Protocol
 
-CCOS-NG natively adopts the **Model Context Protocol (MCP)** to ensure maximum interoperability with the broader AI ecosystem, rather than relying on proprietary integrations or A2A (Agent-to-Agent) complexity.
+Autonoetic treats binaries, large files, shared datasets, and portable runtime closures as first-class protocol objects rather than hidden implementation details.
+
+### Artifact Handles
+Artifacts are immutable objects referenced by typed handles:
+- **Content-addressed**: `sha256` digest is the primary identity.
+- **Policy-scoped**: Access is granted per Agent, Skill, or Capsule import/export flow.
+- **Transport-light**: Messages carry handles and summaries, not raw bytes, unless the payload is explicitly small enough to inline.
+
+### Runtime Lock Resolution
+When the Gateway boots an Agent, it resolves the Agent's `runtime.lock`:
+1. Verify the requested Gateway/runtime version.
+2. Resolve required artifacts by `{name, version, digest}` from local cache or marketplace.
+3. Validate signatures or attestations if required by policy.
+4. Mount the approved artifacts into the sandbox or execution environment.
+
+### Cognitive Capsule Modes
+- **Thin Capsule**: Contains the Agent bundle plus `runtime.lock` and artifact references only. A receiving Gateway fetches the pinned dependencies.
+- **Hermetic Capsule**: Embeds the Agent bundle, the `runtime.lock`, and the cached artifacts needed for offline or exact replay, optionally including the Gateway binary itself.
+
+## 5. External Ecosystem Protocols (MCP)
+
+Autonoetic natively adopts the **Model Context Protocol (MCP)** to ensure maximum interoperability with the broader AI ecosystem, rather than relying on proprietary integrations or A2A (Agent-to-Agent) complexity.
 
 ### MCP Client (Gateway acting as Client)
 The Gateway can connect to external MCP servers via `stdio` (subprocess) or SSE (Server-Sent Events).
@@ -83,16 +110,16 @@ The Gateway can connect to external MCP servers via `stdio` (subprocess) or SSE 
 - **Execution**: When an Agent calls an MCP tool, the Gateway routes the JSON-RPC `tools/call` over the respective transport.
 
 ### MCP Server (Gateway acting as Server)
-The Gateway exposes CCOS-NG Agents as callable MCP tools to external clients (e.g., Cursor, VS Code, Claude Desktop) via `stdio` or HTTP `POST /mcp`.
-- **Tool Exposure**: Each Agent becomes a tool named `ccos_agent_{name}` accepting a `message` parameter.
-- **Execution**: External IDEs can route complex tasks directly to specialized CCOS-NG agents.
+The Gateway exposes Autonoetic Agents as callable MCP tools to external clients (e.g., Cursor, VS Code, Claude Desktop) via `stdio` or HTTP `POST /mcp`.
+- **Tool Exposure**: Each Agent becomes a tool named `autonoetic_agent_{name}` accepting a `message` parameter.
+- **Execution**: External IDEs can route complex tasks directly to specialized Autonoetic agents.
 
-## 5. Gateway-to-Gateway Federation Protocol (OFP)
+## 6. Gateway-to-Gateway Federation Protocol (OFP)
 
-CCOS-NG **natively adopts the OpenFang Wire Protocol (OFP)** as its federation layer, ensuring wire-level compatibility with OpenFang nodes. CCOS-NG Gateways can federate with each other *and* with OpenFang instances out of the box.
+Autonoetic **natively adopts the OpenFang Wire Protocol (OFP)** as its federation layer, ensuring wire-level compatibility with OpenFang nodes. Autonoetic Gateways can federate with each other *and* with OpenFang instances out of the box.
 
 ### Why OFP (Not a Custom Protocol)
-OFP is MIT/Apache-2.0 licensed, battle-tested, and shares the same design philosophy as CCOS-NG: lightweight JSON-RPC over TCP with HMAC-SHA256 mutual authentication. Rather than reinventing an identical protocol, CCOS-NG adopts it directly and extends it with optional enhancements negotiated during handshake.
+OFP is MIT/Apache-2.0 licensed, battle-tested, and shares the same design philosophy as Autonoetic: lightweight JSON-RPC over TCP with HMAC-SHA256 mutual authentication. Rather than reinventing an identical protocol, Autonoetic adopts it directly and extends it with optional enhancements negotiated during handshake.
 
 ### OFP Base Protocol (Wire-Compatible with [OpenFang](https://github.com/RightNow-AI/openfang?tab=readme-ov-file))
 Gateways communicate over long-lived TCP sockets using newline-delimited JSON-RPC framing.
@@ -104,8 +131,8 @@ Gateways communicate over long-lived TCP sockets using newline-delimited JSON-RP
   - `RouteMessage` / `RouteResponse`: Forward a message to a remote Agent and receive the reply.
   - `Ping` / `Pong`: Keepalive heartbeats (default: 30s).
 
-### CCOS-NG Extensions (Negotiated at Handshake)
-During the HMAC handshake, CCOS-NG Gateways advertise optional extensions via an `"extensions"` field. If the peer supports them, they are activated for the session. If the peer is a vanilla OpenFang node, the extensions are simply skipped and the base OFP protocol is used.
+### Autonoetic Extensions (Negotiated at Handshake)
+During the HMAC handshake, Autonoetic Gateways advertise optional extensions via an `"extensions"` field. If the peer supports them, they are activated for the session. If the peer is a vanilla OpenFang node, the extensions are simply skipped and the base OFP protocol is used.
 
 - **`tls`**: Wraps the TCP connection in TLS (via `rustls`) for transport encryption. HMAC remains the identity mechanism. Essential for internet-facing federations; optional on trusted LANs.
 - **`msg_hmac`**: Every `WireMessage` carries an HMAC-SHA256 signature over its JSON payload + a monotonic sequence number. Provides per-message integrity, replay prevention, and session hijack protection on long-lived connections.
@@ -117,9 +144,12 @@ Each Gateway maintains a local `PeerRegistry` tracking all connected peers and t
 - When an Agent calls `ecosystem.send_message` targeting a remote Agent, the Gateway checks the PeerRegistry, finds the owning peer, and transparently routes via `RouteMessage`. The Agent never knows the target is on a different machine.
 
 ### OpenFang Interoperability 
-Because CCOS-NG speaks native OFP, a CCOS-NG Gateway can be added as a peer to an existing OpenFang cluster by simply sharing the same `shared_secret` in both configs. OpenFang agents can discover and message CCOS-NG agents, and vice versa. The extensions (`tls`, `msg_hmac`, `resilience`) gracefully degrade when connected to a peer that does not support them.
+Because Autonoetic speaks native OFP, an Autonoetic Gateway can be added as a peer to an existing OpenFang cluster by simply sharing the same `shared_secret` in both configs. OpenFang agents can discover and message Autonoetic agents, and vice versa. The extensions (`tls`, `msg_hmac`, `resilience`) gracefully degrade when connected to a peer that does not support them.
 
-## 6. The Causal Chain Logging Format
+### Artifact Mobility Across Gateways
+Gateway-to-Gateway messages carry artifact handles, digests, and metadata rather than large payloads whenever possible. If the receiving Gateway does not already possess the artifact, it can fetch or replicate it lazily according to policy.
+
+## 7. The Causal Chain Logging Format
 
 Every protocol event flowing through the Gateway is recorded into an immutable log stream. This acts as the backbone for the Asynchronous Auditor loop and human debugging.
 
@@ -138,8 +168,8 @@ All Causal logs are strictly formatted as line-delimited JSON (`.jsonl`) to supp
 }
 ```
 
-### Merkle Audit Trail (Tamper-Evidence)
-Each Causal Chain entry includes a `prev_hash` field containing the SHA-256 hash of the previous entry. This forms a Merkle hash chain, providing cryptographic tamper-evidence:
+### Hash-Chain Audit Trail (Tamper-Evidence)
+Each Causal Chain entry includes a `prev_hash` field containing the SHA-256 hash of the previous entry. This forms a hash-linked chain, providing cryptographic tamper-evidence:
 - If any historical log entry is altered or deleted, the chain breaks and the discrepancy is immediately detectable.
 - The Auditor Agent uses this chain to verify the integrity of the audit trail before performing its security analysis.
 - The chain root hash can be periodically signed and published for non-repudiable external verification.
