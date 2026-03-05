@@ -1,6 +1,6 @@
-# CCOS-NG: Command Line Interface (CLI)
+# Autonoetic: Command Line Interface (CLI)
 
-The `ccos` CLI is the primary human-to-system interface for CCOS-NG. It manages the full lifecycle of the Gateway daemon, local Agents, and external interoperability.
+The `autonoetic` CLI is the primary human-to-system interface for Autonoetic. It manages the full lifecycle of the Gateway daemon, local Agents, and external interoperability.
 
 ## 1. Global Flags & Configuration
 
@@ -11,11 +11,11 @@ Commands can be modified by standard global flags:
 
 ---
 
-## 2. Gateway Lifecycle (`ccos gateway`)
+## 2. Gateway Lifecycle (`autonoetic gateway`)
 
 Commands to manage the core Rust daemon that routes messages and enforces Sandbox policies.
 
-### `ccos gateway start`
+### `autonoetic gateway start`
 Starts the Gateway daemon in the foreground.
 - **Flags:**
   - `-d, --daemon`: Run in the background.
@@ -26,21 +26,21 @@ Starts the Gateway daemon in the foreground.
   2. Binds the local Unix Socket (or TCP loopback) for Agent IPC.
   3. Binds the OFP port (e.g., `4200`) for cluster federation.
 
-### `ccos gateway stop`
+### `autonoetic gateway stop`
 Gracefully terminates a background Gateway daemon.
 - **Operation:** Sends a graceful shutdown signal. The Gateway will send an OFP `Advertise` with an empty Agent list to connected peers before completely exiting.
 
-### `ccos gateway status`
+### `autonoetic gateway status`
 Outputs a table of Gateway health, loaded policies, active memory usage, and connected peers.
 
 ---
 
-## 3. Agent Management (`ccos agent`)
+## 3. Agent Management (`autonoetic agent`)
 
 Commands for scaffolding and orchestrating AI Agents.
 
-### `ccos agent init <agent_id>`
-Scaffolds a new CCOS-NG Agent directory.
+### `autonoetic agent init <agent_id>`
+Scaffolds a new Autonoetic Agent directory.
 - **Flags:**
   - `--template <name>`: E.g., `researcher`, `coder`, `auditor`.
 - **Operation:**
@@ -53,7 +53,7 @@ Scaffolds a new CCOS-NG Agent directory.
   └── history/
   ```
 
-### `ccos agent run <agent_id> [message]`
+### `autonoetic agent run <agent_id> [message]`
 Boots an Agent and connects it to the Gateway.
 - **Flags:**
   - `--interactive, -i`: Drops the user into a persistent chat loop with the Agent via `stdio`.
@@ -61,47 +61,47 @@ Boots an Agent and connects it to the Gateway.
 - **Operation:**
   If a `[message]` is provided, it sends that message as the kickoff instruction. If the `SKILL.md` contains an `input_schema`, the CLI will prompt the user to fill out the required UI configuration either via terminal prompts or by opening a local browser window.
 
-### `ccos agent list`
+### `autonoetic agent list`
 Lists all local Agents registered with the Gateway, showing their status (Stopped, Running, Hibernating).
 
 ---
 
-## 4. Ecosystem & Skills (`ccos skill`)
+## 4. Ecosystem & Skills (`autonoetic skill`)
 
 Commands for managing the tools and capabilities an Agent relies on.
 
-### `ccos skill install <github_url_or_skill_id> [--agent <agent_id>]`
+### `autonoetic skill install <github_url_or_skill_id> [--agent <agent_id>]`
 Downloads and installs an AgentSkills.io compliant bundle.
 - **Operation:** Extracts the `SKILL.md` and `scripts/` sidecar into the target Agent's `skills/` directory.
 
-### `ccos skill uninstall <skill_name> --agent <agent_id>`
+### `autonoetic skill uninstall <skill_name> --agent <agent_id>`
 Removes a skill from an Agent's capability list.
 
 ---
 
-## 5. Federation & Cluster (`ccos federate`)
+## 5. Federation & Cluster (`autonoetic federate`)
 
 Commands exposing the OFP protocol to humans.
 
-### `ccos federate join <peer_address>`
+### `autonoetic federate join <peer_address>`
 Connects the local Gateway to a remote Gateway (or OpenFang node).
 - **Operation:** Initiates the HMAC-SHA256 handshake over TCP. Logs the negotiation of extensions (TLS, `msg_hmac`, etc.).
 
-### `ccos federate list`
+### `autonoetic federate list`
 Outputs the local `PeerRegistry`, showing connected Gateways and the Remote Agents they are advertising.
 
 ---
 
-## 6. MCP Integration (`ccos mcp`)
+## 6. MCP Integration (`autonoetic mcp`)
 
 Commands for managing Model Context Protocol external servers.
 
-### `ccos mcp add <server_name> --command <cmd> [args...]`
+### `autonoetic mcp add <server_name> --command <cmd> [args...]`
 Registers a local MCP server with the Gateway.
-- **Example:** `ccos mcp add github --command npx -- -y @modelcontextprotocol/server-github`
+- **Example:** `autonoetic mcp add github --command npx -- -y @modelcontextprotocol/server-github`
 - **Operation:** The Gateway will automatically spawn this subprocess, run `tools/list`, and namespace the tools as `mcp_github_*` for Agents to use.
 
-### `ccos mcp expose <agent_id>`
-Temporarily runs the Gateway as an MCP Server on `stdio`, specifically exposing `<agent_id>` as a callable tool. This is the command used to plug a CCOS-NG Agent into Cursor, VS Code, or Claude Desktop.
+### `autonoetic mcp expose <agent_id>`
+Temporarily runs the Gateway as an MCP Server on `stdio`, specifically exposing `<agent_id>` as a callable tool. This is the command used to plug an Autonoetic Agent into Cursor, VS Code, or Claude Desktop.
 - **Example Usage in Cursor Config:**
-  `{"command": "ccos", "args": ["mcp", "expose", "agent_coder_alpha"]}`
+  `{"command": "autonoetic", "args": ["mcp", "expose", "agent_coder_alpha"]}`

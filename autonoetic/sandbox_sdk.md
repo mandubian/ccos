@@ -1,6 +1,6 @@
-# CCOS-NG: Sandbox SDK API Design (`ccos_sdk`)
+# Autonoetic: Sandbox SDK API Design (`autonoetic_sdk`)
 
-This document defines the interface for the lightweight Python and Javascript `ccos_sdk` libraries injected into every ephemeral Sandbox created by the CCOS-NG Gateway. 
+This document defines the interface for the lightweight Python and Javascript `autonoetic_sdk` libraries injected into every ephemeral Sandbox created by the Autonoetic Gateway. 
 
 Because code executed in the Sandbox is frequently generated dynamically by Agents (varying from tiny scripts to fully structured `uv`/`npm` projects residing in an AgentSkills `scripts/` directory), the SDK must prioritize simplicity, determinism, and strong security typing over flexibility.
 
@@ -11,25 +11,25 @@ The Sandbox environment exists in zero trust.
 * The script cannot directly retrieve system variables holding secrets.
 * The script cannot arbitrarily message APIs through loopback localhost ports securely.
 
-Instead, the single interface bridging the sandbox to the outer CCOS-NG Gateway is the `ccos_sdk`.
+Instead, the single interface bridging the sandbox to the outer Autonoetic Gateway is the `autonoetic_sdk`.
 
 Every SDK call ultimately maps to a synchronous IPC/Unix Socket request made back to the Gateway. The Gateway runs the Agent Policy Engine on every method invocation before answering.
 
 ## 2. Global Initialization
 
 ```python
-import ccos_sdk
+import autonoetic_sdk
 
 # The SDK automatically binds to the Gateway Unix Socket passed as 
 # an environment variable ($CCOS_SOCKET_PATH) during microVM initialization.
 # In a multi-file complex project, you only need to run init() once at your entry point.
-sdk = ccos_sdk.init()
+sdk = autonoetic_sdk.init()
 ```
 
 ## 3. The Library Surface
 
 ### 1. The Memory API (Two-Tier)
-The SDK exposes two tiers of memory access corresponding to the CCOS-NG Two-Tier Memory Architecture.
+The SDK exposes two tiers of memory access corresponding to the Autonoetic Two-Tier Memory Architecture.
 
 #### Tier 1 — Working State (Direct File Access)
 Read/write to the immediate working directory or Manifest files of the parent Agent (if authorized).
@@ -78,7 +78,7 @@ Retrieves ephemeral credentials for use in API requests safely.
 try:
     token = sdk.secrets.get("GITHUB_API_TOKEN")
     # Use token in requests...
-except ccos_sdk.errors.ApprovalRequiredError as e:
+except autonoetic_sdk.errors.ApprovalRequiredError as e:
     # If the secret requires human approval, the SDK raises an immediate 
     # typed error. The script must cleanly exit or handle the absence of the key.
     print(f"Cannot proceed without {e.secret_name}, exiting.")
@@ -108,7 +108,21 @@ file_handle = sdk.files.download("https://example.com/data.tar.gz")
 sdk.files.upload("results.pdf", target="human_owner")
 ```
 
-### 6. The Observability Stream
+### 6. The Artifact API
+Large content should be persisted once and shared by handle rather than copied through inter-agent messages.
+
+```python
+# Persist a large output as an immutable artifact
+artifact = sdk.artifacts.put("output/competitors.parquet", visibility="shared")
+
+# Mount a previously shared artifact read-only inside the sandbox
+sdk.artifacts.mount(ref=artifact["artifact_id"], target_path="/workspace/input/competitors.parquet")
+
+# Share an artifact handle with another agent
+sdk.artifacts.share(ref=artifact["artifact_id"], agent_id="analyst_agent_2")
+```
+
+### 7. The Observability Stream
 Manually emit critical application-level events into the Causal Chain without relying solely on raw `stdout`.
 
 ```python
@@ -116,7 +130,7 @@ Manually emit critical application-level events into the Causal Chain without re
 sdk.events.emit(type="scraping_complete", data={"rows_extracted": 5000})
 ```
 
-### 7. The Task Board API (Multi-Agent Coordination)
+### 8. The Task Board API (Multi-Agent Coordination)
 A shared task queue enabling peer-to-peer collaboration between Agents without routing through a parent.
 
 ```python
@@ -140,10 +154,17 @@ To govern LLM hallucination and ensure stability, the SDK uses strict runtime ex
 ### Strict Schema Validation
 If the Sandbox script is a dynamically generated AgentSkill, the Gateway intercepts all SDK outputs (e.g., standard output artifacts or `sdk.events.emit` payloads) and validates them against the `metadata.output_schema` defined in the `SKILL.md` frontmatter. If the script hallucinates invalid JSON types, the Gateway drops it and raises a fatal exception to trigger the LLM's Punishment loop.
 
+### Effective Authority
+Every SDK call is governed by two layers:
+1. The parent Agent's granted capabilities.
+2. The executing Skill's `metadata.declared_effects`.
+
+The Gateway allows only the intersection of those two scopes. A Skill can never exercise more authority than the Agent, and an Agent can voluntarily restrict a Skill below its own maximum privileges.
+
 ### Exceptions
-* `ccos_sdk.errors.PolicyViolation`: Thrown when the script attempts an action strictly prohibited by `policy.yaml` (e.g., calling `sdk.message.send("*")`).
-* `ccos_sdk.errors.RateLimitExceeded`: Thrown when the script hits Gateway rate-limit governors or exceeds the `max_memory_mb` / `timeout_seconds` defined in its own `metadata.resource_limits`.
-* `ccos_sdk.errors.ApprovalRequiredError`: Thrown immediately when an operation (like fetching a secret) requires an asynchronous human Approval Event. The script cannot "block" awaiting the secret; it must cleanly exit and respawn later if authorized.
+* `autonoetic_sdk.errors.PolicyViolation`: Thrown when the script attempts an action strictly prohibited by `policy.yaml` (e.g., calling `sdk.message.send("*")`).
+* `autonoetic_sdk.errors.RateLimitExceeded`: Thrown when the script hits Gateway rate-limit governors or exceeds the `max_memory_mb` / `timeout_seconds` defined in its own `metadata.resource_limits`.
+* `autonoetic_sdk.errors.ApprovalRequiredError`: Thrown immediately when an operation (like fetching a secret) requires an asynchronous human Approval Event. The script cannot "block" awaiting the secret; it must cleanly exit and respawn later if authorized.
 
 ### Token Governor
 All strings pushed through the SDK APIs are monitored by the Gateway. If a script attempts to push 500MB of raw HTML logs into `sdk.events.emit()`, the Gateway automatically truncates the payload and flags the event in the Causal Chain to prevent upstream context-window exhaustion.
