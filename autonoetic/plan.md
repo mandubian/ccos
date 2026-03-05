@@ -84,17 +84,17 @@
 
 ---
 
-## Phase 2: Implementation Scaffolding 🔜
+## Phase 2: Implementation Scaffolding ✅
 
-- [ ] Define Rust workspace structure
-  - [ ] `autonoetic-gateway` (core daemon)
-  - [ ] `autonoetic-types` (shared data models, capability enums)
-  - [ ] `autonoetic-ofp` (OFP wire protocol crate)
-  - [ ] `autonoetic-mcp` (MCP client/server adapter)
-  - [ ] `autonoetic-sdk` (Python/JS SDK libraries)
-- [ ] Implement `autonoetic` CLI binary (clap-based)
-- [ ] Stub Gateway: config loading, Agent directory scanning, `runtime.lock` resolution
-- [ ] Stub Sandbox: bwrap process spawning with stdio piping
+- [x] Define Rust workspace structure
+  - [x] `autonoetic-gateway` (core daemon)
+  - [x] `autonoetic-types` (shared data models, capability enums)
+  - [x] `autonoetic-ofp` (OFP wire protocol crate)
+  - [x] `autonoetic-mcp` (MCP client/server adapter)
+  - [x] `autonoetic-sdk` (Python/JS SDK libraries)
+- [x] Implement `autonoetic` CLI binary (clap-based)
+- [x] Stub Gateway: config loading, Agent directory scanning, `runtime.lock` resolution
+- [x] Stub Sandbox: bwrap process spawning with stdio piping
 
 ---
 

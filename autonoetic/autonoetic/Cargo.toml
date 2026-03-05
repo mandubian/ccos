@@ -1,0 +1,15 @@
+[package]
+name = "autonoetic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autonoetic-gateway.workspace = true
+autonoetic-types.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs = "6.0.0"

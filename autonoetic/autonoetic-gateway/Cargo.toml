@@ -1,0 +1,19 @@
+[package]
+name = "autonoetic-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autonoetic-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+secrecy = "0.10.3"
+reqwest = { version = "0.13.2", features = ["json"] }
+uuid = { version = "1.21.0", features = ["v4"] }
+chrono = "0.4.44"
+async-trait = "0.1.89"
