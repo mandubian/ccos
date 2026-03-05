@@ -61,13 +61,20 @@ The Gateway architecture is not restricted to a local singleton process.
 
 ## 3. The Agent Orchestrator
 
-An Agent is not a long-running system thread, but a conceptual loop bound to a directory on disk (The Manifest).
+An Agent is not a long-running system thread, but a conceptual loop bound to a directory on disk (The Manifest). The Gateway manages the lifecycle of Agents through a series of steps:
+
+1.  **Agent Activation**: An incoming event (e.g., user message, scheduled task) triggers the Gateway to activate an Agent.
+2.  **Manifest Processing**: 
+    -   The Gateway parses the Agent's directory.
+    -   It reads the `SKILL.md` file (AgentSkills.io compliant), which perfectly encapsulates both the configuration (YAML frontmatter) and the persona (Markdown body).
+    -   **Frontmatter (`config.yaml` equivalent)**: Defines capabilities, LLM engine preferences, identity constraints, and UI settings.
+    -   **Body (`persona.md` equivalent)**: The static System Prompt and core behavioral rules.
+3.  **Authentication & Sandboxing**: The Gateway verifies the Agent's identity and sets up its isolated execution environment.
 
 ### The Manifest Directory
 ```text
 my_agent/
-├── config.yaml    # LLM settings, fallback rules, recovery policy
-├── persona.md     # System prompt outlining role and capabilities
+├── SKILL.md       # Unified config (YAML frontmatter) and persona (Markdown body)
 ├── state/         # Agent working memory (e.g., task.md, scratchpad.md)
 ├── history/       # Context window backup / summarizations
 ├── skills/        # The Agent's capability bundles (agentskills.io standard)
@@ -119,7 +126,8 @@ CCOS-NG intentionally does not limit the Agent's output to simple, 50-line Pytho
 ### Isolation Strategy
 CCOS-NG allows configurable backend runners:
 * **Bubblewrap (bwrap)**: For lightweight, fast Linux namespace sandboxing. Read-only root filesystem, ephemeral `/tmp`, isolated network namespaces.
-* **Docker / gVisor**: For heavier dependencies, full project toolchains (e.g., requiring a specific Node version), or when true kernel isolation is required.
+* **Docker / Podman**: For heavier dependencies, full project toolchains (e.g., requiring a specific Node version), or reproducible container images.
+* **MicroVMs (e.g., Firecracker)**: For absolute hardware-level tenant isolation in hosted cluster deployments.
 
 ### Standardized Execution
 The Gateway executes the codebase as a standard process:
