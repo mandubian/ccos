@@ -65,6 +65,8 @@ Autonoetic takes inspiration from systems like OpenFang, but it is differentiate
 - explicit artifact and capsule semantics
 - a sharper separation between logical agent identity and execution runtime
 
+We are also actively trying to reuse the Openfang Protocol (OFP) as much as possible, as it provides a robust and well-designed foundation for agent interoperability.
+
 ## Status
 
 Specification and design are substantially defined. The next phase is implementation scaffolding around the constrained MVP in [`plan.md`](plan.md).
