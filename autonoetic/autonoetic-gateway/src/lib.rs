@@ -23,7 +23,7 @@ pub use autonoetic_types::agent::AgentMeta;
 pub use autonoetic_types::config::GatewayConfig;
 pub use autonoetic_types::runtime_lock::RuntimeLock;
 pub use causal_chain::CausalLogger;
-pub use llm::{build_driver, HttpLlmDriver, LlmDriver};
+pub use llm::{build_driver, LlmDriver};
 pub use policy::PolicyEngine;
 pub use router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
 pub use runtime_lock::resolve_runtime_lock;
