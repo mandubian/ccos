@@ -11,6 +11,7 @@ pub mod config;
 pub mod llm;
 pub mod policy;
 pub mod router;
+pub mod runtime;
 pub mod runtime_lock;
 pub mod sandbox;
 pub mod server;

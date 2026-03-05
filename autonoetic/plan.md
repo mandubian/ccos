@@ -98,27 +98,27 @@
 
 ---
 
-## Phase 3: Core Engine 🔜
+## Phase 3: Core Engine ✅
 
-- [ ] Gateway event loop (tokio async runtime)
-- [ ] JSON-RPC message router
-- [ ] Policy engine (capability validation)
-- [ ] Artifact store (content-addressed cache + handle resolution)
-- [ ] LLM Driver abstraction (Anthropic, OpenAI, Gemini)
-- [ ] Causal Chain logger (append-only .jsonl with hash-chain linkage)
-- [ ] Vault (env var ingestion, secret zeroization)
+- [x] Gateway event loop (tokio async runtime)
+- [x] JSON-RPC message router
+- [x] Policy engine (capability validation)
+- [x] Artifact store (content-addressed cache + handle resolution)
+- [x] LLM Driver abstraction (Anthropic, OpenAI, Gemini)
+- [x] Causal Chain logger (append-only .jsonl with hash-chain linkage)
+- [x] Vault (env var ingestion, secret zeroization)
 
 ---
 
-## Phase 4: Agent Runtime 🔜
+## Phase 4: Agent Runtime ✅
 
-- [ ] SKILL.md parser (YAML frontmatter + Markdown body)
-- [ ] Agent lifecycle (Wake → Context Assembly → Reasoning → Hibernate)
-- [ ] Tier 1 memory (state/ directory read/write)
-- [ ] Tier 2 memory (SQLite + vector embeddings)
-- [ ] Skill declared effects + artifact dependency enforcement
-- [ ] Loop Guard & Session Repair
-- [ ] Ed25519 Manifest Signing
+- [x] SKILL.md parser (YAML frontmatter + Markdown body)
+- [x] Agent lifecycle (Wake → Context Assembly → Reasoning → Hibernate)
+- [x] Tier 1 memory (state/ directory read/write)
+- [x] Tier 2 memory (SQLite + vector embeddings)
+- [x] Skill declared effects + artifact dependency enforcement
+- [x] Loop Guard & Session Repair
+- [x] Ed25519 Manifest Signing
 
 ---
 
