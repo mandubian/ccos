@@ -233,7 +233,7 @@ impl LlmDriver for OpenAiDriver {
 /// Parse a non-streaming JSON response body.
 fn parse_response(j: &serde_json::Value) -> CompletionResponse {
     let choice = &j["choices"][0];
-    let text = choice["message"]["content"].as_str().unwrap_or("").to_string();
+    let text = extract_text_content(&choice["message"]["content"]);
 
     let tool_calls = choice["message"]["tool_calls"].as_array()
         .map(|arr| {
@@ -255,11 +255,79 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
     CompletionResponse { text, tool_calls, stop_reason, usage }
 }
 
+fn extract_text_content(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let mut out = String::new();
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                out.push_str(s);
+                continue;
+            }
+            if let Some(s) = item["text"].as_str() {
+                out.push_str(s);
+                continue;
+            }
+            if let Some(s) = item["content"].as_str() {
+                out.push_str(s);
+                continue;
+            }
+        }
+        return out;
+    }
+    if let Some(s) = content["text"].as_str() {
+        return s.to_string();
+    }
+    if let Some(s) = content["content"].as_str() {
+        return s.to_string();
+    }
+    String::new()
+}
+
 fn parse_stop_reason(s: &str) -> StopReason {
     match s {
         "stop" | "end_turn" => StopReason::EndTurn,
         "length" => StopReason::MaxTokens,
         "tool_calls" | "tool_use" => StopReason::ToolUse,
         other => StopReason::Other(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_response_with_string_content() {
+        let j = json!({
+            "choices": [{
+                "message": { "content": "hello" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 2 }
+        });
+        let resp = parse_response(&j);
+        assert_eq!(resp.text, "hello");
+    }
+
+    #[test]
+    fn test_parse_response_with_array_content_blocks() {
+        let j = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "hello "},
+                        {"type": "text", "text": "world"}
+                    ]
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 2 }
+        });
+        let resp = parse_response(&j);
+        assert_eq!(resp.text, "hello world");
     }
 }

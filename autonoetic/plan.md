@@ -164,3 +164,5 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - Added CLI tests for runtime policy enforcement and scaffold creation in `autonoetic/src/main.rs`.
 - Added binary-level CLI integration coverage in `autonoetic/tests/cli_e2e.rs` for `agent init` + `agent run --interactive` (scripted `/exit`) to validate end-to-end command wiring.
 - `SKILL.md` parsing now supports AgentSkills-compliant top-level frontmatter (`name`, `description`, `metadata`) with Autonoetic manifest fields nested under `metadata.autonoetic` for editor/tool compatibility.
+- Lifecycle now writes compact causal events by default and supports optional full redacted evidence capture via `AUTONOETIC_EVIDENCE_MODE=full` (`evidence_ref` pointers under `history/evidence/<session_id>/`).
+- Causal tracing now includes explicit session semantics (`session/start`, `session/end`, `session_id`, `turn_id`, `event_seq`) so one agent can be run multiple times with unambiguous trace segmentation.

@@ -85,4 +85,8 @@ From `autonoetic/`:
 bash examples/quickstart/run.sh
 ```
 
-It initializes an agent in an isolated `/tmp` workspace, switches the scaffolded provider to `ollama` (no API key required for the smoke flow), and starts interactive mode with a scripted `/exit` so you can validate basic behavior out of the box.
+By default it initializes an agent in an isolated `/tmp` workspace and runs a real headless call against OpenRouter `google/gemini-3-flash-preview` (requires `OPENROUTER_API_KEY`). You can also run `smoke` mode for local interactive startup/exit without a remote model call.
+
+Each run appends lifecycle/tool events to the agent causal trace at `agents/<agent_id>/history/causal_chain.jsonl`.
+Set `AUTONOETIC_EVIDENCE_MODE=full` to additionally capture redacted full evidence payloads with `evidence_ref` pointers in causal entries.
+Causal payloads now include `session_id`, `turn_id`, and `event_seq` for multi-run and multi-turn introspection.
