@@ -63,7 +63,23 @@ impl AgentExecutor {
 
     /// Run the agent loop until completion or guard trip.
     pub async fn execute_loop(&mut self) -> anyhow::Result<()> {
+        let mut history: Vec<Message> = vec![
+            Message::system(self.instructions.clone()),
+            Message::user(self.initial_user_message.clone()),
+        ];
+        let _ = self.execute_with_history(&mut history).await?;
+        Ok(())
+    }
+
+    /// Continue execution from an existing conversation history.
+    ///
+    /// Returns the latest assistant text produced during this execution cycle.
+    pub async fn execute_with_history(
+        &mut self,
+        history: &mut Vec<Message>,
+    ) -> anyhow::Result<Option<String>> {
         tracing::info!("Agent {} waking up...", self.manifest.agent.id);
+        self.guard = LoopGuard::new(5);
 
         let mut mcp_runtime = McpToolRuntime::from_env().await?;
         if !mcp_runtime.is_empty() {
@@ -84,12 +100,7 @@ impl AgentExecutor {
             .unwrap_or_else(|| "gpt-4o".to_string());
 
         let temperature = self.manifest.llm_config.as_ref().map(|c| c.temperature as f32);
-
-        // Conversation history (grows with tool call results)
-        let mut history: Vec<Message> = vec![
-            Message::system(self.instructions.clone()),
-            Message::user(self.initial_user_message.clone()),
-        ];
+        let mut latest_assistant_text: Option<String> = None;
 
         loop {
             // --- Loop Guard ---
@@ -121,6 +132,9 @@ impl AgentExecutor {
                 tool_calls = response.tool_calls.len(),
                 "LLM response received"
             );
+            if !response.text.trim().is_empty() {
+                latest_assistant_text = Some(response.text.clone());
+            }
 
             match response.stop_reason {
                 StopReason::ToolUse => {
@@ -157,21 +171,30 @@ impl AgentExecutor {
                     self.guard.register_progress();
                 }
                 StopReason::EndTurn | StopReason::StopSequence => {
+                    if !response.text.trim().is_empty() {
+                        history.push(Message::assistant(response.text.clone()));
+                    }
                     tracing::info!("Agent {} task complete, hibernating", self.manifest.agent.id);
                     break;
                 }
                 StopReason::MaxTokens => {
+                    if !response.text.trim().is_empty() {
+                        history.push(Message::assistant(response.text.clone()));
+                    }
                     tracing::warn!("Agent {} exceeded max tokens", self.manifest.agent.id);
                     break;
                 }
                 StopReason::Other(ref reason) => {
+                    if !response.text.trim().is_empty() {
+                        history.push(Message::assistant(response.text.clone()));
+                    }
                     tracing::warn!("Agent {} stopped: {}", self.manifest.agent.id, reason);
                     break;
                 }
             }
         }
 
-        Ok(())
+        Ok(latest_assistant_text)
     }
 }
 
@@ -287,7 +310,9 @@ fn execute_sandbox_tool_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::{CompletionRequest, CompletionResponse, LlmDriver, StopReason, TokenUsage};
     use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn manifest_with_capabilities(capabilities: Vec<Capability>) -> AgentManifest {
@@ -449,5 +474,44 @@ dependencies:
         )
         .expect_err("policy should deny command");
         assert!(err.to_string().contains("sandbox command denied by ShellExec policy"));
+    }
+
+    struct FixedTextDriver;
+
+    #[async_trait::async_trait]
+    impl LlmDriver for FixedTextDriver {
+        async fn complete(&self, _request: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+            Ok(CompletionResponse {
+                text: "assistant reply".to_string(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: TokenUsage::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_history_appends_assistant_text() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let mut runtime = AgentExecutor::new(
+            manifest,
+            "System prompt".to_string(),
+            Arc::new(FixedTextDriver),
+            temp.path().to_path_buf(),
+        );
+        let mut history = vec![
+            Message::system("System prompt"),
+            Message::user("Hello"),
+        ];
+        let reply = runtime
+            .execute_with_history(&mut history)
+            .await
+            .expect("execution should succeed");
+        assert_eq!(reply.as_deref(), Some("assistant reply"));
+        assert_eq!(
+            history.last().map(|m| m.content.as_str()),
+            Some("assistant reply")
+        );
     }
 }
