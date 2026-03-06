@@ -2,7 +2,7 @@
 
 Autonoetic is a Rust-first runtime for autonomous, self-evolving agents with durable memory, portable identity, and reproducible execution.
 
-The project is currently incubated in the `ccos-ng/` directory inside the broader `ccos` repository, but it is intended to become a standalone project once the architecture and implementation stabilize.
+The project is currently incubated in the `autonoetic/` directory inside the broader `ccos` repository, but it is intended to become a standalone project once the architecture and implementation stabilize.
 
 ## Why Autonoetic
 
@@ -52,6 +52,8 @@ The current MVP is intentionally narrow:
 - minimal Tier 2 recall
 - content-addressed artifact handles
 - hash-chain causal logging
+- OFP federation listener with HMAC handshake + extension negotiation
+- MCP client/server plumbing (registry, discovery, and agent exposure)
 
 More advanced features like full marketplace workflows, hermetic capsule replay, advanced memory substrate, and richer federation polish are deferred until the base runtime is proven.
 
@@ -69,4 +71,4 @@ We are also actively trying to reuse the Openfang Protocol (OFP) as much as poss
 
 ## Status
 
-Specification and design are substantially defined. The next phase is implementation scaffolding around the constrained MVP in [`plan.md`](plan.md).
+Phases 1 through 5 are implemented, including OFP networking/federation and MCP integration foundations. The current focus shifts to SDK and sandbox drivers in Phase 6 as tracked in [`plan.md`](plan.md).
