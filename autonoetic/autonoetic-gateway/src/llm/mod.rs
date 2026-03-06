@@ -1,17 +1,22 @@
 //! LLM Driver Abstraction and Types.
-//! 
+//!
 //! Provides a thin, unified interface (`LlmDriver`) for interacting with
 //! various remote model providers (OpenAI, Anthropic, Gemini, etc.).
 
 use autonoetic_types::agent::LlmConfig;
 use std::sync::Arc;
 
-pub mod openai;
 pub mod anthropic;
 pub mod gemini;
+pub mod openai;
+pub mod provider;
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Roles
+// ---------------------------------------------------------------------------
 
 /// A conversation message role.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +24,8 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// Used for tool-result turns sent back to the model.
+    Tool,
 }
 
 impl Role {
@@ -27,16 +34,95 @@ impl Role {
             Role::System => "system",
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::Tool => "tool",
         }
     }
 }
 
-/// A single message in a completion request.
+// ---------------------------------------------------------------------------
+// Tool types
+// ---------------------------------------------------------------------------
+
+/// A tool the agent can invoke. Sent to the LLM so it knows what's available.
+#[derive(Debug, Clone)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema describing the tool's parameters (as a raw serde_json value).
+    pub input_schema: serde_json::Value,
+}
+
+/// A tool invocation requested by the model in a response.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    /// Opaque identifier used to match the result back to this call.
+    pub id: String,
+    pub name: String,
+    /// JSON-encoded arguments string (matches what the model returns).
+    pub arguments: String,
+}
+
+/// A tool result sent back to the model after the agent executes a tool.
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    /// The ID of the ToolCall this is a result for.
+    pub tool_call_id: String,
+    /// The name of the tool (needed by Anthropic's API for routing).
+    pub tool_name: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+/// A single message in a conversation.
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Optional tool calls from an assistant turn.
+    pub tool_calls: Vec<ToolCall>,
+    /// For Role::Tool turns, the matching call ID.
+    pub tool_call_id: Option<String>,
 }
+
+impl Message {
+    /// Convenience: plain text user message.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: Role::User, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+
+    /// Convenience: system message.
+    pub fn system(content: impl Into<String>) -> Self {
+        Self { role: Role::System, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+
+    /// Convenience: assistant text message.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: Role::Assistant, content: content.into(), tool_calls: vec![], tool_call_id: None }
+    }
+
+    /// Convenience: tool result message.
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        let _ = tool_name; // stored via ToolResult struct; kept in signature for API clarity
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Request / Response
+// ---------------------------------------------------------------------------
 
 /// A request to an LLM provider.
 #[derive(Debug, Clone)]
@@ -45,68 +131,136 @@ pub struct CompletionRequest {
     pub model: String,
     /// Conversation messages.
     pub messages: Vec<Message>,
+    /// Tool definitions available to the model.
+    pub tools: Vec<ToolDefinition>,
     /// Maximum tokens to generate (optional).
     pub max_tokens: Option<u32>,
     /// Sampling temperature (optional).
     pub temperature: Option<f32>,
 }
 
-/// Stop reason for an LLM generation.
+impl CompletionRequest {
+    pub fn simple(model: impl Into<String>, messages: Vec<Message>) -> Self {
+        Self {
+            model: model.into(),
+            messages,
+            tools: vec![],
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+}
+
+/// Why the model stopped generating.
 #[derive(Debug, Clone)]
 pub enum StopReason {
     EndTurn,
     MaxTokens,
-    ToolCall,
+    ToolUse,
     StopSequence,
     Other(String),
 }
 
-/// Events emitted during streaming LLM completion.
+/// Token usage statistics returned by the provider.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Full response from a completion call.
+#[derive(Debug, Clone)]
+pub struct CompletionResponse {
+    /// Text content (may be empty if the model only returned tool calls).
+    pub text: String,
+    /// Tool calls requested by the model (may be empty).
+    pub tool_calls: Vec<ToolCall>,
+    pub stop_reason: StopReason,
+    pub usage: TokenUsage,
+}
+
+impl CompletionResponse {
+    pub fn text_only(text: String) -> Self {
+        Self {
+            text,
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage::default(),
+        }
+    }
+
+    pub fn has_tool_calls(&self) -> bool {
+        !self.tool_calls.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+/// Events emitted during SSE streaming.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    /// Incremental text content.
     TextDelta(String),
-    /// Content generation complete.
-    Complete(StopReason),
+    ToolUseStart { id: String, name: String },
+    ToolInputDelta(String),
+    ToolUseEnd { id: String, name: String, arguments: String },
+    Complete { stop_reason: StopReason, usage: TokenUsage },
 }
+
+// ---------------------------------------------------------------------------
+// LlmDriver trait
+// ---------------------------------------------------------------------------
 
 /// The unified LLM driver interface.
 #[async_trait::async_trait]
 pub trait LlmDriver: Send + Sync {
-    /// Send a completion request and get a full string response.
-    async fn complete(&self, request: &CompletionRequest) -> anyhow::Result<String>;
+    /// Send a completion request and receive a full structured response.
+    async fn complete(&self, request: &CompletionRequest) -> anyhow::Result<CompletionResponse>;
 
-    /// Stream a completion request, pushing events to the provided channel.
-    /// The default implementation just calls `complete()` and sends one chunk.
+    /// Stream a completion, sending incremental events to the channel.
+    /// Default implementation wraps `complete()` with a single text chunk.
     async fn stream(
         &self,
         request: &CompletionRequest,
         tx: tokio::sync::mpsc::Sender<StreamEvent>,
-    ) -> anyhow::Result<()> {
-        let text = self.complete(request).await?;
-        if !text.is_empty() {
-            let _ = tx.send(StreamEvent::TextDelta(text)).await;
+    ) -> anyhow::Result<CompletionResponse> {
+        let response = self.complete(request).await?;
+        if !response.text.is_empty() {
+            let _ = tx.send(StreamEvent::TextDelta(response.text.clone())).await;
         }
-        let _ = tx.send(StreamEvent::Complete(StopReason::EndTurn)).await;
-        Ok(())
+        let _ = tx
+            .send(StreamEvent::Complete {
+                stop_reason: response.stop_reason.clone(),
+                usage: response.usage.clone(),
+            })
+            .await;
+        Ok(response)
     }
 }
 
-/// Factory to build the appropriate driver for a given config.
-pub fn build_driver(config: LlmConfig, reqwest_client: reqwest::Client) -> Arc<dyn LlmDriver> {
-    let provider = config.provider.to_lowercase();
-    match provider.as_str() {
-        "openai" => Arc::new(openai::OpenAiDriver::new(reqwest_client, config)),
-        "openrouter" => {
-            let mut conf = config.clone();
-            // Point the generic OpenAI driver at OpenRouter's URL
-            conf.provider = "openai".to_string(); // we'll use this to conditionally add headers in the driver if needed, wait actually the URL is all we need
-            // Let's rely on the environment variables mapped inside the driver module later
-            Arc::new(openai::OpenAiDriver::new(reqwest_client, conf))
-        }
-        _ => {
-            tracing::warn!("Unknown provider '{}', falling back to OpenAI driver", provider);
-            Arc::new(openai::OpenAiDriver::new(reqwest_client, config))
-        }
-    }
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/// Build the appropriate driver for the given config.
+///
+/// Credential/endpoint resolution is centralised in `provider::resolve()` —
+/// drivers themselves never read environment variables.
+pub fn build_driver(config: LlmConfig, client: reqwest::Client) -> anyhow::Result<Arc<dyn LlmDriver>> {
+    let resolved = provider::resolve(
+        &config.provider,
+        &config.model,
+        if config.temperature > 0.0 { Some(config.temperature as f32) } else { None },
+        None, // max_tokens from request, not config
+        None, // no base_url override
+        None, // no api_key override
+    )?;
+
+    let driver: Arc<dyn LlmDriver> = match resolved.kind {
+        provider::DriverKind::Anthropic => Arc::new(anthropic::AnthropicDriver::new(client, resolved)),
+        provider::DriverKind::Gemini => Arc::new(gemini::GeminiDriver::new(client, resolved)),
+        provider::DriverKind::OpenAi => Arc::new(openai::OpenAiDriver::new(client, resolved)),
+    };
+    Ok(driver)
 }
