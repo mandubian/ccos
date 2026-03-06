@@ -457,22 +457,26 @@ fn render_skill_template(agent_id: &str, template: Option<&str>) -> String {
     };
     format!(
         r#"---
-version: "1.0"
-runtime:
-  engine: "autonoetic"
-  gateway_version: "0.1.0"
-  sdk_version: "0.1.0"
-  type: "stateful"
-  sandbox: "bubblewrap"
-  runtime_lock: "runtime.lock"
-agent:
-  id: "{agent_id}"
-  name: "{agent_id} {name_suffix}"
-  description: "{description}"
-llm_config:
-  provider: "openai"
-  model: "gpt-4o"
-  temperature: 0.2
+name: "{agent_id}"
+description: "{description}"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "{agent_id}"
+      name: "{agent_id} {name_suffix}"
+      description: "{description}"
+    llm_config:
+      provider: "openai"
+      model: "gpt-4o"
+      temperature: 0.2
 ---
 # {agent_id}
 

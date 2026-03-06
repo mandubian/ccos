@@ -8,72 +8,77 @@ The Manifest defines an Agent's identity, routing, UI configuration, and access 
 
 ```markdown
 ---
-version: "1.0"
+name: "agent-research-alpha"
+description: "Specialized in fetching and summarizing academic papers."
+compatibility: "Autonoetic Gateway >=0.1.0; requires internet access for research APIs."
+metadata:
+  autonoetic:
+    version: "1.0"
 
-# Runtime declaration — what engine runs this Agent
-runtime:
-  engine: "autonoetic"            # Declares this as an Autonoetic-managed agent
-  gateway_version: ">=0.1.0"       # Minimum compatible Gateway binary version
-  sdk_version: ">=0.1.0"           # Minimum compatible SDK version
-  type: "stateful"                 # stateful (Agent with memory/loop) vs stateless (Tool)
-  sandbox: "bubblewrap"            # Execution environment: bubblewrap | docker | microvm | wasm
-  runtime_lock: "runtime.lock"     # Pinned runtime closure file bundled with the agent
+    # Runtime declaration — what engine runs this Agent
+    runtime:
+      engine: "autonoetic"            # Declares this as an Autonoetic-managed agent
+      gateway_version: ">=0.1.0"      # Minimum compatible Gateway binary version
+      sdk_version: ">=0.1.0"          # Minimum compatible SDK version
+      type: "stateful"                # stateful (Agent with memory/loop) vs stateless (Tool)
+      sandbox: "bubblewrap"           # Execution environment: bubblewrap | docker | microvm | wasm
+      runtime_lock: "runtime.lock"    # Pinned runtime closure file bundled with the agent
 
-agent:
-  id: "agent_research_alpha"
-  name: "Deep Researcher"
-  description: "Specialized in fetching and summarizing academic papers."
+    agent:
+      id: "agent_research_alpha"
+      name: "Deep Researcher"
+      description: "Specialized in fetching and summarizing academic papers."
 
-# Standard JSON Schema for UI Configuration
-# Rendered by frontends (CLI/Web) before booting; results injected to Tier 1 memory.
-input_schema:
-  type: "object"
-  required: ["research_depth"]
-  properties:
-    research_depth:
-      type: "string"
-      enum: ["quick", "thorough", "exhaustive"]
-      default: "thorough"
+    # Standard JSON Schema for UI Configuration
+    # Rendered by frontends (CLI/Web) before booting; results injected to Tier 1 memory.
+    input_schema:
+      type: "object"
+      required: ["research_depth"]
+      properties:
+        research_depth:
+          type: "string"
+          enum: ["quick", "thorough", "exhaustive"]
+          default: "thorough"
 
-# Maps Gateway metrics or Tier 2 Memory keys to frontend charts
-dashboard:
-  metrics:
-    - label: "Queries Solved"
-      memory_key: "research_stats.queries_solved"
-      format: "counter"
-    - label: "Sources Cited"
-      memory_key: "research_stats.sources_cited"
-      format: "gauge"
-  
-capabilities:
-  # The typed Capability Enum required by the Gateway
-  - type: "ToolInvoke"
-    allowed: ["web_fetch", "file_read", "mcp_github_create_issue"]
-  - type: "MemoryRead"
-    scopes: ["self.state.*", "global.facts.*"]
-  - type: "MemoryWrite"
-    scopes: ["self.state.*"]
-  - type: "NetConnect"
-    hosts: ["api.semanticscholar.org", "arxiv.org"]
-  - type: "AgentSpawn"
-    max_children: 3
-  - type: "AgentMessage"
-    patterns: ["agent_coder_*"]
-  - type: "ShellExec"
-    patterns: ["python3 scripts/*", "uv run *"]
+    # Maps Gateway metrics or Tier 2 Memory keys to frontend charts
+    dashboard:
+      metrics:
+        - label: "Queries Solved"
+          memory_key: "research_stats.queries_solved"
+          format: "counter"
+        - label: "Sources Cited"
+          memory_key: "research_stats.sources_cited"
+          format: "gauge"
 
-llm_config:
-  # Abstract driver resolution
-  provider: "anthropic"    # Can override Gateway default
-  model: "claude-3-5-sonnet-latest"
-  temperature: 0.2
-  fallback_provider: "openai"
-  fallback_model: "gpt-4o"
+    capabilities:
+      # The typed Capability Enum required by the Gateway
+      - type: "ToolInvoke"
+        allowed: ["web_fetch", "file_read", "mcp_github_create_issue"]
+      - type: "MemoryRead"
+        scopes: ["self.state.*", "global.facts.*"]
+      - type: "MemoryWrite"
+        scopes: ["self.state.*"]
+      - type: "NetConnect"
+        hosts: ["api.semanticscholar.org", "arxiv.org"]
+      - type: "AgentSpawn"
+        max_children: 3
+      - type: "AgentMessage"
+        patterns: ["agent_coder_*"]
+      - type: "ShellExec"
+        patterns: ["python3 scripts/*", "uv run *"]
 
-limits:
-  max_memory_mb: 512
-  max_execution_time_sec: 120
-  token_budget_monthly: 5000000
+    llm_config:
+      # Abstract driver resolution
+      provider: "anthropic"    # Can override Gateway default
+      model: "claude-3-5-sonnet-latest"
+      temperature: 0.2
+      fallback_provider: "openai"
+      fallback_model: "gpt-4o"
+
+    limits:
+      max_memory_mb: 512
+      max_execution_time_sec: 120
+      token_budget_monthly: 5000000
 ---
 
 # Deep Researcher System Prompt

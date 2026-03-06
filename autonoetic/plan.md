@@ -163,3 +163,4 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - `autonoetic agent init` now scaffolds `SKILL.md`, `runtime.lock` (including `dependencies: []`), and baseline agent directories (`state/`, `history/`, `skills/`, `scripts/`).
 - Added CLI tests for runtime policy enforcement and scaffold creation in `autonoetic/src/main.rs`.
 - Added binary-level CLI integration coverage in `autonoetic/tests/cli_e2e.rs` for `agent init` + `agent run --interactive` (scripted `/exit`) to validate end-to-end command wiring.
+- `SKILL.md` parsing now supports AgentSkills-compliant top-level frontmatter (`name`, `description`, `metadata`) with Autonoetic manifest fields nested under `metadata.autonoetic` for editor/tool compatibility.
