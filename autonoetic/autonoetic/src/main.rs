@@ -5,7 +5,7 @@ use autonoetic_gateway::llm::{CompletionRequest, Message};
 use autonoetic_gateway::runtime::parser::SkillParser;
 use autonoetic_mcp::protocol::{JsonRpcRequest, JsonRpcResponse};
 use autonoetic_mcp::{
-    AgentExecutor, AgentMcpServer, ExposedAgent, McpClient, McpServer, McpTool,
+    AgentExecutor as McpAgentExecutor, AgentMcpServer, ExposedAgent, McpClient, McpServer, McpTool,
     McpTransportConfig,
 };
 use std::path::{Path, PathBuf};
@@ -271,6 +271,14 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(msg) = message {
                     info!("Kickoff message: {}", msg);
                 }
+                run_agent_with_runtime(
+                    &config_path,
+                    agent_id,
+                    message.as_deref(),
+                    *interactive,
+                    *headless,
+                )
+                .await?;
             }
             AgentCommands::List => {
                 let config = autonoetic_gateway::config::load_config(&config_path)?;
@@ -452,6 +460,49 @@ async fn activate_registered_mcp_servers(config_path: &Path) -> anyhow::Result<M
     Ok(McpRuntime { servers: activated })
 }
 
+async fn run_agent_with_runtime(
+    config_path: &Path,
+    agent_id: &str,
+    kickoff_message: Option<&str>,
+    interactive: bool,
+    headless: bool,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
+    let target = agents
+        .into_iter()
+        .find(|a| a.id == agent_id)
+        .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found in {}", agent_id, config.agents_dir.display()))?;
+
+    let skill_path = target.dir.join("SKILL.md");
+    let skill_content = std::fs::read_to_string(&skill_path)?;
+    let (manifest, instructions) = SkillParser::parse(&skill_content)?;
+    let llm_config = manifest
+        .llm_config
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
+    let driver = autonoetic_gateway::llm::build_driver(llm_config, reqwest::Client::new())?;
+
+    if interactive {
+        tracing::warn!("Interactive mode is not implemented yet; running single lifecycle loop.");
+    }
+    if headless {
+        tracing::info!("Headless mode enabled.");
+    }
+
+    let mut runtime = autonoetic_gateway::runtime::lifecycle::AgentExecutor::new(
+        manifest,
+        instructions,
+        driver,
+        target.dir.clone(),
+    );
+    if let Some(message) = kickoff_message {
+        runtime = runtime.with_initial_user_message(message.to_string());
+    }
+
+    runtime.execute_loop().await
+}
+
 async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
     let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
@@ -569,7 +620,7 @@ struct CliAgentExecutor {
 }
 
 #[async_trait::async_trait]
-impl AgentExecutor for CliAgentExecutor {
+impl McpAgentExecutor for CliAgentExecutor {
     async fn call_agent(&self, agent_id: &str, message: &str) -> anyhow::Result<String> {
         let agents = autonoetic_gateway::agent::scan_agents(&self.agents_dir)?;
         let target = agents
