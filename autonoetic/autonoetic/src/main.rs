@@ -620,14 +620,33 @@ async fn run_agent_with_runtime_with_driver(
         driver,
         agent_dir,
     );
-    if interactive {
-        return run_interactive_session(&mut runtime, kickoff_message).await;
-    }
     if let Some(message) = kickoff_message {
         runtime = runtime.with_initial_user_message(message.to_string());
     }
+    if interactive {
+        return run_interactive_session(&mut runtime, kickoff_message).await;
+    }
 
-    runtime.execute_loop().await
+    // Non-interactive mode should emit the assistant's final text reply to stdout.
+    let mut history = vec![
+        Message::system(runtime.instructions.clone()),
+        Message::user(runtime.initial_user_message.clone()),
+    ];
+    match runtime.execute_with_history(&mut history).await {
+        Ok(Some(reply)) => {
+            println!("{}", reply);
+            runtime.close_session("headless_complete")?;
+        }
+        Ok(None) => {
+            println!("[No assistant text returned]");
+            runtime.close_session("headless_complete_empty")?;
+        }
+        Err(e) => {
+            let _ = runtime.close_session("headless_error");
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 async fn run_interactive_session(
@@ -645,11 +664,18 @@ async fn run_interactive_session(
 
     if let Some(message) = kickoff_message {
         history.push(Message::user(message.to_string()));
-        if let Some(reply) = runtime.execute_with_history(&mut history).await? {
-            stdout.write_all(reply.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
-        }
+        match runtime.execute_with_history(&mut history).await {
+            Ok(Some(reply)) => {
+                stdout.write_all(reply.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = runtime.close_session("interactive_error");
+                return Err(e);
+            }
+        };
     }
 
     loop {
@@ -668,13 +694,20 @@ async fn run_interactive_session(
         }
 
         history.push(Message::user(trimmed.to_string()));
-        if let Some(reply) = runtime.execute_with_history(&mut history).await? {
-            stdout.write_all(reply.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
-        }
+        match runtime.execute_with_history(&mut history).await {
+            Ok(Some(reply)) => {
+                stdout.write_all(reply.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = runtime.close_session("interactive_error");
+                return Err(e);
+            }
+        };
     }
-
+    runtime.close_session("interactive_exit")?;
     Ok(())
 }
 
