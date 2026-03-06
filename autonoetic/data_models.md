@@ -103,6 +103,11 @@ sdk:
 sandbox:
   backend: "bubblewrap"
 
+dependencies:
+  - runtime: "python" # "python" | "nodejs"
+    packages:
+      - "requests==2.32.3"
+
 artifacts:
   - name: "ripgrep"
     version: "14.1.0"

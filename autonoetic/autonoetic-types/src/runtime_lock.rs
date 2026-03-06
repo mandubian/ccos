@@ -32,12 +32,21 @@ pub struct LockedSandbox {
     pub backend: String,
 }
 
+/// Pinned dependencies for sandbox execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockedDependencySet {
+    pub runtime: String,
+    pub packages: Vec<String>,
+}
+
 /// The complete `runtime.lock` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLock {
     pub gateway: LockedGateway,
     pub sdk: LockedSdk,
     pub sandbox: LockedSandbox,
+    #[serde(default)]
+    pub dependencies: Vec<LockedDependencySet>,
     #[serde(default)]
     pub artifacts: Vec<LockedArtifact>,
 }

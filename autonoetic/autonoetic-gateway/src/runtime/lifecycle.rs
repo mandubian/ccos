@@ -209,25 +209,39 @@ fn sandbox_exec_tool_definition() -> crate::llm::ToolDefinition {
     }
 }
 
-fn dependency_plan_from_args(
+fn dependency_plan_from_args_or_lock(
+    manifest: &AgentManifest,
+    agent_dir: &Path,
     deps: Option<SandboxExecDependencies>,
 ) -> anyhow::Result<Option<DependencyPlan>> {
-    let Some(deps) = deps else {
+    if let Some(deps) = deps {
+        return parse_dependency_plan(deps.runtime.as_str(), deps.packages).map(Some);
+    }
+
+    let lock_path = agent_dir.join(&manifest.runtime.runtime_lock);
+    if !lock_path.exists() {
         return Ok(None);
-    };
-    let runtime = match deps.runtime.to_ascii_lowercase().as_str() {
+    }
+    let lock = crate::runtime_lock::resolve_runtime_lock(&lock_path)?;
+    if lock.dependencies.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        lock.dependencies.len() == 1,
+        "runtime.lock currently supports exactly one dependency set"
+    );
+    let locked = &lock.dependencies[0];
+    parse_dependency_plan(locked.runtime.as_str(), locked.packages.clone()).map(Some)
+}
+
+fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result<DependencyPlan> {
+    let runtime = match runtime.to_ascii_lowercase().as_str() {
         "python" => DependencyRuntime::Python,
         "nodejs" | "node" => DependencyRuntime::NodeJs,
         other => anyhow::bail!("Unsupported dependency runtime '{}'", other),
     };
-    anyhow::ensure!(
-        !deps.packages.is_empty(),
-        "dependency packages must not be empty"
-    );
-    Ok(Some(DependencyPlan {
-        runtime,
-        packages: deps.packages,
-    }))
+    anyhow::ensure!(!packages.is_empty(), "dependency packages must not be empty");
+    Ok(DependencyPlan { runtime, packages })
 }
 
 fn execute_sandbox_tool_call(
@@ -248,7 +262,7 @@ fn execute_sandbox_tool_call(
         "sandbox command denied by ShellExec policy"
     );
 
-    let dep_plan = dependency_plan_from_args(args.dependencies)?;
+    let dep_plan = dependency_plan_from_args_or_lock(manifest, agent_dir, args.dependencies)?;
     let driver = SandboxDriverKind::parse(&manifest.runtime.sandbox)?;
     let agent_dir_str = agent_dir
         .to_str()
@@ -274,6 +288,7 @@ fn execute_sandbox_tool_call(
 mod tests {
     use super::*;
     use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
+    use tempfile::tempdir;
 
     fn manifest_with_capabilities(capabilities: Vec<Capability>) -> AgentManifest {
         AgentManifest {
@@ -315,10 +330,16 @@ mod tests {
 
     #[test]
     fn test_dependency_plan_from_args_python() {
-        let plan = dependency_plan_from_args(Some(SandboxExecDependencies {
-            runtime: "python".to_string(),
-            packages: vec!["requests==2.32.3".to_string()],
-        }))
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let plan = dependency_plan_from_args_or_lock(
+            &manifest,
+            temp.path(),
+            Some(SandboxExecDependencies {
+                runtime: "python".to_string(),
+                packages: vec!["requests==2.32.3".to_string()],
+            }),
+        )
         .expect("plan should parse")
         .expect("plan should exist");
         assert_eq!(plan.runtime, DependencyRuntime::Python);
@@ -327,11 +348,106 @@ mod tests {
 
     #[test]
     fn test_dependency_plan_from_args_unsupported_runtime() {
-        let err = dependency_plan_from_args(Some(SandboxExecDependencies {
-            runtime: "ruby".to_string(),
-            packages: vec!["rack".to_string()],
-        }))
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let err = dependency_plan_from_args_or_lock(
+            &manifest,
+            temp.path(),
+            Some(SandboxExecDependencies {
+                runtime: "ruby".to_string(),
+                packages: vec!["rack".to_string()],
+            }),
+        )
         .expect_err("unsupported runtime should fail");
         assert!(err.to_string().contains("Unsupported dependency runtime"));
+    }
+
+    #[test]
+    fn test_dependency_plan_from_runtime_lock_default() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let lock_path = temp.path().join("runtime.lock");
+        std::fs::write(
+            &lock_path,
+            r#"
+gateway:
+  artifact: "autonoetic-gateway"
+  version: "0.1.0"
+  sha256: "abc"
+sdk:
+  version: "0.1.0"
+sandbox:
+  backend: "bubblewrap"
+dependencies:
+  - runtime: "python"
+    packages:
+      - "requests==2.32.3"
+"#,
+        )
+        .expect("runtime.lock should write");
+
+        let plan = dependency_plan_from_args_or_lock(&manifest, temp.path(), None)
+            .expect("plan should parse")
+            .expect("plan should exist");
+        assert_eq!(plan.runtime, DependencyRuntime::Python);
+        assert_eq!(plan.packages, vec!["requests==2.32.3".to_string()]);
+    }
+
+    #[test]
+    fn test_dependency_plan_from_args_overrides_runtime_lock() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let lock_path = temp.path().join("runtime.lock");
+        std::fs::write(
+            &lock_path,
+            r#"
+gateway:
+  artifact: "autonoetic-gateway"
+  version: "0.1.0"
+  sha256: "abc"
+sdk:
+  version: "0.1.0"
+sandbox:
+  backend: "bubblewrap"
+dependencies:
+  - runtime: "python"
+    packages:
+      - "requests==2.32.3"
+"#,
+        )
+        .expect("runtime.lock should write");
+
+        let plan = dependency_plan_from_args_or_lock(
+            &manifest,
+            temp.path(),
+            Some(SandboxExecDependencies {
+                runtime: "nodejs".to_string(),
+                packages: vec!["lodash@4.17.21".to_string()],
+            }),
+        )
+        .expect("plan should parse")
+        .expect("plan should exist");
+        assert_eq!(plan.runtime, DependencyRuntime::NodeJs);
+        assert_eq!(plan.packages, vec!["lodash@4.17.21".to_string()]);
+    }
+
+    #[test]
+    fn test_execute_sandbox_tool_call_denied_by_policy() {
+        let manifest = manifest_with_capabilities(vec![Capability::ShellExec {
+            patterns: vec!["python3 scripts/*".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let args = serde_json::json!({
+            "command": "echo should_fail"
+        });
+        let err = execute_sandbox_tool_call(
+            &manifest,
+            &policy,
+            temp.path(),
+            &serde_json::to_string(&args).expect("json should encode"),
+        )
+        .expect_err("policy should deny command");
+        assert!(err.to_string().contains("sandbox command denied by ShellExec policy"));
     }
 }
