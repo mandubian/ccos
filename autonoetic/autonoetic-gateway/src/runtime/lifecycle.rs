@@ -4,15 +4,37 @@
 
 use crate::llm::{CompletionRequest, LlmDriver, Message, StopReason};
 use crate::log_redaction::redact_text_for_logs;
+use crate::policy::PolicyEngine;
 use crate::runtime::guard::LoopGuard;
 use crate::runtime::mcp::McpToolRuntime;
 use crate::runtime::store::SecretStoreRuntime;
+use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
 use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::capability::Capability;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+const SANDBOX_EXEC_TOOL_NAME: &str = "sandbox.exec";
+
+#[derive(Debug, Deserialize)]
+struct SandboxExecArgs {
+    command: String,
+    #[serde(default)]
+    dependencies: Option<SandboxExecDependencies>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SandboxExecDependencies {
+    runtime: String,
+    packages: Vec<String>,
+}
 
 pub struct AgentExecutor {
     pub manifest: AgentManifest,
     pub instructions: String,
     pub llm: std::sync::Arc<dyn LlmDriver>,
+    pub agent_dir: PathBuf,
+    pub initial_user_message: String,
     pub guard: LoopGuard,
 }
 
@@ -21,13 +43,22 @@ impl AgentExecutor {
         manifest: AgentManifest,
         instructions: String,
         llm: std::sync::Arc<dyn LlmDriver>,
+        agent_dir: PathBuf,
     ) -> Self {
         Self {
             manifest,
             instructions,
             llm,
+            agent_dir,
+            initial_user_message: "What is your next action?".to_string(),
             guard: LoopGuard::new(5), // bail after 5 non-progressing cycles
         }
+    }
+
+    /// Override the default kickoff user message used for the first turn.
+    pub fn with_initial_user_message(mut self, message: impl Into<String>) -> Self {
+        self.initial_user_message = message.into();
+        self
     }
 
     /// Run the agent loop until completion or guard trip.
@@ -45,6 +76,7 @@ impl AgentExecutor {
                 self.manifest.agent.id
             );
         }
+        let policy = PolicyEngine::new(self.manifest.clone());
 
         let model = self.manifest
             .llm_config.as_ref()
@@ -56,7 +88,7 @@ impl AgentExecutor {
         // Conversation history (grows with tool call results)
         let mut history: Vec<Message> = vec![
             Message::system(self.instructions.clone()),
-            Message::user("What is your next action?"),
+            Message::user(self.initial_user_message.clone()),
         ];
 
         loop {
@@ -66,7 +98,10 @@ impl AgentExecutor {
             // --- Context Assembly ---
             tracing::debug!("Assembling context ({} messages)", history.len());
 
-            let tools = mcp_runtime.tool_definitions()?;
+            let mut tools = mcp_runtime.tool_definitions()?;
+            if supports_sandbox_exec_tool(&self.manifest) {
+                tools.push(sandbox_exec_tool_definition());
+            }
 
             let req = CompletionRequest {
                 model: model.clone(),
@@ -101,9 +136,16 @@ impl AgentExecutor {
                         let mut result = if mcp_runtime.has_tool(&tc.name) {
                             tracing::debug!(tool = tc.name, "Dispatching tool call to MCP runtime");
                             mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
+                        } else if tc.name == SANDBOX_EXEC_TOOL_NAME {
+                            tracing::debug!(tool = tc.name, "Dispatching tool call to sandbox runtime");
+                            execute_sandbox_tool_call(
+                                &self.manifest,
+                                &policy,
+                                &self.agent_dir,
+                                &tc.arguments,
+                            )?
                         } else {
-                            // TODO: dispatch non-MCP tools to sandbox/capability runtime.
-                            format!("Tool '{}' result placeholder", tc.name)
+                            anyhow::bail!("Unknown tool '{}'", tc.name)
                         };
                         if let Some(ref mut store_runtime) = secret_store {
                             result = store_runtime.apply_and_redact(&result)?;
@@ -130,5 +172,166 @@ impl AgentExecutor {
         }
 
         Ok(())
+    }
+}
+
+fn supports_sandbox_exec_tool(manifest: &AgentManifest) -> bool {
+    manifest
+        .capabilities
+        .iter()
+        .any(|cap| matches!(cap, Capability::ShellExec { .. }))
+}
+
+fn sandbox_exec_tool_definition() -> crate::llm::ToolDefinition {
+    crate::llm::ToolDefinition {
+        name: SANDBOX_EXEC_TOOL_NAME.to_string(),
+        description: "Execute an approved shell command in the configured sandbox driver".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "dependencies": {
+                    "type": "object",
+                    "properties": {
+                        "runtime": { "type": "string", "enum": ["python", "nodejs", "node"] },
+                        "packages": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1
+                        }
+                    },
+                    "required": ["runtime", "packages"]
+                }
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn dependency_plan_from_args(
+    deps: Option<SandboxExecDependencies>,
+) -> anyhow::Result<Option<DependencyPlan>> {
+    let Some(deps) = deps else {
+        return Ok(None);
+    };
+    let runtime = match deps.runtime.to_ascii_lowercase().as_str() {
+        "python" => DependencyRuntime::Python,
+        "nodejs" | "node" => DependencyRuntime::NodeJs,
+        other => anyhow::bail!("Unsupported dependency runtime '{}'", other),
+    };
+    anyhow::ensure!(
+        !deps.packages.is_empty(),
+        "dependency packages must not be empty"
+    );
+    Ok(Some(DependencyPlan {
+        runtime,
+        packages: deps.packages,
+    }))
+}
+
+fn execute_sandbox_tool_call(
+    manifest: &AgentManifest,
+    policy: &PolicyEngine,
+    agent_dir: &Path,
+    arguments_json: &str,
+) -> anyhow::Result<String> {
+    let args: SandboxExecArgs = serde_json::from_str(arguments_json)
+        .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", SANDBOX_EXEC_TOOL_NAME, e))?;
+
+    anyhow::ensure!(
+        !args.command.trim().is_empty(),
+        "sandbox command must not be empty"
+    );
+    anyhow::ensure!(
+        policy.can_exec_shell(&args.command),
+        "sandbox command denied by ShellExec policy"
+    );
+
+    let dep_plan = dependency_plan_from_args(args.dependencies)?;
+    let driver = SandboxDriverKind::parse(&manifest.runtime.sandbox)?;
+    let agent_dir_str = agent_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Agent directory is not valid UTF-8"))?;
+
+    let runner = SandboxRunner::spawn_with_driver_and_dependencies(
+        driver,
+        agent_dir_str,
+        &args.command,
+        dep_plan.as_ref(),
+    )?;
+    let output = runner.process.wait_with_output()?;
+    let body = serde_json::json!({
+        "ok": output.status.success(),
+        "exit_code": output.status.code(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr)
+    });
+    serde_json::to_string(&body).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
+
+    fn manifest_with_capabilities(capabilities: Vec<Capability>) -> AgentManifest {
+        AgentManifest {
+            version: "1.0".to_string(),
+            runtime: RuntimeDeclaration {
+                engine: "autonoetic".to_string(),
+                gateway_version: "0.1.0".to_string(),
+                sdk_version: "0.1.0".to_string(),
+                runtime_type: "stateful".to_string(),
+                sandbox: "bubblewrap".to_string(),
+                runtime_lock: "runtime.lock".to_string(),
+            },
+            agent: AgentIdentity {
+                id: "agent".to_string(),
+                name: "Agent".to_string(),
+                description: "desc".to_string(),
+            },
+            capabilities,
+            llm_config: None,
+            limits: None,
+        }
+    }
+
+    #[test]
+    fn test_supports_sandbox_exec_tool_with_shell_capability() {
+        let manifest = manifest_with_capabilities(vec![Capability::ShellExec {
+            patterns: vec!["python3 scripts/*".to_string()],
+        }]);
+        assert!(supports_sandbox_exec_tool(&manifest));
+    }
+
+    #[test]
+    fn test_supports_sandbox_exec_tool_without_shell_capability() {
+        let manifest = manifest_with_capabilities(vec![Capability::ToolInvoke {
+            allowed: vec!["a".to_string()],
+        }]);
+        assert!(!supports_sandbox_exec_tool(&manifest));
+    }
+
+    #[test]
+    fn test_dependency_plan_from_args_python() {
+        let plan = dependency_plan_from_args(Some(SandboxExecDependencies {
+            runtime: "python".to_string(),
+            packages: vec!["requests==2.32.3".to_string()],
+        }))
+        .expect("plan should parse")
+        .expect("plan should exist");
+        assert_eq!(plan.runtime, DependencyRuntime::Python);
+        assert_eq!(plan.packages.len(), 1);
+    }
+
+    #[test]
+    fn test_dependency_plan_from_args_unsupported_runtime() {
+        let err = dependency_plan_from_args(Some(SandboxExecDependencies {
+            runtime: "ruby".to_string(),
+            packages: vec!["rack".to_string()],
+        }))
+        .expect_err("unsupported runtime should fail");
+        assert!(err.to_string().contains("Unsupported dependency runtime"));
     }
 }
