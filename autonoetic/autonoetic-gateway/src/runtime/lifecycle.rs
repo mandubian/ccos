@@ -1,9 +1,10 @@
 //! Agent Execution Lifecycle.
 //!
-//! Manages Wake -> Context Assembly -> Reasoning -> Hibernate.
+//! Manages Wake -> Context Assembly -> Reasoning -> Act -> Hibernate.
 
-use crate::llm::{CompletionRequest, LlmDriver, Message, Role};
+use crate::llm::{CompletionRequest, LlmDriver, Message, StopReason};
 use crate::runtime::guard::LoopGuard;
+use crate::runtime::mcp::McpToolRuntime;
 use autonoetic_types::agent::AgentManifest;
 
 pub struct AgentExecutor {
@@ -23,7 +24,7 @@ impl AgentExecutor {
             manifest,
             instructions,
             llm,
-            guard: LoopGuard::new(5), // allow 5 pure reasoning loops before bail
+            guard: LoopGuard::new(5), // bail after 5 non-progressing cycles
         }
     }
 
@@ -31,35 +32,88 @@ impl AgentExecutor {
     pub async fn execute_loop(&mut self) -> anyhow::Result<()> {
         tracing::info!("Agent {} waking up...", self.manifest.agent.id);
 
+        let mut mcp_runtime = McpToolRuntime::from_env().await?;
+        if !mcp_runtime.is_empty() {
+            tracing::info!("Loaded MCP tool runtime for agent {}", self.manifest.agent.id);
+        }
+
+        let model = self.manifest
+            .llm_config.as_ref()
+            .map(|c| c.model.clone())
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
+        let temperature = self.manifest.llm_config.as_ref().map(|c| c.temperature as f32);
+
+        // Conversation history (grows with tool call results)
+        let mut history: Vec<Message> = vec![
+            Message::system(self.instructions.clone()),
+            Message::user("What is your next action?"),
+        ];
+
         loop {
-            // 1. Loop Guard Check
+            // --- Loop Guard ---
             self.guard.check_loop()?;
 
-            // 2. Context Assembly
-            tracing::debug!("Assembling context");
-            
+            // --- Context Assembly ---
+            tracing::debug!("Assembling context ({} messages)", history.len());
+
+            let tools = mcp_runtime.tool_definitions()?;
+
             let req = CompletionRequest {
-                model: self.manifest.llm_config.as_ref().map(|c| c.model.clone()).unwrap_or_else(|| "gpt-4o".to_string()),
-                messages: vec![
-                    Message { role: Role::System, content: self.instructions.clone() },
-                    Message { role: Role::User, content: "What is your next action?".to_string() }
-                ],
-                max_tokens: self.manifest.limits.as_ref().and_then(|l| Some(l.max_execution_time_sec as u32 * 10)), // stub logic
-                temperature: self.manifest.llm_config.as_ref().map(|c| c.temperature as f32),
+                model: model.clone(),
+                messages: history.clone(),
+                tools,
+                max_tokens: None,
+                temperature,
             };
 
-            // 3. Reasoning (LLM call)
+            // --- Reasoning (LLM call) ---
             tracing::debug!("Calling LLM");
-            let _response = self.llm.complete(&req).await?;
+            let response = self.llm.complete(&req).await?;
 
-            // 4. Action Execution (Stubbed for now)
-            // If the response contains a tool call that modifies state or invokes an action:
-            // self.guard.register_progress(); 
-            // break; (if task complete)
-            
-            // For now, we'll just break immediately as this is scaffolding
-            tracing::info!("Agent {} hibernating...", self.manifest.agent.id);
-            break;
+            tracing::debug!(
+                stop_reason = ?response.stop_reason,
+                text_len = response.text.len(),
+                tool_calls = response.tool_calls.len(),
+                "LLM response received"
+            );
+
+            match response.stop_reason {
+                StopReason::ToolUse => {
+                    // Push the assistant's tool-call turn into history
+                    let mut assistant_msg = Message::assistant(response.text.clone());
+                    assistant_msg.tool_calls = response.tool_calls.clone();
+                    history.push(assistant_msg);
+
+                    // Execute each tool call (stubbed for now)
+                    for tc in &response.tool_calls {
+                        tracing::info!(tool = tc.name, args = tc.arguments, "Agent requested tool call");
+                        let result = if mcp_runtime.has_tool(&tc.name) {
+                            tracing::debug!(tool = tc.name, "Dispatching tool call to MCP runtime");
+                            mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
+                        } else {
+                            // TODO: dispatch non-MCP tools to sandbox/capability runtime.
+                            format!("Tool '{}' result placeholder", tc.name)
+                        };
+                        history.push(Message::tool_result(tc.id.clone(), tc.name.clone(), result));
+                    }
+
+                    // Meaningful action taken — reset the guard
+                    self.guard.register_progress();
+                }
+                StopReason::EndTurn | StopReason::StopSequence => {
+                    tracing::info!("Agent {} task complete, hibernating", self.manifest.agent.id);
+                    break;
+                }
+                StopReason::MaxTokens => {
+                    tracing::warn!("Agent {} exceeded max tokens", self.manifest.agent.id);
+                    break;
+                }
+                StopReason::Other(ref reason) => {
+                    tracing::warn!("Agent {} stopped: {}", self.manifest.agent.id, reason);
+                    break;
+                }
+            }
         }
 
         Ok(())
