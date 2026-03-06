@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonoetic_sdk"
+version = "0.1.0"
+description = "Autonoetic Sandbox SDK client library"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Autonoetic" }]
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autonoetic_sdk*"]

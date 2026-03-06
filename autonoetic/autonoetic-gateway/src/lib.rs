@@ -9,6 +9,7 @@ pub mod artifact_store;
 pub mod causal_chain;
 pub mod config;
 pub mod llm;
+pub mod log_redaction;
 pub mod policy;
 pub mod router;
 pub mod runtime;
