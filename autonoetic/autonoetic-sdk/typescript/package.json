@@ -1,0 +1,19 @@
+{
+  "name": "autonoetic_sdk",
+  "version": "0.1.0",
+  "description": "Autonoetic Sandbox SDK client library",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.21"
+  }
+}

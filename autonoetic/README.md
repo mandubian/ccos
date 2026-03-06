@@ -71,4 +71,4 @@ We are also actively trying to reuse the Openfang Protocol (OFP) as much as poss
 
 ## Status
 
-Phases 1 through 5 are implemented, including OFP networking/federation and MCP integration foundations. The current focus shifts to SDK and sandbox drivers in Phase 6 as tracked in [`plan.md`](plan.md).
+Phases 1 through 6 are implemented, including OFP networking/federation, MCP integration foundations, SDK package scaffolding, and multi-driver sandbox support. Phase 7 now focuses on polish, end-to-end coverage, and release readiness as tracked in [`plan.md`](plan.md).

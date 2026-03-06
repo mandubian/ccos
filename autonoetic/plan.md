@@ -129,13 +129,20 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 
 ---
 
-## Phase 6: SDK & Sandbox 🔜
+## Phase 6: SDK & Sandbox ✅
 
-- [ ] Python `autonoetic_sdk` package
-- [ ] JavaScript/TypeScript `autonoetic_sdk` package
-- [ ] Bubblewrap sandbox driver
-- [ ] Docker sandbox driver
-- [ ] MicroVM sandbox driver (Firecracker)
+- [x] Python `autonoetic_sdk` package
+- [x] JavaScript/TypeScript `autonoetic_sdk` package
+- [x] Bubblewrap sandbox driver
+- [x] Docker sandbox driver
+- [x] MicroVM sandbox driver (Firecracker)
+
+### Completion notes
+
+- Added Python SDK package at `autonoetic-sdk/python/` with `init()` and full API namespaces (`memory`, `state`, `secrets`, `message`, `files`, `artifacts`, `events`, `tasks`) over Unix socket JSON-RPC.
+- Added TypeScript SDK package at `autonoetic-sdk/typescript/` with equivalent `init()` and API namespaces over Unix socket JSON-RPC.
+- Upgraded gateway sandbox runtime to a multi-driver model (`bubblewrap`, `docker`, `microvm`) with strict env-driven configuration for Docker image and Firecracker config path.
+- Added unit coverage for sandbox driver parsing and command construction (`sandbox::tests::*`).
 
 ---
 

@@ -3,8 +3,10 @@
 //! Manages Wake -> Context Assembly -> Reasoning -> Act -> Hibernate.
 
 use crate::llm::{CompletionRequest, LlmDriver, Message, StopReason};
+use crate::log_redaction::redact_text_for_logs;
 use crate::runtime::guard::LoopGuard;
 use crate::runtime::mcp::McpToolRuntime;
+use crate::runtime::store::SecretStoreRuntime;
 use autonoetic_types::agent::AgentManifest;
 
 pub struct AgentExecutor {
@@ -35,6 +37,13 @@ impl AgentExecutor {
         let mut mcp_runtime = McpToolRuntime::from_env().await?;
         if !mcp_runtime.is_empty() {
             tracing::info!("Loaded MCP tool runtime for agent {}", self.manifest.agent.id);
+        }
+        let mut secret_store = SecretStoreRuntime::from_instructions(&self.instructions)?;
+        if secret_store.is_some() {
+            tracing::info!(
+                "Loaded secret store directives for agent {}",
+                self.manifest.agent.id
+            );
         }
 
         let model = self.manifest
@@ -87,14 +96,18 @@ impl AgentExecutor {
 
                     // Execute each tool call (stubbed for now)
                     for tc in &response.tool_calls {
-                        tracing::info!(tool = tc.name, args = tc.arguments, "Agent requested tool call");
-                        let result = if mcp_runtime.has_tool(&tc.name) {
+                        let redacted_args = redact_text_for_logs(&tc.arguments);
+                        tracing::info!(tool = tc.name, args = redacted_args, "Agent requested tool call");
+                        let mut result = if mcp_runtime.has_tool(&tc.name) {
                             tracing::debug!(tool = tc.name, "Dispatching tool call to MCP runtime");
                             mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
                         } else {
                             // TODO: dispatch non-MCP tools to sandbox/capability runtime.
                             format!("Tool '{}' result placeholder", tc.name)
                         };
+                        if let Some(ref mut store_runtime) = secret_store {
+                            result = store_runtime.apply_and_redact(&result)?;
+                        }
                         history.push(Message::tool_result(tc.id.clone(), tc.name.clone(), result));
                     }
 
