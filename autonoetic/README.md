@@ -31,6 +31,8 @@ Autonoetic is not trying to be a generic chatbot framework or a thin LLM wrapper
 - Artifact Store: a content-addressed store for binaries, datasets, outputs, and runtime dependencies
 - Cognitive Capsule: a portable export containing an agent bundle plus its runtime closure
 
+Autonoetic now accepts AgentSkills-compliant top-level `SKILL.md` frontmatter (`name`, `description`, `metadata`) and stores Autonoetic-specific runtime fields under `metadata.autonoetic`.
+
 ## Document Map
 
 - [`concepts.md`](concepts.md): philosophy, agent model, memory model, evolution model
@@ -72,3 +74,15 @@ We are also actively trying to reuse the Openfang Protocol (OFP) as much as poss
 ## Status
 
 Phases 1 through 6 are implemented, including OFP networking/federation, MCP integration foundations, SDK package scaffolding, and multi-driver sandbox support. Phase 7 now focuses on polish, end-to-end coverage, and release readiness as tracked in [`plan.md`](plan.md).
+
+## Quickstart Example
+
+A runnable smoke example now lives at [`examples/quickstart`](examples/quickstart/README.md).
+
+From `autonoetic/`:
+
+```bash
+bash examples/quickstart/run.sh
+```
+
+It initializes an agent in an isolated `/tmp` workspace, switches the scaffolded provider to `ollama` (no API key required for the smoke flow), and starts interactive mode with a scripted `/exit` so you can validate basic behavior out of the box.
