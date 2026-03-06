@@ -112,12 +112,20 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 
 ---
 
-## Phase 5: Networking & Federation 🔜
+## Phase 5: Networking & Federation ✅
 
 - [x] OFP TCP listener + HMAC handshake
 - [x] PeerRegistry + extension negotiation
 - [x] MCP Client (stdio/SSE transport, tool discovery)
 - [x] MCP Server (expose agents as tools)
+
+### Completion notes
+
+- OFP runtime now starts from normal gateway boot path with strict required federation identity env vars.
+- Peer lifecycle is wired into `PeerRegistry` (connected/disconnected) and validated with socket-level integration tests.
+- MCP servers are persisted in `mcp_servers.json`, probed on registration and gateway startup, and exposed in `gateway status`/`gateway status --json`.
+- Agent runtime now dispatches `mcp_<server>_<tool>` tool calls via loaded MCP registry clients.
+- Coverage includes `ofp_integration` and `mcp_integration` test suites in `autonoetic-gateway/tests/`.
 
 ---
 
