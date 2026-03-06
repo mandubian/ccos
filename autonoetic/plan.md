@@ -156,3 +156,9 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - [ ] Example agents (researcher, coder, auditor)
 - [ ] AgentSkills.io marketplace publishing
 - [ ] Open-source release (choose license)
+
+### Progress notes
+
+- `autonoetic agent run --interactive` now executes a real stdin chat loop and reuses lifecycle tool execution (`mcp_*` and `sandbox.exec`) instead of warning-only fallback behavior.
+- `autonoetic agent init` now scaffolds `SKILL.md`, `runtime.lock` (including `dependencies: []`), and baseline agent directories (`state/`, `history/`, `skills/`, `scripts/`).
+- Added CLI tests for runtime policy enforcement and scaffold creation in `autonoetic/src/main.rs`.
