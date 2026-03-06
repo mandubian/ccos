@@ -57,6 +57,8 @@ Inspect trace:
 
 ```bash
 cat /tmp/autonoetic-quickstart/agents/<agent_id>/history/causal_chain.jsonl
+cargo run -p autonoetic -- --config /tmp/autonoetic-quickstart/config.yaml trace sessions --agent <agent_id>
+cargo run -p autonoetic -- --config /tmp/autonoetic-quickstart/config.yaml trace show <session_id> --agent <agent_id>
 ```
 
 Capture full redacted evidence blobs (optional):
@@ -72,7 +74,7 @@ When enabled, causal entries include `evidence_ref` pointers to files under:
 agents/<agent_id>/history/evidence/<session_id>/*.json
 ```
 
-Session semantics in causal payloads:
+Session semantics in top-level causal fields:
 
 - `session_id`: stable across one CLI invocation (`agent run ...`)
 - `turn_id`: increments per agent turn (`turn-000001`, ...)

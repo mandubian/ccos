@@ -89,4 +89,8 @@ By default it initializes an agent in an isolated `/tmp` workspace and runs a re
 
 Each run appends lifecycle/tool events to the agent causal trace at `agents/<agent_id>/history/causal_chain.jsonl`.
 Set `AUTONOETIC_EVIDENCE_MODE=full` to additionally capture redacted full evidence payloads with `evidence_ref` pointers in causal entries.
-Causal payloads now include `session_id`, `turn_id`, and `event_seq` for multi-run and multi-turn introspection.
+Causal entries expose top-level `session_id`, `turn_id`, and `event_seq` fields for multi-run/multi-turn introspection, plus `entry_hash` / `prev_hash` linkage for chain integrity.
+You can inspect traces with:
+- `autonoetic trace sessions [--agent <agent_id>] [--json]`
+- `autonoetic trace show <session_id> [--agent <agent_id>] [--json]`
+- `autonoetic trace event <log_id> [--agent <agent_id>] [--json]`
