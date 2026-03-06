@@ -278,7 +278,6 @@ impl AgentExecutor {
             "wake",
             EntryStatus::Success,
             Some(serde_json::json!({
-                "turn_id": turn_id.clone(),
                 "history_messages": history.len(),
                 "evidence_mode": evidence_store.mode.as_str(),
             })),
@@ -339,8 +338,6 @@ impl AgentExecutor {
                 "LLM response received"
             );
             let mut llm_payload = serde_json::json!({
-                "session_id": session_id.clone(),
-                "turn_id": turn_id.clone(),
                 "model": model.clone(),
                 "stop_reason": format!("{:?}", response.stop_reason),
                 "text_len": response.text.len(),
@@ -353,8 +350,6 @@ impl AgentExecutor {
                 }
             });
             let llm_evidence = serde_json::json!({
-                "session_id": session_id.clone(),
-                "turn_id": turn_id.clone(),
                 "model": model.clone(),
                 "stop_reason": format!("{:?}", response.stop_reason),
                 "text": redact_text_for_logs(&response.text),
@@ -399,15 +394,11 @@ impl AgentExecutor {
                         let redacted_args = redact_text_for_logs(&tc.arguments);
                         tracing::info!(tool = tc.name, args = redacted_args, "Agent requested tool call");
                         let mut requested_payload = serde_json::json!({
-                            "session_id": session_id.clone(),
-                            "turn_id": turn_id.clone(),
                             "tool_name": tc.name,
                             "arguments": redacted_args,
                             "arguments_sha256": sha256_hex(&tc.arguments)
                         });
                         let requested_evidence = serde_json::json!({
-                            "session_id": session_id.clone(),
-                            "turn_id": turn_id.clone(),
                             "tool_name": tc.name,
                             "arguments": redact_text_for_logs(&tc.arguments)
                         });
@@ -445,16 +436,12 @@ impl AgentExecutor {
                             result = store_runtime.apply_and_redact(&result)?;
                         }
                         let mut completed_payload = serde_json::json!({
-                            "session_id": session_id.clone(),
-                            "turn_id": turn_id.clone(),
                             "tool_name": tc.name,
                             "result_len": result.len(),
                             "result_sha256": sha256_hex(&result),
                             "result_preview": redact_text_for_logs(&truncate_for_log(&result, 256))
                         });
                         let completed_evidence = serde_json::json!({
-                            "session_id": session_id.clone(),
-                            "turn_id": turn_id.clone(),
                             "tool_name": tc.name,
                             "result": redact_text_for_logs(&result)
                         });
@@ -492,7 +479,6 @@ impl AgentExecutor {
                         "hibernate",
                         EntryStatus::Success,
                         Some(serde_json::json!({
-                            "turn_id": turn_id.clone(),
                             "stop_reason": format!("{:?}", response.stop_reason)
                         })),
                         &session_id,
@@ -514,7 +500,6 @@ impl AgentExecutor {
                         "stopped",
                         EntryStatus::Error,
                         Some(serde_json::json!({
-                            "turn_id": turn_id.clone(),
                             "stop_reason": "MaxTokens"
                         })),
                         &session_id,
@@ -536,7 +521,6 @@ impl AgentExecutor {
                         "stopped",
                         EntryStatus::Error,
                         Some(serde_json::json!({
-                            "turn_id": turn_id.clone(),
                             "stop_reason": reason
                         })),
                         &session_id,
@@ -555,7 +539,7 @@ impl AgentExecutor {
 fn init_causal_logger(agent_dir: &Path) -> anyhow::Result<CausalLogger> {
     let history_dir = agent_dir.join("history");
     std::fs::create_dir_all(&history_dir)?;
-    Ok(CausalLogger::new(history_dir.join("causal_chain.jsonl")))
+    CausalLogger::new(history_dir.join("causal_chain.jsonl"))
 }
 
 fn log_causal_event(
@@ -569,41 +553,18 @@ fn log_causal_event(
     turn_id: Option<&str>,
     event_seq: u64,
 ) {
-    let payload = enrich_payload(payload, session_id, turn_id, event_seq);
-    if let Err(e) = logger.log(actor_id, category, action, status, payload) {
+    if let Err(e) = logger.log(
+        actor_id,
+        session_id,
+        turn_id,
+        event_seq,
+        category,
+        action,
+        status,
+        payload,
+    ) {
         tracing::warn!(error = %e, category, action, "Failed to append causal log entry");
     }
-}
-
-fn enrich_payload(
-    payload: Option<serde_json::Value>,
-    session_id: &str,
-    turn_id: Option<&str>,
-    event_seq: u64,
-) -> Option<serde_json::Value> {
-    let mut obj = match payload.unwrap_or_else(|| serde_json::json!({})) {
-        serde_json::Value::Object(map) => map,
-        other => {
-            let mut map = serde_json::Map::new();
-            map.insert("data".to_string(), other);
-            map
-        }
-    };
-    obj.insert(
-        "session_id".to_string(),
-        serde_json::Value::String(session_id.to_string()),
-    );
-    if let Some(turn_id) = turn_id {
-        obj.insert(
-            "turn_id".to_string(),
-            serde_json::Value::String(turn_id.to_string()),
-        );
-    }
-    obj.insert(
-        "event_seq".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(event_seq)),
-    );
-    Some(serde_json::Value::Object(obj))
 }
 
 fn truncate_for_log(value: &str, max_len: usize) -> String {
@@ -973,9 +934,40 @@ dependencies:
             .expect("execution should succeed");
         let causal_path = temp.path().join("history").join("causal_chain.jsonl");
         let body = std::fs::read_to_string(causal_path).expect("causal chain should be written");
-        assert!(body.contains("\"category\":\"lifecycle\""));
-        assert!(body.contains("\"action\":\"wake\""));
-        assert!(body.contains("\"action\":\"hibernate\""));
+        let entries = body
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<autonoetic_types::causal_chain::CausalChainEntry>(line)
+                    .expect("entry should parse")
+            })
+            .collect::<Vec<_>>();
+        assert!(!entries.is_empty(), "causal chain should have entries");
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.category == "lifecycle" && e.action == "wake")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.category == "lifecycle" && e.action == "hibernate")
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| !e.session_id.is_empty() && !e.entry_hash.is_empty()),
+            "expected top-level session_id and entry_hash fields"
+        );
+        assert_eq!(
+            entries.first().expect("first entry should exist").prev_hash,
+            "genesis"
+        );
+        for pair in entries.windows(2) {
+            let prev = &pair[0];
+            let current = &pair[1];
+            assert_eq!(current.prev_hash, prev.entry_hash);
+            assert!(current.event_seq > prev.event_seq);
+        }
     }
 
     #[tokio::test]

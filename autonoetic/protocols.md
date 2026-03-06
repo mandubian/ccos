@@ -158,18 +158,25 @@ All Causal logs are strictly formatted as line-delimited JSON (`.jsonl`) to supp
 ```json
 {
   "timestamp": "2026-03-05T10:15:30Z",
+  "log_id": "uuid-v4-string",
   "actor_id": "agent_alpha_75g",
+  "session_id": "3f3d7b22-7f16-4d2a-a3a8-2e4a9b3f44aa",
+  "turn_id": "turn-000001",
+  "event_seq": 12,
   "category": "sandbox_execution",
   "action": "sdk.secret.get",
   "target": "GITHUB_API_TOKEN",
   "status": "DENIED",
   "reason": "policy/strict_auth_required",
-  "prev_hash": "a3f8c2...b7e1"
+  "payload": {"attempted_key_sha256": "31f3c3..."},
+  "payload_hash": "4c0f7e...9b9b",
+  "prev_hash": "a3f8c2...b7e1",
+  "entry_hash": "ab4d1d...e71a"
 }
 ```
 
 ### Hash-Chain Audit Trail (Tamper-Evidence)
-Each Causal Chain entry includes a `prev_hash` field containing the SHA-256 hash of the previous entry. This forms a hash-linked chain, providing cryptographic tamper-evidence:
+Each Causal Chain entry includes a `prev_hash` field containing the previous entry's `entry_hash`. `entry_hash` is SHA-256 over the canonical entry envelope (including `session_id`, `turn_id`, `event_seq`, `status`, and `payload_hash`). This forms a hash-linked chain, providing cryptographic tamper-evidence:
 - If any historical log entry is altered or deleted, the chain breaks and the discrepancy is immediately detectable.
 - The Auditor Agent uses this chain to verify the integrity of the audit trail before performing its security analysis.
 - The chain root hash can be periodically signed and published for non-repudiable external verification.

@@ -228,16 +228,23 @@ The fundamental unit of observability in Autonoetic. Every API call, message, an
 {
   "timestamp": "2026-03-05T10:15:30.123Z",
   "log_id": "uuid-v4-string",
-  "actor_id": "agent_alpha_75g",       // Agent, Gateway, or Auditor
-  "category": "sandbox_execution",     // routing, sdk, tool_invoke, lifecycle
+  "actor_id": "agent_alpha_75g",        // Agent, Gateway, or Auditor
+  "session_id": "3f3d7b22-7f16-4d2a-a3a8-2e4a9b3f44aa",
+  "turn_id": "turn-000001",
+  "event_seq": 12,                      // Strictly increasing within a session
+  "category": "sandbox_execution",      // routing, sdk, tool_invoke, lifecycle
   "action": "sdk.secret.get",
   "target": "GITHUB_API_TOKEN",
-  "status": "DENIED",                  // SUCCESS, DENIED, ERROR
+  "status": "DENIED",                   // SUCCESS, DENIED, ERROR
   "reason": "policy/strict_auth_required",
   "payload": {
-    "attempted_key": "GITHUB_API_TOKEN"
+    "attempted_key": "GITHUB_API_TOKEN",
+    "attempted_key_sha256": "31f3c3...",
+    "evidence_ref": "history/evidence/3f3d7b22.../20260305T101530Z-tool-request-....json"
   },
-  "prev_hash": "a3f8c2b7e1...hash...9x1z" // Hash-chain linkage
+  "payload_hash": "4c0f7e...9b9b",      // SHA-256(payload JSON), optional when payload exists
+  "prev_hash": "a3f8c2b7e1...hash...9x1z",
+  "entry_hash": "ab4d1d...e71a"         // SHA-256 canonical entry envelope
 }
 ```
 

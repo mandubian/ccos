@@ -8,6 +8,9 @@ use autonoetic_mcp::{
     AgentExecutor as McpAgentExecutor, AgentMcpServer, ExposedAgent, McpClient, McpServer, McpTool,
     McpTransportConfig,
 };
+use autonoetic_types::causal_chain::CausalChainEntry;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -37,6 +40,8 @@ enum Commands {
     Gateway(GatewayArgs),
     /// Manage Autonoetic Agents
     Agent(AgentArgs),
+    /// Inspect causal chain traces
+    Trace(TraceArgs),
     /// Ecosystem and Skills management
     Skill(SkillArgs),
     /// Federation and Cluster management
@@ -114,6 +119,51 @@ enum AgentCommands {
     },
     /// Lists all local Agents registered with the Gateway
     List,
+}
+
+// ---------------------------------------------------------------------------
+// Trace
+// ---------------------------------------------------------------------------
+
+#[derive(Args)]
+struct TraceArgs {
+    #[command(subcommand)]
+    command: TraceCommands,
+}
+
+#[derive(Subcommand)]
+enum TraceCommands {
+    /// List known sessions across agent traces
+    Sessions {
+        /// Restrict lookup to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show all events for one session
+    Show {
+        /// Session identifier
+        session_id: String,
+        /// Restrict lookup to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one specific event by log_id
+    Event {
+        /// Event/log identifier
+        log_id: String,
+        /// Restrict lookup to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +343,27 @@ async fn main() -> anyhow::Result<()> {
                         println!("{:<30} {}", a.id, a.dir.display());
                     }
                 }
+            }
+        },
+
+        // ---- Trace ----
+        Commands::Trace(args) => match &args.command {
+            TraceCommands::Sessions { agent, json } => {
+                print_trace_sessions(&config_path, agent.as_deref(), *json)?;
+            }
+            TraceCommands::Show {
+                session_id,
+                agent,
+                json,
+            } => {
+                print_trace_session(&config_path, session_id, agent.as_deref(), *json)?;
+            }
+            TraceCommands::Event {
+                log_id,
+                agent,
+                json,
+            } => {
+                print_trace_event(&config_path, log_id, agent.as_deref(), *json)?;
             }
         },
 
@@ -822,6 +893,292 @@ async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::
     Ok(())
 }
 
+#[derive(Debug)]
+struct AgentTrace {
+    agent_id: String,
+    entries: Vec<CausalChainEntry>,
+}
+
+#[derive(Debug)]
+struct SessionSummary {
+    agent_id: String,
+    session_id: String,
+    first_timestamp: String,
+    last_timestamp: String,
+    event_count: usize,
+    max_event_seq: u64,
+}
+
+fn print_trace_sessions(
+    config_path: &Path,
+    requested_agent: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let traces = load_agent_traces(config_path, requested_agent)?;
+    let sessions = collect_session_summaries(&traces);
+    if json_output {
+        let body = sessions
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "agent_id": s.agent_id,
+                    "session_id": s.session_id,
+                    "first_timestamp": s.first_timestamp,
+                    "last_timestamp": s.last_timestamp,
+                    "event_count": s.event_count,
+                    "max_event_seq": s.max_event_seq
+                })
+            })
+            .collect::<Vec<_>>();
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    if sessions.is_empty() {
+        println!("No trace sessions found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}",
+        "AGENT", "SESSION ID", "FIRST TS", "LAST TS", "EVENTS", "MAX SEQ"
+    );
+    for s in sessions {
+        println!(
+            "{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}",
+            s.agent_id, s.session_id, s.first_timestamp, s.last_timestamp, s.event_count, s.max_event_seq
+        );
+    }
+    Ok(())
+}
+
+fn print_trace_session(
+    config_path: &Path,
+    session_id: &str,
+    requested_agent: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !session_id.trim().is_empty(),
+        "session_id must not be empty"
+    );
+    let traces = load_agent_traces(config_path, requested_agent)?;
+    let mut matches: Vec<(String, Vec<CausalChainEntry>)> = Vec::new();
+    for trace in traces {
+        let events = trace
+            .entries
+            .into_iter()
+            .filter(|entry| entry.session_id == session_id)
+            .collect::<Vec<_>>();
+        if !events.is_empty() {
+            matches.push((trace.agent_id, events));
+        }
+    }
+
+    anyhow::ensure!(
+        !matches.is_empty(),
+        "No events found for session '{}'{}",
+        session_id,
+        requested_agent
+            .map(|a| format!(" under agent '{}'", a))
+            .unwrap_or_default()
+    );
+    if requested_agent.is_none() && matches.len() > 1 {
+        let owners = matches
+            .iter()
+            .map(|(agent_id, _)| agent_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "Session '{}' found in multiple agents ({}). Re-run with --agent.",
+            session_id,
+            owners
+        );
+    }
+
+    let (agent_id, mut entries) = matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve session match"))?;
+    entries.sort_by_key(|e| e.event_seq);
+
+    if json_output {
+        let body = serde_json::json!({
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "events": entries,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    println!("Agent: {}", agent_id);
+    println!("Session: {}", session_id);
+    println!(
+        "{:<10} {:<28} {:<10} {:<24} {}",
+        "EVENT_SEQ", "TIMESTAMP", "STATUS", "CATEGORY.ACTION", "LOG_ID"
+    );
+    for entry in entries {
+        println!(
+            "{:<10} {:<28} {:<10} {:<24} {}",
+            entry.event_seq,
+            entry.timestamp,
+            format!("{:?}", entry.status),
+            format!("{}.{}", entry.category, entry.action),
+            entry.log_id
+        );
+    }
+    Ok(())
+}
+
+fn print_trace_event(
+    config_path: &Path,
+    log_id: &str,
+    requested_agent: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!log_id.trim().is_empty(), "log_id must not be empty");
+    let traces = load_agent_traces(config_path, requested_agent)?;
+    let mut matches: Vec<(String, CausalChainEntry)> = Vec::new();
+    for trace in traces {
+        for entry in trace.entries {
+            if entry.log_id == log_id {
+                matches.push((trace.agent_id.clone(), entry));
+            }
+        }
+    }
+
+    anyhow::ensure!(
+        !matches.is_empty(),
+        "No event found for log_id '{}'{}",
+        log_id,
+        requested_agent
+            .map(|a| format!(" under agent '{}'", a))
+            .unwrap_or_default()
+    );
+    if requested_agent.is_none() && matches.len() > 1 {
+        let owners = matches
+            .iter()
+            .map(|(agent_id, _)| agent_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "Event '{}' found in multiple agents ({}). Re-run with --agent.",
+            log_id,
+            owners
+        );
+    }
+
+    let (agent_id, entry) = matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve event match"))?;
+
+    if json_output {
+        let body = serde_json::json!({
+            "agent_id": agent_id,
+            "event": entry,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    println!("Agent: {}", agent_id);
+    println!("{}", serde_json::to_string_pretty(&entry)?);
+    Ok(())
+}
+
+fn load_agent_traces(config_path: &Path, requested_agent: Option<&str>) -> anyhow::Result<Vec<AgentTrace>> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let mut agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
+    if let Some(agent_id) = requested_agent {
+        agents.retain(|a| a.id == agent_id);
+        anyhow::ensure!(
+            !agents.is_empty(),
+            "Agent '{}' not found in {}",
+            agent_id,
+            config.agents_dir.display()
+        );
+    }
+
+    let mut traces = Vec::new();
+    for agent in agents {
+        let path = agent.dir.join("history").join("causal_chain.jsonl");
+        if !path.exists() {
+            continue;
+        }
+        let entries = read_trace_entries(&path)?;
+        traces.push(AgentTrace {
+            agent_id: agent.id,
+            entries,
+        });
+    }
+    Ok(traces)
+}
+
+fn read_trace_entries(path: &Path) -> anyhow::Result<Vec<CausalChainEntry>> {
+    let file = std::fs::File::open(path)?;
+    let reader = StdBufReader::new(file);
+    let mut entries = Vec::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry: CausalChainEntry = serde_json::from_str(trimmed)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON in {} at line {}: {}", path.display(), idx + 1, e))?;
+        validate_trace_entry(&entry, path, idx + 1)?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn validate_trace_entry(entry: &CausalChainEntry, path: &Path, line_no: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !entry.session_id.trim().is_empty(),
+        "Invalid causal entry in {} at line {}: missing top-level session_id",
+        path.display(),
+        line_no
+    );
+    anyhow::ensure!(
+        !entry.entry_hash.trim().is_empty(),
+        "Invalid causal entry in {} at line {}: missing top-level entry_hash",
+        path.display(),
+        line_no
+    );
+    Ok(())
+}
+
+fn collect_session_summaries(traces: &[AgentTrace]) -> Vec<SessionSummary> {
+    let mut by_session: BTreeMap<(String, String), SessionSummary> = BTreeMap::new();
+    for trace in traces {
+        for entry in &trace.entries {
+            let key = (trace.agent_id.clone(), entry.session_id.clone());
+            let summary = by_session.entry(key).or_insert_with(|| SessionSummary {
+                agent_id: trace.agent_id.clone(),
+                session_id: entry.session_id.clone(),
+                first_timestamp: entry.timestamp.clone(),
+                last_timestamp: entry.timestamp.clone(),
+                event_count: 0,
+                max_event_seq: entry.event_seq,
+            });
+            summary.event_count += 1;
+            if entry.timestamp < summary.first_timestamp {
+                summary.first_timestamp = entry.timestamp.clone();
+            }
+            if entry.timestamp > summary.last_timestamp {
+                summary.last_timestamp = entry.timestamp.clone();
+            }
+            if entry.event_seq > summary.max_event_seq {
+                summary.max_event_seq = entry.event_seq;
+            }
+        }
+    }
+
+    by_session.into_values().collect::<Vec<_>>()
+}
+
 struct CliAgentExecutor {
     agents_dir: PathBuf,
     client: reqwest::Client,
@@ -1014,5 +1371,108 @@ Use tools when needed.
         assert!(skill.contains("id: \"agent_bootstrap\""));
         assert!(skill.contains("description: \"Software engineering autonomous agent.\""));
         assert!(lock.contains("dependencies: []"));
+    }
+
+    #[test]
+    fn test_read_trace_entries_rejects_missing_top_level_session_fields() {
+        let temp = tempdir().expect("tempdir should create");
+        let path = temp.path().join("causal_chain.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"timestamp":"2026-03-06T00:00:00Z","log_id":"l1","actor_id":"a1","category":"lifecycle","action":"wake","target":null,"status":"SUCCESS","reason":null,"payload":{"session_id":"legacy"},"prev_hash":"genesis","entry_hash":"abc"}"#,
+        )
+        .expect("trace should write");
+
+        let err = read_trace_entries(&path).expect_err("legacy missing session_id should fail");
+        assert!(
+            err.to_string().contains("missing top-level session_id"),
+            "expected strict top-level session_id validation"
+        );
+    }
+
+    #[test]
+    fn test_read_trace_entries_rejects_missing_top_level_hash_fields() {
+        let temp = tempdir().expect("tempdir should create");
+        let path = temp.path().join("causal_chain.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"timestamp":"2026-03-06T00:00:00Z","log_id":"l1","actor_id":"a1","session_id":"s1","turn_id":"turn-000001","event_seq":1,"category":"lifecycle","action":"wake","target":null,"status":"SUCCESS","reason":null,"payload":{"history_messages":2},"prev_hash":"genesis","entry_hash":""}"#,
+        )
+        .expect("trace should write");
+
+        let err = read_trace_entries(&path).expect_err("missing entry_hash should fail");
+        assert!(
+            err.to_string().contains("missing top-level entry_hash"),
+            "expected strict top-level entry_hash validation"
+        );
+    }
+
+    #[test]
+    fn test_collect_session_summaries_groups_sessions() {
+        let traces = vec![AgentTrace {
+            agent_id: "agent_demo".to_string(),
+            entries: vec![
+                CausalChainEntry {
+                    timestamp: "2026-03-06T10:00:00Z".to_string(),
+                    log_id: "l1".to_string(),
+                    actor_id: "agent_demo".to_string(),
+                    session_id: "s1".to_string(),
+                    turn_id: Some("turn-000001".to_string()),
+                    event_seq: 1,
+                    category: "session".to_string(),
+                    action: "start".to_string(),
+                    target: None,
+                    status: autonoetic_types::causal_chain::EntryStatus::Success,
+                    reason: None,
+                    payload: None,
+                    payload_hash: None,
+                    prev_hash: "genesis".to_string(),
+                    entry_hash: "h1".to_string(),
+                },
+                CausalChainEntry {
+                    timestamp: "2026-03-06T10:00:02Z".to_string(),
+                    log_id: "l2".to_string(),
+                    actor_id: "agent_demo".to_string(),
+                    session_id: "s1".to_string(),
+                    turn_id: Some("turn-000001".to_string()),
+                    event_seq: 2,
+                    category: "lifecycle".to_string(),
+                    action: "wake".to_string(),
+                    target: None,
+                    status: autonoetic_types::causal_chain::EntryStatus::Success,
+                    reason: None,
+                    payload: None,
+                    payload_hash: None,
+                    prev_hash: "h1".to_string(),
+                    entry_hash: "h2".to_string(),
+                },
+                CausalChainEntry {
+                    timestamp: "2026-03-06T10:05:00Z".to_string(),
+                    log_id: "l3".to_string(),
+                    actor_id: "agent_demo".to_string(),
+                    session_id: "s2".to_string(),
+                    turn_id: Some("turn-000001".to_string()),
+                    event_seq: 1,
+                    category: "session".to_string(),
+                    action: "start".to_string(),
+                    target: None,
+                    status: autonoetic_types::causal_chain::EntryStatus::Success,
+                    reason: None,
+                    payload: None,
+                    payload_hash: None,
+                    prev_hash: "genesis".to_string(),
+                    entry_hash: "h3".to_string(),
+                },
+            ],
+        }];
+
+        let sessions = collect_session_summaries(&traces);
+        assert_eq!(sessions.len(), 2, "expected one summary per session");
+        let s1 = sessions
+            .iter()
+            .find(|s| s.session_id == "s1")
+            .expect("s1 should be present");
+        assert_eq!(s1.event_count, 2);
+        assert_eq!(s1.max_event_seq, 2);
     }
 }

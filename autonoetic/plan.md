@@ -166,3 +166,6 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - `SKILL.md` parsing now supports AgentSkills-compliant top-level frontmatter (`name`, `description`, `metadata`) with Autonoetic manifest fields nested under `metadata.autonoetic` for editor/tool compatibility.
 - Lifecycle now writes compact causal events by default and supports optional full redacted evidence capture via `AUTONOETIC_EVIDENCE_MODE=full` (`evidence_ref` pointers under `history/evidence/<session_id>/`).
 - Causal tracing now includes explicit session semantics (`session/start`, `session/end`, `session_id`, `turn_id`, `event_seq`) so one agent can be run multiple times with unambiguous trace segmentation.
+- Causal schema now promotes `session_id`, `turn_id`, and `event_seq` to top-level fields and adds explicit `entry_hash` / `payload_hash` fields for cryptographic integrity and low-cost payload introspection.
+- Hash-chain linkage now uses SHA-256 and reloads continuity across process restarts by hydrating `last_hash` from the last persisted causal entry.
+- Added CLI trace introspection commands: `autonoetic trace sessions`, `autonoetic trace show <session_id>`, and `autonoetic trace event <log_id>` with optional `--agent` and `--json`.
