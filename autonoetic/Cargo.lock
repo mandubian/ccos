@@ -110,10 +110,14 @@ name = "autonoetic"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "autonoetic-gateway",
+ "autonoetic-mcp",
  "autonoetic-types",
  "clap",
  "dirs",
+ "reqwest",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -125,17 +129,24 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "autonoetic-mcp",
+ "autonoetic-ofp",
  "autonoetic-types",
  "base64",
  "chrono",
  "ed25519-dalek",
+ "futures",
  "gray_matter",
+ "hex",
+ "hmac",
  "reqwest",
  "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
+ "subtle",
  "tempfile",
  "tokio",
  "tracing",
@@ -146,9 +157,13 @@ dependencies = [
 name = "autonoetic-mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "autonoetic-types",
+ "reqwest",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -433,6 +448,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -586,12 +602,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "futures"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -599,6 +631,34 @@ name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-executor"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf29c38818342a3b26b5b923639e7b1f4a61fc5e76102d4b1981c6dc7a7579d"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
+name = "futures-io"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cecba35d7ad927e23624b22ad55235f2239cfa44fd10428eecbeba6d6a717718"
+
+[[package]]
+name = "futures-macro"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e835b70203e41293343137df5c0664546da5745f82ec9b84d40be8336958447b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "futures-sink"
@@ -618,8 +678,13 @@ version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
+ "futures-channel",
  "futures-core",
+ "futures-io",
+ "futures-macro",
+ "futures-sink",
  "futures-task",
+ "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -745,6 +810,21 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -1463,6 +1543,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -1484,12 +1565,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -2379,6 +2462,19 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
