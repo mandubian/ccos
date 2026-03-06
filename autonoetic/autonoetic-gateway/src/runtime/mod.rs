@@ -6,5 +6,6 @@
 pub mod crypto;
 pub mod guard;
 pub mod lifecycle;
+pub mod mcp;
 pub mod memory;
 pub mod parser;
