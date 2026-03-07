@@ -312,4 +312,93 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - [x] Keep tool-result redaction, disclosure, and causal logging centralized in the lifecycle path even after dispatch is modularized.
 - [x] Add focused runtime tests proving known native tools still execute, unknown tools still fail cleanly, and MCP/native precedence remains unchanged.
 - [x] Add one extension-oriented test that registers or wires a small additional native test tool with minimal lifecycle churn to prove the composability goal.
+
+#### Refactor backlog (simpler, thinner, easier to reason about)
+
+Execution order matters here: do the identity/loading and trace/session ownership work first, then split larger files around those new seams.
+
+##### 1. Agent repository and identity unification
+
+- [x] Introduce a single `AgentRepository` / `LoadedAgent` path that owns directory scan, `SKILL.md` load, manifest parse, and instruction extraction.
+- [ ] Stop duplicating manifest load/parse flows across gateway execution, scheduler, router helpers, and CLI paths.
+- [ ] Decide one identity rule and enforce it consistently: either require `dir_name == manifest.agent.id` or explicitly separate filesystem location from logical agent identity.
+- [x] Replace direct `scan_agents` + local parse patterns with repository calls in the highest-traffic runtime paths first.
+
+Acceptance criteria:
+- One reusable load path returns `LoadedAgent { dir, manifest, instructions }`.
+- Directory-name identity drift is either rejected with a clear error or made impossible by design.
+- Gateway execution and scheduler use the same repository abstraction.
+
+Progress notes:
+- `execution.rs` and `scheduler.rs` now load agents through `AgentRepository`.
+- Remaining cleanup is mostly edge-path consistency (notably CLI trace loading still enumerates directories directly before repository loads).
+- Identity mismatch enforcement exists in repository loading, but a few call sites still handle mismatches permissively (skip/continue) instead of surfacing deterministic errors.
+
+##### 2. Session tracer / trace-session ownership
+
+- [ ] Introduce a small `SessionTracer` / `TraceSession` abstraction that owns `session_id`, event sequencing, causal logger access, and shared trace helpers.
+- [ ] Stop resetting caller-local `event_seq` counters in router and scheduler request/tick handlers.
+- [ ] Move common gateway trace emission (`requested` / `completed` / `failed` / `skipped`) behind the tracer helper instead of open-coded calls.
+- [ ] Fix trace viewing so long-lived sessions are not ordered only by `event_seq` when duplicates may exist.
+
+Acceptance criteria:
+- Router and scheduler no longer manually manage raw sequence counters.
+- Trace sorting is stable for long-lived sessions and background session IDs.
+- Trace-related tests cover at least one multi-event session that would previously have duplicate `event_seq` values.
+
+##### 3. Scheduler split by domain responsibility
+
+- [ ] Split `scheduler.rs` into smaller modules such as `scheduler/decision.rs`, `scheduler/store.rs`, `scheduler/approval.rs`, and `scheduler/runner.rs`.
+- [ ] Separate wake-decision logic from persistence helpers and side-effecting execution.
+- [ ] Revisit approval-resolution wake behavior while doing the split so predicates are enforced intentionally, not incidentally.
+- [ ] Remove dead or misleading parameters and helpers that become unnecessary after the split.
+
+Acceptance criteria:
+- Wake-decision code is readable without scrolling through approval and JSON persistence helpers.
+- Approval, inbox/task-board persistence, and runner side effects live behind module boundaries.
+- Existing scheduler integration tests still pass without behavior drift.
+
+##### 4. Router spawn/ingest unification
+
+- [ ] Extract one internal helper for the shared `agent.spawn` / `event.ingest` workflow: parse input, resolve session, emit gateway causal events, optionally append task-board metadata, and call the execution service.
+- [ ] Stop reloading target agent data in router-only prechecks when the same path is reloaded again by the execution layer.
+- [ ] Keep param parsing and user-facing response shapes distinct, but collapse the duplicated orchestration path.
+
+Acceptance criteria:
+- `agent.spawn` and `event.ingest` share one internal execution pipeline.
+- Gateway causal logging shape remains unchanged externally.
+- Tests continue covering both JSON-RPC methods independently.
+
+##### 5. Lifecycle collaborator extraction
+
+- [ ] Shrink `runtime/lifecycle.rs` by extracting at least `SessionTracer`, `ToolCallProcessor`, and reevaluation-state persistence helpers into focused collaborators.
+- [ ] Keep the agent loop centered on: build completion request, invoke model, dispatch stop reason, apply reply filter.
+- [ ] Preserve centralized disclosure, evidence, and causal logging semantics while moving plumbing out of the loop body.
+
+Acceptance criteria:
+- The main loop reads primarily as orchestration, not as a long list of audit/persistence details.
+- Tool execution remains MCP-first, then native.
+- Current lifecycle/disclosure/tool tests remain green.
+
+##### 6. CLI split into focused command modules
+
+- [ ] Split the Autonoetic CLI binary into focused modules such as `cli/gateway.rs`, `cli/agent.rs`, `cli/trace.rs`, `cli/chat.rs`, and `cli/mcp.rs`.
+- [ ] Introduce small helper services where needed (`TraceStore`, `McpRegistry` wrappers, output formatters) instead of leaving all command behavior in `main.rs`.
+- [ ] Keep the top-level clap surface unchanged while reducing the size and coupling of `main.rs`.
+
+Acceptance criteria:
+- `main.rs` becomes command wiring rather than command implementation.
+- Trace, gateway, agent, MCP, and chat flows can be read in isolation.
+- Existing CLI tests continue passing without flag or output regressions.
+
+##### 7. Tool registry cleanup and shared path-tool helpers
+
+- [ ] Remove dead or redundant registry types such as unused discovery metadata.
+- [ ] Factor shared JSON argument parsing / path extraction for file-backed native tools.
+- [ ] Keep the registry intentionally thin and static; do not turn it into a plugin framework.
+
+Acceptance criteria:
+- Path-based native tools do not duplicate argument parsing and metadata extraction logic.
+- Registry code stays small and in-process only.
+- Tool behavior and MCP/native precedence remain unchanged.
 ```
