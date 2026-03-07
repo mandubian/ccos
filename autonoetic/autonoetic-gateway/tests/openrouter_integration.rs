@@ -5,7 +5,7 @@
 //!
 //! Skipped automatically when OPENROUTER_API_KEY is not set.
 
-use autonoetic_gateway::llm::{self, CompletionRequest, Message, LlmDriver};
+use autonoetic_gateway::llm::{self, CompletionRequest, LlmDriver, Message};
 
 /// Resolve a provider and build the driver the same way the gateway would.
 fn make_openrouter_driver(model: &str) -> anyhow::Result<std::sync::Arc<dyn LlmDriver>> {
@@ -39,20 +39,30 @@ async fn test_openrouter_simple_completion() -> anyhow::Result<()> {
     let model = "google/gemini-3-flash-preview";
     let driver = make_openrouter_driver(model)?;
 
-    let req = CompletionRequest::simple(model, vec![
-        Message::system("You are a concise assistant. Answer in one sentence."),
-        Message::user("What is 2 + 2? Reply with only the number and one word."),
-    ]);
+    let req = CompletionRequest::simple(
+        model,
+        vec![
+            Message::system("You are a concise assistant. Answer in one sentence."),
+            Message::user("What is 2 + 2? Reply with only the number and one word."),
+        ],
+    );
 
     let resp = driver.complete(&req).await?;
-    
+
     println!("=== OpenRouter response ===");
     println!("Text:        {:?}", resp.text);
     println!("Stop reason: {:?}", resp.stop_reason);
-    println!("Usage:       in={} out={}", resp.usage.input_tokens, resp.usage.output_tokens);
+    println!(
+        "Usage:       in={} out={}",
+        resp.usage.input_tokens, resp.usage.output_tokens
+    );
 
     assert!(!resp.text.is_empty(), "Expected non-empty response");
-    assert!(resp.text.contains('4'), "Expected answer to contain '4', got: {}", resp.text);
+    assert!(
+        resp.text.contains('4'),
+        "Expected answer to contain '4', got: {}",
+        resp.text
+    );
 
     Ok(())
 }
@@ -73,7 +83,9 @@ async fn test_openrouter_tool_call() -> anyhow::Result<()> {
     let req = CompletionRequest {
         model: model.to_string(),
         messages: vec![
-            Message::system("You are a helpful assistant. Use the provided tools when appropriate."),
+            Message::system(
+                "You are a helpful assistant. Use the provided tools when appropriate.",
+            ),
             Message::user("What is the current weather in Paris? Use the get_weather tool."),
         ],
         tools: vec![ToolDefinition {
@@ -99,13 +111,20 @@ async fn test_openrouter_tool_call() -> anyhow::Result<()> {
     println!("Stop reason: {:?}", resp.stop_reason);
 
     // Model should call the tool
-    assert!(!resp.tool_calls.is_empty(), "Expected at least one tool call");
+    assert!(
+        !resp.tool_calls.is_empty(),
+        "Expected at least one tool call"
+    );
     assert_eq!(resp.tool_calls[0].name, "get_weather");
 
     let args: serde_json::Value = serde_json::from_str(&resp.tool_calls[0].arguments)?;
     let city = args["city"].as_str().unwrap_or("");
     println!("Tool called with city: {}", city);
-    assert!(city.to_lowercase().contains("paris"), "Expected city=Paris, got: {}", city);
+    assert!(
+        city.to_lowercase().contains("paris"),
+        "Expected city=Paris, got: {}",
+        city
+    );
 
     Ok(())
 }

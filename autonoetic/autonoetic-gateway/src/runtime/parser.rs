@@ -3,6 +3,7 @@
 use autonoetic_types::agent::{
     AgentIdentity, AgentManifest, LlmConfig, ResourceLimits, RuntimeDeclaration,
 };
+use autonoetic_types::background::BackgroundPolicy;
 use autonoetic_types::capability::Capability;
 use gray_matter::{engine::YAML, Matter};
 use serde::Deserialize;
@@ -30,6 +31,7 @@ struct AutonoeticMetadata {
     capabilities: Option<Vec<Capability>>,
     llm_config: Option<LlmConfig>,
     limits: Option<ResourceLimits>,
+    background: Option<BackgroundPolicy>,
 }
 
 /// Parser for `SKILL.md` files.
@@ -94,6 +96,7 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         capabilities: meta.capabilities.unwrap_or_default(),
         llm_config: meta.llm_config,
         limits: meta.limits,
+        background: meta.background,
     }
 }
 
@@ -181,5 +184,42 @@ Use the skill.
             Some("openai")
         );
         assert_eq!(body.trim(), "# Test Agent Instructions\nUse the skill.");
+    }
+
+    #[test]
+    fn test_parse_background_policy() {
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "bg-agent"
+  name: "Background Agent"
+  description: "Agent with background policy"
+capabilities:
+  - type: BackgroundReevaluation
+    min_interval_secs: 30
+    allow_reasoning: false
+background:
+  enabled: true
+  interval_secs: 45
+  mode: deterministic
+  wake_predicates:
+    timer: true
+    stale_goals: true
+---
+# Background Agent
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        let background = manifest.background.expect("background should parse");
+        assert!(background.enabled);
+        assert_eq!(background.interval_secs, 45);
+        assert!(background.wake_predicates.timer);
+        assert!(background.wake_predicates.stale_goals);
     }
 }

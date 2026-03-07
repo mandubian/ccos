@@ -49,7 +49,11 @@ impl SandboxRunner {
     }
 
     /// Spawn using the manifest-declared driver name.
-    pub fn spawn_for_driver(driver_name: &str, agent_dir: &str, entrypoint: &str) -> anyhow::Result<Self> {
+    pub fn spawn_for_driver(
+        driver_name: &str,
+        agent_dir: &str,
+        entrypoint: &str,
+    ) -> anyhow::Result<Self> {
         let driver = SandboxDriverKind::parse(driver_name)?;
         Self::spawn_with_driver(driver, agent_dir, entrypoint)
     }
@@ -72,7 +76,10 @@ impl SandboxRunner {
         entrypoint: &str,
         dependencies: Option<&DependencyPlan>,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(!entrypoint.trim().is_empty(), "entrypoint must not be empty");
+        anyhow::ensure!(
+            !entrypoint.trim().is_empty(),
+            "entrypoint must not be empty"
+        );
         if dependencies.is_some() && driver == SandboxDriverKind::MicroVm {
             anyhow::bail!("MicroVM dependency bootstrap is not implemented yet");
         }
@@ -95,7 +102,10 @@ impl SandboxRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        Ok(Self { process: child, driver })
+        Ok(Self {
+            process: child,
+            driver,
+        })
     }
 }
 
@@ -124,8 +134,14 @@ fn bubblewrap_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(Stri
     Ok(("bwrap".to_string(), argv))
 }
 
-fn bubblewrap_shell_command(agent_dir: &str, shell_command: &str) -> anyhow::Result<(String, Vec<String>)> {
-    anyhow::ensure!(!shell_command.trim().is_empty(), "shell command must not be empty");
+fn bubblewrap_shell_command(
+    agent_dir: &str,
+    shell_command: &str,
+) -> anyhow::Result<(String, Vec<String>)> {
+    anyhow::ensure!(
+        !shell_command.trim().is_empty(),
+        "shell command must not be empty"
+    );
     let argv = vec![
         "--ro-bind".to_string(),
         "/".to_string(),
@@ -143,8 +159,9 @@ fn bubblewrap_shell_command(agent_dir: &str, shell_command: &str) -> anyhow::Res
 }
 
 fn docker_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let image = std::env::var(DOCKER_IMAGE_ENV)
-        .map_err(|_| anyhow::anyhow!("Missing required environment variable {}", DOCKER_IMAGE_ENV))?;
+    let image = std::env::var(DOCKER_IMAGE_ENV).map_err(|_| {
+        anyhow::anyhow!("Missing required environment variable {}", DOCKER_IMAGE_ENV)
+    })?;
     let argv = vec![
         "run".to_string(),
         "--rm".to_string(),
@@ -163,12 +180,13 @@ fn docker_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(String, 
 }
 
 fn microvm_command(_entrypoint: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let cfg = std::env::var(FIRECRACKER_CONFIG_ENV)
-        .map_err(|_| anyhow::anyhow!("Missing required environment variable {}", FIRECRACKER_CONFIG_ENV))?;
-    let argv = vec![
-        "--config-file".to_string(),
-        cfg,
-    ];
+    let cfg = std::env::var(FIRECRACKER_CONFIG_ENV).map_err(|_| {
+        anyhow::anyhow!(
+            "Missing required environment variable {}",
+            FIRECRACKER_CONFIG_ENV
+        )
+    })?;
+    let argv = vec!["--config-file".to_string(), cfg];
     Ok(("firecracker".to_string(), argv))
 }
 
@@ -176,7 +194,10 @@ fn compose_entrypoint(entrypoint: &str, deps: Option<&DependencyPlan>) -> anyhow
     let Some(plan) = deps else {
         return Ok(entrypoint.to_string());
     };
-    anyhow::ensure!(!plan.packages.is_empty(), "dependency plan must contain at least one package");
+    anyhow::ensure!(
+        !plan.packages.is_empty(),
+        "dependency plan must contain at least one package"
+    );
     for pkg in &plan.packages {
         validate_dependency_package(pkg)?;
     }
@@ -193,11 +214,17 @@ fn compose_entrypoint(entrypoint: &str, deps: Option<&DependencyPlan>) -> anyhow
 }
 
 fn validate_dependency_package(pkg: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(!pkg.trim().is_empty(), "dependency package name must not be empty");
+    anyhow::ensure!(
+        !pkg.trim().is_empty(),
+        "dependency package name must not be empty"
+    );
     // Keep package token grammar tight to avoid shell injection in thin bootstrap strings.
     let allowed = pkg.chars().all(|ch| {
         ch.is_ascii_alphanumeric()
-            || matches!(ch, '.' | '_' | '-' | '<' | '>' | '=' | '!' | '~' | '[' | ']' | ',' | '@' | '/')
+            || matches!(
+                ch,
+                '.' | '_' | '-' | '<' | '>' | '=' | '!' | '~' | '[' | ']' | ',' | '@' | '/'
+            )
     });
     anyhow::ensure!(allowed, "invalid dependency token '{}'", pkg);
     Ok(())
@@ -254,8 +281,7 @@ mod tests {
     fn test_microvm_command_requires_env() {
         let old = std::env::var(FIRECRACKER_CONFIG_ENV).ok();
         std::env::remove_var(FIRECRACKER_CONFIG_ENV);
-        let err = microvm_command("ignored")
-            .expect_err("microvm command should fail without env");
+        let err = microvm_command("ignored").expect_err("microvm command should fail without env");
         assert!(
             err.to_string().contains(FIRECRACKER_CONFIG_ENV),
             "error should mention missing firecracker env"
@@ -271,8 +297,8 @@ mod tests {
             runtime: DependencyRuntime::Python,
             packages: vec!["requests==2.32.3".to_string()],
         };
-        let cmd = compose_entrypoint("python main.py", Some(&plan))
-            .expect("compose should succeed");
+        let cmd =
+            compose_entrypoint("python main.py", Some(&plan)).expect("compose should succeed");
         assert!(cmd.contains("python3 -m venv .autonoetic_venv"));
         assert!(cmd.contains("pip install"));
         assert!(cmd.contains("requests==2.32.3"));
@@ -285,8 +311,7 @@ mod tests {
             runtime: DependencyRuntime::NodeJs,
             packages: vec!["lodash@4.17.21".to_string()],
         };
-        let cmd = compose_entrypoint("node app.js", Some(&plan))
-            .expect("compose should succeed");
+        let cmd = compose_entrypoint("node app.js", Some(&plan)).expect("compose should succeed");
         assert!(cmd.contains("npm install --no-save --prefix .autonoetic_node"));
         assert!(cmd.contains("NODE_PATH=.autonoetic_node/node_modules"));
         assert!(cmd.ends_with("node app.js"));
@@ -294,15 +319,15 @@ mod tests {
 
     #[test]
     fn test_dependency_token_validation_rejects_unsafe_chars() {
-        let err = validate_dependency_package("foo;rm -rf /")
-            .expect_err("unsafe token should fail");
+        let err =
+            validate_dependency_package("foo;rm -rf /").expect_err("unsafe token should fail");
         assert!(err.to_string().contains("invalid dependency token"));
     }
 
     #[test]
     fn test_bubblewrap_shell_command_shape() {
-        let (_bin, argv) = bubblewrap_shell_command("/tmp/agent", "echo hi")
-            .expect("shell command should build");
+        let (_bin, argv) =
+            bubblewrap_shell_command("/tmp/agent", "echo hi").expect("shell command should build");
         assert_eq!(argv[0], "--ro-bind");
         assert_eq!(argv[8], "sh");
         assert_eq!(argv[9], "-lc");
