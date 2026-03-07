@@ -1,264 +1,158 @@
 //! Integration tests for loopback channels and memory execution loops.
 
-use autonoetic_gateway::router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
-use autonoetic_gateway::server::jsonrpc::start_jsonrpc_server;
-use autonoetic_types::config::GatewayConfig;
-use tempfile::TempDir;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+mod support;
 
-struct EnvGuard {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: impl Into<String>) -> Self {
-        let previous = std::env::var(key).ok();
-        std::env::set_var(key, value.into());
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.take() {
-            std::env::set_var(self.key, previous);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
-
-async fn mock_openai_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    tokio::spawn(async move {
-        loop {
-            let accept_res = listener.accept().await;
-            if accept_res.is_err() {
-                continue;
-            }
-            let (mut stream, _) = accept_res.unwrap();
-            let mut read_buf = Vec::new();
-            let mut buf = [0u8; 1024];
-
-            loop {
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                read_buf.extend_from_slice(&buf[..n]);
-                if read_buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-
-            let headers_str = String::from_utf8_lossy(&read_buf);
-            let mut content_length = 0;
-            for line in headers_str.lines() {
-                if line.to_lowercase().starts_with("content-length:") {
-                    content_length = line[15..].trim().parse().unwrap_or(0);
-                }
-            }
-
-            let header_len = headers_str.find("\r\n\r\n").unwrap() + 4;
-            let mut body_bytes = read_buf[header_len..].to_vec();
-
-            while body_bytes.len() < content_length {
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                body_bytes.extend_from_slice(&buf[..n]);
-            }
-
-            let body_str = String::from_utf8_lossy(&body_bytes);
-
-            if body_str.contains("delay message") {
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-            }
-
-            let response_json = if body_str.contains("store this data")
-                && !body_str.contains("\"role\":\"tool\"")
-            {
-                serde_json::json!({
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "memory.write", "arguments": "{\"path\":\"secret.txt\",\"content\":\"secret_value_123\"}" } }] },
-                        "finish_reason": "tool_calls"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("store this data") && body_str.contains("\"role\":\"tool\"")
-            {
-                serde_json::json!({
-                    "id": "chatcmpl-2",
-                    "object": "chat.completion",
-                    "created": 2,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "I stored it" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("what is the data")
-                && !body_str.contains("\"role\":\"tool\"")
-            {
-                serde_json::json!({
-                    "id": "chatcmpl-3",
-                    "object": "chat.completion",
-                    "created": 3,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "tool_calls": [{ "id": "call_2", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"secret.txt\"}" } }] },
-                        "finish_reason": "tool_calls"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("what is the data")
-                && body_str.contains("\"role\":\"tool\"")
-            {
-                serde_json::json!({
-                    "id": "chatcmpl-4",
-                    "object": "chat.completion",
-                    "created": 4,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "The data is secret_value_123" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("read missing") && !body_str.contains("\"role\":\"tool\"") {
-                serde_json::json!({
-                    "id": "chatcmpl-5",
-                    "object": "chat.completion",
-                    "created": 5,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "tool_calls": [{ "id": "call_3", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing.txt\"}" } }] },
-                        "finish_reason": "tool_calls"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("read missing") && body_str.contains("\"role\":\"tool\"") {
-                serde_json::json!({
-                    "id": "chatcmpl-6",
-                    "object": "chat.completion",
-                    "created": 6,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "File is missing" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("read default") && !body_str.contains("\"role\":\"tool\"") {
-                serde_json::json!({
-                    "id": "chatcmpl-7",
-                    "object": "chat.completion",
-                    "created": 7,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "tool_calls": [{ "id": "call_4", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing-default.txt\",\"default_value\":\"my_default_fallback\"}" } }] },
-                        "finish_reason": "tool_calls"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("read default") && body_str.contains("\"role\":\"tool\"") {
-                serde_json::json!({
-                    "id": "chatcmpl-8",
-                    "object": "chat.completion",
-                    "created": 8,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "Fallback is my_default_fallback" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if body_str.contains("read missing") && body_str.contains("\"role\":\"tool\"") {
-                serde_json::json!({
-                    "id": "chatcmpl-6",
-                    "object": "chat.completion",
-                    "created": 6,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "File is missing" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else {
-                serde_json::json!({
-                    "id": "chatcmpl-default",
-                    "object": "chat.completion",
-                    "created": 7,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "Unknown flow" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            };
-
-            let body_bytes = serde_json::to_string(&response_json).unwrap();
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body_bytes.len(),
-                body_bytes
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-        }
-    });
-
-    format!("http://127.0.0.1:{}", port)
-}
-
-async fn send_jsonrpc(write_half: &mut tokio::net::tcp::OwnedWriteHalf, req: JsonRpcRequest) {
-    let msg = serde_json::to_string(&req).unwrap();
-    write_half.write_all(msg.as_bytes()).await.unwrap();
-    write_half.write_all(b"\n").await.unwrap();
-    write_half.flush().await.unwrap();
-}
-
-async fn recv_jsonrpc(
-    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
-) -> JsonRpcResponse {
-    let line = lines
-        .next_line()
-        .await
-        .unwrap()
-        .expect("End of stream before response");
-    serde_json::from_str(&line).unwrap()
-}
+use support::{spawn_gateway_server, EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace};
 
 #[tokio::test]
 async fn test_loopback_memory_audit_and_negatives() {
-    let mock_url = mock_openai_server().await;
-    let _guard1 = EnvGuard::set("AUTONOETIC_LLM_BASE_URL", mock_url);
+    let stub = OpenAiStub::spawn(|_, body_json| async move {
+        let messages = body_json["messages"].as_array().cloned().unwrap_or_default();
+        let latest_user_message = messages
+            .iter()
+            .rev()
+            .find_map(|message| {
+                if message["role"].as_str() == Some("user") {
+                    message["content"].as_str()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+        let has_tool_result_turn = messages
+            .iter()
+            .any(|message| message["role"].as_str() == Some("tool"));
+
+        if latest_user_message.contains("delay message") {
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        }
+
+        if latest_user_message.contains("store this data") && !has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "memory.write", "arguments": "{\"path\":\"secret.txt\",\"content\":\"secret_value_123\"}" } }] },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("store this data") && has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-2",
+                "object": "chat.completion",
+                "created": 2,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "I stored it" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("what is the data") && !has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-3",
+                "object": "chat.completion",
+                "created": 3,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_2", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"secret.txt\"}" } }] },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("what is the data") && has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-4",
+                "object": "chat.completion",
+                "created": 4,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "The data is secret_value_123" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("read missing") && !has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-5",
+                "object": "chat.completion",
+                "created": 5,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_3", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing.txt\"}" } }] },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("read missing") && has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-6",
+                "object": "chat.completion",
+                "created": 6,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "File is missing" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("read default") && !has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-7",
+                "object": "chat.completion",
+                "created": 7,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_4", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing-default.txt\",\"default_value\":\"my_default_fallback\"}" } }] },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if latest_user_message.contains("read default") && has_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-8",
+                "object": "chat.completion",
+                "created": 8,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "Fallback is my_default_fallback" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else {
+            serde_json::json!({
+                "id": "chatcmpl-default",
+                "object": "chat.completion",
+                "created": 7,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "Unknown flow" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        }
+    })
+    .await
+    .unwrap();
+    let _guard1 = EnvGuard::set("AUTONOETIC_LLM_BASE_URL", stub.completion_url());
     let _guard2 = EnvGuard::set("OPENAI_API_KEY", "test-key");
 
-    let temp_dir = TempDir::new().unwrap();
-    let agents_dir = temp_dir.path().join("agents");
-    std::fs::create_dir_all(&agents_dir).unwrap();
+    let workspace = TestWorkspace::new().unwrap();
+    let agents_dir = workspace.agents_dir.clone();
 
     let agent_id = "memory_agent";
     let agent_dir = agents_dir.join(agent_id);
@@ -293,7 +187,7 @@ metadata:
     std::fs::write(agent_dir.join("SKILL.md"), skill_md).unwrap();
 
     // Use small limits to easily trigger backpressure for negative tests
-    let config = GatewayConfig {
+    let config = autonoetic_types::config::GatewayConfig {
         port: 0,
         ofp_port: 0,
         agents_dir: agents_dir.clone(),
@@ -302,42 +196,23 @@ metadata:
         ..Default::default()
     };
 
-    let router = JsonRpcRouter::new(config);
-
-    // 1. Start REAL JSON-RPC server loopback transport on ephemeral port
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let listen_addr = listener.local_addr().unwrap();
-    drop(listener); // Free the port for the JSON-RPC server
-
-    let server_task = tokio::spawn(async move {
-        start_jsonrpc_server(listen_addr, router).await.unwrap();
-    });
-
-    // Connect client
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    let stream = TcpStream::connect(listen_addr).await.unwrap();
-    let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
+    let (listen_addr, server_task) = spawn_gateway_server(config).await.unwrap();
+    let mut client = JsonRpcClient::connect(listen_addr).await.unwrap();
 
     let session_id = "test-session-123";
 
     // --- Turn 1: Write to memory (Happy path) ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "1".to_string(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": agent_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": "please store this data",
-            }),
-        },
-    )
-    .await;
-    let resp1 = recv_jsonrpc(&mut lines).await;
+    let resp1 = client
+        .event_ingest(
+            "1",
+            agent_id,
+            session_id,
+            "chat",
+            "please store this data",
+            None,
+        )
+        .await
+        .unwrap();
     assert!(resp1.error.is_none(), "Request 1 failed: {:?}", resp1.error);
 
     // Check Tier1 memory substrate
@@ -349,22 +224,10 @@ metadata:
     );
 
     // --- Turn 2: Read from memory (Happy path) ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "2".to_string(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": agent_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": "what is the data?",
-            }),
-        },
-    )
-    .await;
-    let resp2 = recv_jsonrpc(&mut lines).await;
+    let resp2 = client
+        .event_ingest("2", agent_id, session_id, "chat", "what is the data?", None)
+        .await
+        .unwrap();
     assert!(resp2.error.is_none(), "Request 2 failed: {:?}", resp2.error);
     assert!(resp2
         .result
@@ -373,22 +236,10 @@ metadata:
         .contains("The data is secret_value_123"));
 
     // --- Turn 3: Negative Path - Missing memory key ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "3".to_string(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": agent_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": "read missing",
-            }),
-        },
-    )
-    .await;
-    let resp3 = recv_jsonrpc(&mut lines).await;
+    let resp3 = client
+        .event_ingest("3", agent_id, session_id, "chat", "read missing", None)
+        .await
+        .unwrap();
     assert!(
         resp3.error.is_some(),
         "Expected Request 3 to fail due to missing memory key"
@@ -402,22 +253,10 @@ metadata:
     );
 
     // --- Turn 3.5: Negative Path - Missing memory key with default_value ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "3.5".to_string(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": agent_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": "read default",
-            }),
-        },
-    )
-    .await;
-    let resp3_5 = recv_jsonrpc(&mut lines).await;
+    let resp3_5 = client
+        .event_ingest("3.5", agent_id, session_id, "chat", "read default", None)
+        .await
+        .unwrap();
     assert!(
         resp3_5.error.is_none(),
         "Request 3.5 failed: {:?}",
@@ -431,14 +270,12 @@ metadata:
 
     // --- Turn 4: Negative Path - Outbound backpressure / rejection ---
     // First, spawn a background client connecting to send a long-running request.
-    let stream_b = TcpStream::connect(listen_addr).await.unwrap();
-    let (read_half_b, mut write_half_b) = stream_b.into_split();
-    let mut lines_b = BufReader::new(read_half_b).lines();
+    let mut slow_client = JsonRpcClient::connect(listen_addr).await.unwrap();
 
     // Fire off the delaying request. It acquires the single semaphore capacity.
-    send_jsonrpc(
-        &mut write_half_b,
-        JsonRpcRequest {
+    let prior_stub_requests = stub.captured_bodies().len();
+    slow_client
+        .send(autonoetic_gateway::router::JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: "4".to_string(),
             method: "event.ingest".to_string(),
@@ -448,32 +285,31 @@ metadata:
                 "event_type": "chat",
                 "message": "delay message",
             }),
-        },
-    )
-    .await;
+        })
+        .await
+        .unwrap();
 
-    // Wait a tiny bit to ensure the first request locked the semaphore
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    // Wait until the slow request has actually reached the LLM stub.
+    for _ in 0..20 {
+        if stub.captured_bodies().len() > prior_stub_requests {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
 
     // While the first request is holding the semaphore, fire the second request using the main client.
     // It should hit the reliability control backpressure immediately.
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "5".to_string(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": agent_id,
-                "session_id": "session-fast",
-                "event_type": "chat",
-                "message": "please store this data",
-            }),
-        },
-    )
-    .await;
-
-    let resp_rejected = recv_jsonrpc(&mut lines).await;
+    let resp_rejected = client
+        .event_ingest(
+            "5",
+            agent_id,
+            "session-fast",
+            "chat",
+            "please store this data",
+            None,
+        )
+        .await
+        .unwrap();
     assert!(
         resp_rejected.error.is_some(),
         "Expected second request to be rejected due to backpressure"
@@ -487,7 +323,7 @@ metadata:
     );
 
     // Read the delayed success result to cleanly finish
-    let resp4 = recv_jsonrpc(&mut lines_b).await;
+    let resp4 = slow_client.recv().await.unwrap();
     assert!(resp4.error.is_none());
 
     // --- Causal Lineage Auditing ---
