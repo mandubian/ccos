@@ -254,7 +254,7 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 
 - [x] Factor Autonoetic test helpers into a shared test-support module for temp workspace setup, local LLM stubs, message injection, and causal-log inspection.
 - [x] Add deterministic approval-fixture helpers so approval-dependent tests do not need manual steps.
-- [ ] Add a small catalog of reusable test agents covering: memory recall, outbound messaging, generated skill draft, and approved skill reuse.
+- [x] Add a small catalog of reusable test agents covering: memory recall, outbound messaging, generated skill draft, and approved skill reuse.
 - [ ] Document the test philosophy clearly: Autonoetic remains implementation-independent even when borrowing ideas from CCOS/OpenFang.
 
 #### Terminal chat client (gateway-native trigger surface)
@@ -280,15 +280,36 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - [ ] Later: promote selected durable-memory writes into session context only when there is a small, well-defined summarization rule.
 - [ ] Later: consider deriving session context updates from runtime/causal events instead of direct execution-path writes if the direct path becomes too coupled.
 
-#### Disclosure policy (reply governance over memory and tool output)
+#### Disclosure policy (reply governance over memory and tool output) ✅
 
-- [ ] Add a first-class disclosure policy layer that evaluates whether tool results and retrieved memory may be repeated verbatim, summarized only, or withheld.
-- [ ] Keep disclosure policy separate from log/evidence redaction; logs may be redacted while assistant replies still require an explicit disclosure decision.
-- [ ] Classify output sources at minimum by origin: user input, session context, Tier 1 memory, Tier 2 memory, secret-store/vault material, sandbox output, and external tool output.
-- [ ] Add deterministic disclosure classes such as `public`, `internal`, `confidential`, and `secret`, with explicit reply behavior for each class.
-- [ ] Enforce path-based defaults for Tier 1 memory so designated locations can be marked summary-only or non-disclosable without relying on prompt wording.
-- [ ] Ensure secret-store and vault-managed values are never returned verbatim to the user unless an explicitly approved capability allows it.
-- [ ] Add a reply-filter step after tool execution and before final assistant output so disallowed content is replaced with safe summaries or refusal text.
-- [ ] Preserve the existing agent/runtime split: tools may return structured results, but disclosure enforcement should happen centrally in the runtime path.
-- [ ] Add focused tests proving the system can distinguish between normal memory recall and restricted/secret material in user-visible replies.
-- [ ] Add terminal-chat coverage that verifies session context may influence reasoning without causing protected values to be echoed back automatically.
+- [x] Add a first-class disclosure policy layer that evaluates whether tool results and retrieved memory may be repeated verbatim, summarized only, or withheld.
+- [x] Keep disclosure policy separate from log/evidence redaction; logs may be redacted while assistant replies still require an explicit disclosure decision.
+- [x] Classify output sources at minimum by origin: user input, session context, Tier 1 memory, Tier 2 memory, secret-store/vault material, sandbox output, and external tool output.
+- [x] Add deterministic disclosure classes such as `public`, `internal`, `confidential`, and `secret`, with explicit reply behavior for each class.
+- [x] Enforce path-based defaults for Tier 1 memory so designated locations can be marked summary-only or non-disclosable without relying on prompt wording.
+- [x] Ensure secret-store and vault-managed values are never returned verbatim to the user unless an explicitly approved capability allows it.
+- [x] Add a reply-filter step after tool execution and before final assistant output so disallowed content is replaced with safe summaries or refusal text.
+- [x] Preserve the existing agent/runtime split: tools may return structured results, but disclosure enforcement should happen centrally in the runtime path.
+- [x] Add focused tests proving the system can distinguish between normal memory recall and restricted/secret material in user-visible replies.
+- [x] Add terminal-chat coverage that verifies session context may influence reasoning without causing protected values to be echoed back automatically.
+
+### Progress notes
+
+- Current enforcement is intentionally exact-substring (verbatim) reply filtering for deterministic, auditable behavior.
+- This is explicit verbatim leak prevention, not fuzzy or semantic redaction.
+- Secret-store extracted values are explicitly tainted as `secret`, including short values.
+- Registry-backed metadata extraction allows handlers to classify outputs (e.g. file paths) without the core loop knowing tool-specific argument formats.
+- Verified via `test_disclosure_enforcement_in_executor_loop`.
+
+#### Native tool modularization (thin registry, not a plugin framework) ✅
+
+- [x] Replace the hard-coded native tool `if/else` chain in `runtime/lifecycle.rs` with a small registry-based dispatch path.
+- [x] Keep the design intentionally thin: static in-process handlers only, no dynamic loading, no external plugin protocol, no separate service layer.
+- [x] Define one native tool handler shape that covers: tool name, availability check from manifest/policy, invocation, and optional metadata extraction for audit/disclosure.
+- [x] Preserve the current MCP-first behavior so external MCP tools still bypass native dispatch when present.
+- [x] Move `sandbox.exec`, `memory.read`, `memory.write`, and `skill.draft` into registry-backed handlers without changing user-facing behavior.
+- [x] Stop special-casing native-tool path extraction in the main lifecycle loop; let handlers expose any disclosure/audit metadata they produce.
+- [x] Keep tool-result redaction, disclosure, and causal logging centralized in the lifecycle path even after dispatch is modularized.
+- [x] Add focused runtime tests proving known native tools still execute, unknown tools still fail cleanly, and MCP/native precedence remains unchanged.
+- [x] Add one extension-oriented test that registers or wires a small additional native test tool with minimal lifecycle churn to prove the composability goal.
+```
