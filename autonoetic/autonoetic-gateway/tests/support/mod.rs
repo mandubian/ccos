@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 use autonoetic_gateway::router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
+use autonoetic_gateway::scheduler::{approve_request, load_approval_requests, run_scheduler_tick};
 use autonoetic_gateway::server::jsonrpc::start_jsonrpc_server;
+use autonoetic_gateway::GatewayExecutionService;
+use autonoetic_types::background::{ApprovalDecision, ApprovalRequest};
 use autonoetic_types::causal_chain::CausalChainEntry;
 use autonoetic_types::config::GatewayConfig;
 use serde::de::DeserializeOwned;
@@ -261,4 +264,30 @@ pub fn read_jsonl_entries<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Ve
 
 pub fn read_causal_entries(path: &Path) -> anyhow::Result<Vec<CausalChainEntry>> {
     read_jsonl_entries(path)
+}
+
+pub async fn require_single_pending_approval(
+    execution: Arc<GatewayExecutionService>,
+    config: &GatewayConfig,
+) -> anyhow::Result<ApprovalRequest> {
+    run_scheduler_tick(execution).await?;
+    let approvals = load_approval_requests(config)?;
+    anyhow::ensure!(
+        approvals.len() == 1,
+        "expected exactly 1 pending approval request, found {}",
+        approvals.len()
+    );
+    Ok(approvals.into_iter().next().expect("approval should exist"))
+}
+
+pub async fn approve_pending_request_and_tick(
+    execution: Arc<GatewayExecutionService>,
+    config: &GatewayConfig,
+    request: &ApprovalRequest,
+    decided_by: &str,
+    reason: Option<String>,
+) -> anyhow::Result<ApprovalDecision> {
+    let decision = approve_request(config, &request.request_id, decided_by, reason)?;
+    run_scheduler_tick(execution).await?;
+    Ok(decision)
 }

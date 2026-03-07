@@ -1,12 +1,14 @@
 use autonoetic_gateway::execution::GatewayExecutionService;
 use autonoetic_gateway::runtime::lifecycle::AgentExecutor;
 use autonoetic_gateway::runtime::parser::SkillParser;
-use autonoetic_gateway::scheduler::{approve_request, load_approval_requests, run_scheduler_tick};
 use std::path::Path;
 use std::sync::Arc;
 mod support;
 
-use support::{spawn_gateway_server, EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace};
+use support::{
+    approve_pending_request_and_tick, require_single_pending_approval, spawn_gateway_server,
+    EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace,
+};
 
 /// The math-agent SKILL.md content the mock LLM will propose via `skill.draft`.
 /// Uses the nested `metadata.autonoetic` format which SkillParser reads.
@@ -339,11 +341,9 @@ background:
     );
 
     // Tick scheduler to promote to ApprovalRequest
-    run_scheduler_tick(execution_service.clone()).await.unwrap();
-
-    let approvals = load_approval_requests(&config).unwrap();
-    assert_eq!(approvals.len(), 1, "Expected 1 approval request");
-    let draft_request = &approvals[0];
+    let draft_request = require_single_pending_approval(execution_service.clone(), &config)
+        .await
+        .unwrap();
     assert_eq!(
         draft_request.evidence_ref.as_deref(),
         Some(evidence_ref.as_str()),
@@ -378,16 +378,15 @@ background:
     );
 
     // --- Step 4: Programmatically approve ---
-    approve_request(
+    approve_pending_request_and_tick(
+        execution_service.clone(),
         &config,
-        &draft_request.request_id,
+        &draft_request,
         "admin",
         Some("Looks good".to_string()),
     )
+    .await
     .unwrap();
-
-    // --- Step 5: Tick to execute approved action (write skills/math.md) ---
-    run_scheduler_tick(execution_service.clone()).await.unwrap();
     assert!(
         learner_dir.join("skills").join("math.md").exists(),
         "Approved skill file should be written to learner/skills/math.md"

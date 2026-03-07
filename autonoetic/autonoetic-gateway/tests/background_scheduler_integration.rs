@@ -1,7 +1,6 @@
 use autonoetic_gateway::execution::{gateway_causal_path, GatewayExecutionService};
 use autonoetic_gateway::scheduler::{
-    append_inbox_event, approve_request, background_state_path, load_approval_requests,
-    run_scheduler_tick,
+    append_inbox_event, background_state_path, run_scheduler_tick,
 };
 use autonoetic_types::background::{
     BackgroundState, ReevaluationState, ScheduledAction, WakeReason,
@@ -11,6 +10,10 @@ use autonoetic_types::config::GatewayConfig;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::tempdir;
+
+mod support;
+
+use support::{approve_pending_request_and_tick, require_single_pending_approval};
 
 fn write_background_agent(
     agents_dir: &Path,
@@ -210,17 +213,15 @@ async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow
     )?;
 
     let execution = Arc::new(GatewayExecutionService::new(config.clone()));
-    run_scheduler_tick(execution.clone()).await?;
-
-    let requests = load_approval_requests(&config)?;
-    assert_eq!(requests.len(), 1);
+    let request = require_single_pending_approval(execution.clone(), &config).await?;
     assert!(!agent_dir
         .join("skills")
         .join("generated_public_skill.md")
         .exists());
 
-    let decision = approve_request(&config, &requests[0].request_id, "integration-test", None)?;
-    run_scheduler_tick(execution).await?;
+    let decision =
+        approve_pending_request_and_tick(execution, &config, &request, "integration-test", None)
+            .await?;
 
     let generated = agent_dir.join("skills").join("generated_public_skill.md");
     assert!(generated.exists());

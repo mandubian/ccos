@@ -253,7 +253,7 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 #### Follow-up extraction tasks
 
 - [x] Factor Autonoetic test helpers into a shared test-support module for temp workspace setup, local LLM stubs, message injection, and causal-log inspection.
-- [ ] Add deterministic approval-fixture helpers so approval-dependent tests do not need manual steps.
+- [x] Add deterministic approval-fixture helpers so approval-dependent tests do not need manual steps.
 - [ ] Add a small catalog of reusable test agents covering: memory recall, outbound messaging, generated skill draft, and approved skill reuse.
 - [ ] Document the test philosophy clearly: Autonoetic remains implementation-independent even when borrowing ideas from CCOS/OpenFang.
 
