@@ -175,13 +175,9 @@ mod tests {
             .expect("first log should append");
 
         let content = std::fs::read_to_string(&path).expect("log should read");
-        let first: CausalChainEntry = serde_json::from_str(
-            content
-                .lines()
-                .next()
-                .expect("first line should exist"),
-        )
-        .expect("entry should parse");
+        let first: CausalChainEntry =
+            serde_json::from_str(content.lines().next().expect("first line should exist"))
+                .expect("entry should parse");
 
         let logger2 = CausalLogger::new(&path).expect("second logger should init");
         logger2
@@ -198,13 +194,9 @@ mod tests {
             .expect("second log should append");
 
         let content = std::fs::read_to_string(&path).expect("log should read");
-        let second: CausalChainEntry = serde_json::from_str(
-            content
-                .lines()
-                .nth(1)
-                .expect("second line should exist"),
-        )
-        .expect("entry should parse");
+        let second: CausalChainEntry =
+            serde_json::from_str(content.lines().nth(1).expect("second line should exist"))
+                .expect("entry should parse");
         assert_eq!(second.prev_hash, first.entry_hash);
     }
 }

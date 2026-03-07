@@ -11,6 +11,7 @@ use crate::runtime::mcp::McpToolRuntime;
 use crate::runtime::store::SecretStoreRuntime;
 use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
 use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::background::{ReevaluationState, ScheduledAction};
 use autonoetic_types::capability::Capability;
 use autonoetic_types::causal_chain::EntryStatus;
 use serde::Deserialize;
@@ -18,6 +19,9 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const SANDBOX_EXEC_TOOL_NAME: &str = "sandbox.exec";
+const MEMORY_READ_FILE_TOOL_NAME: &str = "memory.read";
+const MEMORY_WRITE_FILE_TOOL_NAME: &str = "memory.write";
+const SKILL_DRAFT_TOOL_NAME: &str = "skill.draft";
 const EVIDENCE_MODE_ENV: &str = "AUTONOETIC_EVIDENCE_MODE";
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +189,9 @@ impl AgentExecutor {
             return Ok(());
         }
         let session_id = self.ensure_session_id();
+        persist_reevaluation_state(&self.agent_dir, |state| {
+            state.last_outcome = Some(reason.to_string());
+        })?;
         let causal_logger = init_causal_logger(&self.agent_dir)?;
         let event_seq = self.next_event_seq();
         log_causal_event(
@@ -253,7 +260,9 @@ impl AgentExecutor {
             let session_evidence = serde_json::json!({
                 "trigger": redact_text_for_logs(&trigger)
             });
-            if let Some(evidence_ref) = evidence_store.capture_json(None, "session", "start", &session_evidence)? {
+            if let Some(evidence_ref) =
+                evidence_store.capture_json(None, "session", "start", &session_evidence)?
+            {
                 session_payload["evidence_ref"] = serde_json::json!(evidence_ref);
             }
             let event_seq = self.next_event_seq();
@@ -288,7 +297,10 @@ impl AgentExecutor {
 
         let mut mcp_runtime = McpToolRuntime::from_env().await?;
         if !mcp_runtime.is_empty() {
-            tracing::info!("Loaded MCP tool runtime for agent {}", self.manifest.agent.id);
+            tracing::info!(
+                "Loaded MCP tool runtime for agent {}",
+                self.manifest.agent.id
+            );
         }
         let mut secret_store = SecretStoreRuntime::from_instructions(&self.instructions)?;
         if secret_store.is_some() {
@@ -299,12 +311,18 @@ impl AgentExecutor {
         }
         let policy = PolicyEngine::new(self.manifest.clone());
 
-        let model = self.manifest
-            .llm_config.as_ref()
+        let model = self
+            .manifest
+            .llm_config
+            .as_ref()
             .map(|c| c.model.clone())
             .unwrap_or_else(|| "gpt-4o".to_string());
 
-        let temperature = self.manifest.llm_config.as_ref().map(|c| c.temperature as f32);
+        let temperature = self
+            .manifest
+            .llm_config
+            .as_ref()
+            .map(|c| c.temperature as f32);
         let mut latest_assistant_text: Option<String> = None;
 
         loop {
@@ -317,6 +335,13 @@ impl AgentExecutor {
             let mut tools = mcp_runtime.tool_definitions()?;
             if supports_sandbox_exec_tool(&self.manifest) {
                 tools.push(sandbox_exec_tool_definition());
+            }
+            if supports_memory_read_tool(&self.manifest) {
+                tools.push(memory_read_file_tool_definition());
+            }
+            if supports_memory_write_tool(&self.manifest) {
+                tools.push(memory_write_file_tool_definition());
+                tools.push(skill_draft_tool_definition());
             }
 
             let req = CompletionRequest {
@@ -363,7 +388,9 @@ impl AgentExecutor {
                     "output_tokens": response.usage.output_tokens
                 }
             });
-            if let Some(evidence_ref) = evidence_store.capture_json(Some(&turn_id), "llm", "completion", &llm_evidence)? {
+            if let Some(evidence_ref) =
+                evidence_store.capture_json(Some(&turn_id), "llm", "completion", &llm_evidence)?
+            {
                 llm_payload["evidence_ref"] = serde_json::json!(evidence_ref);
             }
             let event_seq = self.next_event_seq();
@@ -392,7 +419,11 @@ impl AgentExecutor {
                     // Execute each tool call (stubbed for now)
                     for tc in &response.tool_calls {
                         let redacted_args = redact_text_for_logs(&tc.arguments);
-                        tracing::info!(tool = tc.name, args = redacted_args, "Agent requested tool call");
+                        tracing::info!(
+                            tool = tc.name,
+                            args = redacted_args,
+                            "Agent requested tool call"
+                        );
                         let mut requested_payload = serde_json::json!({
                             "tool_name": tc.name,
                             "arguments": redacted_args,
@@ -402,7 +433,12 @@ impl AgentExecutor {
                             "tool_name": tc.name,
                             "arguments": redact_text_for_logs(&tc.arguments)
                         });
-                        if let Some(evidence_ref) = evidence_store.capture_json(Some(&turn_id), "tool_invoke", "requested", &requested_evidence)? {
+                        if let Some(evidence_ref) = evidence_store.capture_json(
+                            Some(&turn_id),
+                            "tool_invoke",
+                            "requested",
+                            &requested_evidence,
+                        )? {
                             requested_payload["evidence_ref"] = serde_json::json!(evidence_ref);
                         }
                         let event_seq = self.next_event_seq();
@@ -421,13 +457,28 @@ impl AgentExecutor {
                             tracing::debug!(tool = tc.name, "Dispatching tool call to MCP runtime");
                             mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
                         } else if tc.name == SANDBOX_EXEC_TOOL_NAME {
-                            tracing::debug!(tool = tc.name, "Dispatching tool call to sandbox runtime");
+                            tracing::debug!(
+                                tool = tc.name,
+                                "Dispatching tool call to sandbox runtime"
+                            );
                             execute_sandbox_tool_call(
                                 &self.manifest,
                                 &policy,
                                 &self.agent_dir,
                                 &tc.arguments,
                             )?
+                        } else if tc.name == MEMORY_READ_FILE_TOOL_NAME {
+                            tracing::debug!(tool = tc.name, "Dispatching tool call to memory read");
+                            execute_memory_read_tool_call(&policy, &self.agent_dir, &tc.arguments)?
+                        } else if tc.name == MEMORY_WRITE_FILE_TOOL_NAME {
+                            tracing::debug!(
+                                tool = tc.name,
+                                "Dispatching tool call to memory write"
+                            );
+                            execute_memory_write_tool_call(&policy, &self.agent_dir, &tc.arguments)?
+                        } else if tc.name == SKILL_DRAFT_TOOL_NAME {
+                            tracing::debug!(tool = tc.name, "Dispatching tool call to skill draft");
+                            execute_skill_draft_tool_call(&policy, &self.agent_dir, &tc.arguments)?
                         } else {
                             anyhow::bail!("Unknown tool '{}'", tc.name)
                         };
@@ -445,7 +496,12 @@ impl AgentExecutor {
                             "tool_name": tc.name,
                             "result": redact_text_for_logs(&result)
                         });
-                        if let Some(evidence_ref) = evidence_store.capture_json(Some(&turn_id), "tool_invoke", "completed", &completed_evidence)? {
+                        if let Some(evidence_ref) = evidence_store.capture_json(
+                            Some(&turn_id),
+                            "tool_invoke",
+                            "completed",
+                            &completed_evidence,
+                        )? {
                             completed_payload["evidence_ref"] = serde_json::json!(evidence_ref);
                         }
                         let event_seq = self.next_event_seq();
@@ -470,7 +526,10 @@ impl AgentExecutor {
                     if !response.text.trim().is_empty() {
                         history.push(Message::assistant(response.text.clone()));
                     }
-                    tracing::info!("Agent {} task complete, hibernating", self.manifest.agent.id);
+                    tracing::info!(
+                        "Agent {} task complete, hibernating",
+                        self.manifest.agent.id
+                    );
                     let event_seq = self.next_event_seq();
                     log_causal_event(
                         &causal_logger,
@@ -554,14 +613,7 @@ fn log_causal_event(
     event_seq: u64,
 ) {
     if let Err(e) = logger.log(
-        actor_id,
-        session_id,
-        turn_id,
-        event_seq,
-        category,
-        action,
-        status,
-        payload,
+        actor_id, session_id, turn_id, event_seq, category, action, status, payload,
     ) {
         tracing::warn!(error = %e, category, action, "Failed to append causal log entry");
     }
@@ -605,7 +657,8 @@ fn supports_sandbox_exec_tool(manifest: &AgentManifest) -> bool {
 fn sandbox_exec_tool_definition() -> crate::llm::ToolDefinition {
     crate::llm::ToolDefinition {
         name: SANDBOX_EXEC_TOOL_NAME.to_string(),
-        description: "Execute an approved shell command in the configured sandbox driver".to_string(),
+        description: "Execute an approved shell command in the configured sandbox driver"
+            .to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -660,8 +713,94 @@ fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result
         "nodejs" | "node" => DependencyRuntime::NodeJs,
         other => anyhow::bail!("Unsupported dependency runtime '{}'", other),
     };
-    anyhow::ensure!(!packages.is_empty(), "dependency packages must not be empty");
+    anyhow::ensure!(
+        !packages.is_empty(),
+        "dependency packages must not be empty"
+    );
     Ok(DependencyPlan { runtime, packages })
+}
+
+pub fn load_reevaluation_state(agent_dir: &Path) -> anyhow::Result<ReevaluationState> {
+    let path = reevaluation_state_path(agent_dir);
+    if !path.exists() {
+        return Ok(ReevaluationState::default());
+    }
+    let body = std::fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+pub fn persist_reevaluation_state<F>(
+    agent_dir: &Path,
+    mutate: F,
+) -> anyhow::Result<ReevaluationState>
+where
+    F: FnOnce(&mut ReevaluationState),
+{
+    let mut state = load_reevaluation_state(agent_dir)?;
+    mutate(&mut state);
+    let path = reevaluation_state_path(agent_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&state)?)?;
+    Ok(state)
+}
+
+pub fn execute_scheduled_action(
+    manifest: &AgentManifest,
+    agent_dir: &Path,
+    action: &ScheduledAction,
+) -> anyhow::Result<String> {
+    let policy = PolicyEngine::new(manifest.clone());
+    match action {
+        ScheduledAction::WriteFile { path, content, .. } => {
+            anyhow::ensure!(
+                !path.trim().is_empty(),
+                "scheduled file path must not be empty"
+            );
+            anyhow::ensure!(
+                !path.starts_with('/') && !path.split('/').any(|part| part == ".."),
+                "scheduled file path must stay within the agent directory"
+            );
+            anyhow::ensure!(
+                policy.can_write_path(path),
+                "scheduled file write denied by MemoryWrite policy"
+            );
+            let target = agent_dir.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, content)?;
+            serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "path": path,
+                "bytes_written": content.len()
+            }))
+            .map_err(Into::into)
+        }
+        ScheduledAction::SandboxExec {
+            command,
+            dependencies,
+            ..
+        } => {
+            let deps = dependencies.as_ref().map(|deps| SandboxExecDependencies {
+                runtime: deps.runtime.clone(),
+                packages: deps.packages.clone(),
+            });
+            let args = serde_json::to_string(&serde_json::json!({
+                "command": command,
+                "dependencies": deps.map(|deps| serde_json::json!({
+                    "runtime": deps.runtime,
+                    "packages": deps.packages
+                }))
+            }))?;
+            execute_sandbox_tool_call(manifest, &policy, agent_dir, &args)
+        }
+    }
+}
+
+pub fn reevaluation_state_path(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("state").join("reevaluation.json")
 }
 
 fn execute_sandbox_tool_call(
@@ -670,8 +809,13 @@ fn execute_sandbox_tool_call(
     agent_dir: &Path,
     arguments_json: &str,
 ) -> anyhow::Result<String> {
-    let args: SandboxExecArgs = serde_json::from_str(arguments_json)
-        .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", SANDBOX_EXEC_TOOL_NAME, e))?;
+    let args: SandboxExecArgs = serde_json::from_str(arguments_json).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid JSON arguments for '{}': {}",
+            SANDBOX_EXEC_TOOL_NAME,
+            e
+        )
+    })?;
 
     anyhow::ensure!(
         !args.command.trim().is_empty(),
@@ -704,6 +848,186 @@ fn execute_sandbox_tool_call(
     serde_json::to_string(&body).map_err(Into::into)
 }
 
+fn supports_memory_read_tool(manifest: &AgentManifest) -> bool {
+    manifest
+        .capabilities
+        .iter()
+        .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
+}
+
+fn memory_read_file_tool_definition() -> crate::llm::ToolDefinition {
+    crate::llm::ToolDefinition {
+        name: MEMORY_READ_FILE_TOOL_NAME.to_string(),
+        description: "Read the contents of a file from the agent's memory state. If the file does not exist and a default_value is provided, the default_value will be returned instead of an error.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "default_value": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn execute_memory_read_tool_call(
+    policy: &PolicyEngine,
+    agent_dir: &Path,
+    arguments_json: &str,
+) -> anyhow::Result<String> {
+    #[derive(Deserialize)]
+    struct Args {
+        path: String,
+        default_value: Option<String>,
+    }
+    let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid JSON arguments for '{}': {}",
+            MEMORY_READ_FILE_TOOL_NAME,
+            e
+        )
+    })?;
+
+    anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
+    anyhow::ensure!(
+        policy.can_read_path(&args.path),
+        "memory read denied by policy"
+    );
+
+    let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
+    match mem.read_file(&args.path) {
+        Ok(content) => Ok(content),
+        Err(e) => {
+            if let Some(default) = args.default_value {
+                Ok(default)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn supports_memory_write_tool(manifest: &AgentManifest) -> bool {
+    manifest
+        .capabilities
+        .iter()
+        .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+}
+
+fn memory_write_file_tool_definition() -> crate::llm::ToolDefinition {
+    crate::llm::ToolDefinition {
+        name: MEMORY_WRITE_FILE_TOOL_NAME.to_string(),
+        description: "Write content to a file in the agent's memory state".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn execute_memory_write_tool_call(
+    policy: &PolicyEngine,
+    agent_dir: &Path,
+    arguments_json: &str,
+) -> anyhow::Result<String> {
+    #[derive(Deserialize)]
+    struct Args {
+        path: String,
+        content: String,
+    }
+    let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid JSON arguments for '{}': {}",
+            MEMORY_WRITE_FILE_TOOL_NAME,
+            e
+        )
+    })?;
+
+    anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
+    anyhow::ensure!(
+        policy.can_write_path(&args.path),
+        "memory write denied by policy"
+    );
+
+    let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
+    mem.write_file(&args.path, &args.content)?;
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "bytes_written": args.content.len(),
+    }))
+    .map_err(Into::into)
+}
+
+fn skill_draft_tool_definition() -> crate::llm::ToolDefinition {
+    crate::llm::ToolDefinition {
+        name: SKILL_DRAFT_TOOL_NAME.to_string(),
+        description: "Draft a new skill by proposing its SKILL.md content. Drafting a skill requires human approval before it is loaded. The path must be in the skills/ directory (e.g., skills/my_skill.md).".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn execute_skill_draft_tool_call(
+    policy: &PolicyEngine,
+    agent_dir: &Path,
+    arguments_json: &str,
+) -> anyhow::Result<String> {
+    #[derive(Deserialize)]
+    struct Args {
+        path: String,
+        content: String,
+        #[serde(default)]
+        evidence_ref: Option<String>,
+    }
+    let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid JSON arguments for '{}': {}",
+            SKILL_DRAFT_TOOL_NAME,
+            e
+        )
+    })?;
+
+    anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
+    anyhow::ensure!(
+        args.path.starts_with("skills/"),
+        "skill path must begin with skills/"
+    );
+    anyhow::ensure!(
+        policy.can_write_path(&args.path),
+        "skill draft write denied by policy"
+    );
+
+    persist_reevaluation_state(agent_dir, |state| {
+        state.pending_scheduled_action = Some(ScheduledAction::WriteFile {
+            path: args.path.clone(),
+            content: args.content.clone(),
+            requires_approval: true,
+            evidence_ref: args.evidence_ref,
+        });
+    })?;
+
+    serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "status": "Skill drafted and queued for approval",
+        "path": args.path,
+        "bytes_proposed": args.content.len(),
+    }))
+    .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,6 +1057,7 @@ mod tests {
             capabilities,
             llm_config: None,
             limits: None,
+            background: None,
         }
     }
 
@@ -872,14 +1197,44 @@ dependencies:
             &serde_json::to_string(&args).expect("json should encode"),
         )
         .expect_err("policy should deny command");
-        assert!(err.to_string().contains("sandbox command denied by ShellExec policy"));
+        assert!(err
+            .to_string()
+            .contains("sandbox command denied by ShellExec policy"));
+    }
+
+    #[test]
+    fn test_execute_scheduled_write_file_action() {
+        let manifest = manifest_with_capabilities(vec![Capability::MemoryWrite {
+            scopes: vec!["skills/*".to_string()],
+        }]);
+        let temp = tempdir().expect("tempdir should create");
+        let result = execute_scheduled_action(
+            &manifest,
+            temp.path(),
+            &ScheduledAction::WriteFile {
+                path: "skills/generated.md".to_string(),
+                content: "generated".to_string(),
+                requires_approval: false,
+                evidence_ref: None,
+            },
+        )
+        .expect("scheduled write should succeed");
+        assert!(result.contains("\"ok\":true"));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("skills").join("generated.md"))
+                .expect("generated file should read"),
+            "generated"
+        );
     }
 
     struct FixedTextDriver;
 
     #[async_trait::async_trait]
     impl LlmDriver for FixedTextDriver {
-        async fn complete(&self, _request: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+        ) -> anyhow::Result<CompletionResponse> {
             Ok(CompletionResponse {
                 text: "assistant reply".to_string(),
                 tool_calls: vec![],
@@ -899,10 +1254,7 @@ dependencies:
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
         );
-        let mut history = vec![
-            Message::system("System prompt"),
-            Message::user("Hello"),
-        ];
+        let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
         let reply = runtime
             .execute_with_history(&mut history)
             .await
@@ -924,10 +1276,7 @@ dependencies:
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
         );
-        let mut history = vec![
-            Message::system("System prompt"),
-            Message::user("Hello"),
-        ];
+        let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
         runtime
             .execute_with_history(&mut history)
             .await
@@ -942,16 +1291,12 @@ dependencies:
             })
             .collect::<Vec<_>>();
         assert!(!entries.is_empty(), "causal chain should have entries");
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.category == "lifecycle" && e.action == "wake")
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.category == "lifecycle" && e.action == "hibernate")
-        );
+        assert!(entries
+            .iter()
+            .any(|e| e.category == "lifecycle" && e.action == "wake"));
+        assert!(entries
+            .iter()
+            .any(|e| e.category == "lifecycle" && e.action == "hibernate"));
         assert!(
             entries
                 .iter()
@@ -984,10 +1329,7 @@ dependencies:
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
         );
-        let mut history = vec![
-            Message::system("System prompt"),
-            Message::user("Hello"),
-        ];
+        let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
         runtime
             .execute_with_history(&mut history)
             .await

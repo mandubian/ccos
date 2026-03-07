@@ -6,11 +6,29 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Capability {
-    ToolInvoke { allowed: Vec<String> },
-    MemoryRead { scopes: Vec<String> },
-    MemoryWrite { scopes: Vec<String> },
-    NetConnect { hosts: Vec<String> },
-    AgentSpawn { max_children: u32 },
-    AgentMessage { patterns: Vec<String> },
-    ShellExec { patterns: Vec<String> },
+    ToolInvoke {
+        allowed: Vec<String>,
+    },
+    MemoryRead {
+        scopes: Vec<String>,
+    },
+    MemoryWrite {
+        scopes: Vec<String>,
+    },
+    NetConnect {
+        hosts: Vec<String>,
+    },
+    AgentSpawn {
+        max_children: u32,
+    },
+    AgentMessage {
+        patterns: Vec<String>,
+    },
+    BackgroundReevaluation {
+        min_interval_secs: u64,
+        allow_reasoning: bool,
+    },
+    ShellExec {
+        patterns: Vec<String>,
+    },
 }

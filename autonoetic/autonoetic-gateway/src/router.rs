@@ -1,6 +1,17 @@
 //! Internal JSON-RPC 2.0 Router.
 
+use crate::execution::{
+    gateway_actor_id, init_gateway_causal_logger, log_gateway_causal_event, next_event_seq,
+    sha256_hex, GatewayExecutionService, SpawnResult,
+};
+use crate::scheduler::{append_inbox_event, append_task_board_entry};
+use autonoetic_types::causal_chain::EntryStatus;
+use autonoetic_types::config::GatewayConfig;
+use autonoetic_types::task_board::{TaskBoardEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::future::Future;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -53,20 +64,837 @@ impl JsonRpcResponse {
     }
 }
 
-pub struct JsonRpcRouter;
+#[derive(Clone)]
+pub struct JsonRpcRouter {
+    config: Arc<GatewayConfig>,
+    execution: Arc<GatewayExecutionService>,
+}
 
 impl JsonRpcRouter {
-    pub fn new() -> Self {
-        Self
+    pub fn new(config: GatewayConfig) -> Self {
+        let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+        Self {
+            config: Arc::new(config),
+            execution,
+        }
+    }
+
+    pub fn execution_service(&self) -> Arc<GatewayExecutionService> {
+        self.execution.clone()
     }
 
     pub async fn dispatch(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         tracing::debug!("Dispatching JSON-RPC method: {}", req.method);
 
-        // Stub dispatch logic
         match req.method.as_str() {
             "ping" => JsonRpcResponse::success(req.id, serde_json::json!("pong")),
+            "agent.spawn" => {
+                let params: AgentSpawnParams = match serde_json::from_value(req.params) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32602,
+                            format!("Invalid params for agent.spawn: {}", e),
+                        );
+                    }
+                };
+                let session_id = params
+                    .session_id
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let agent_id = params.agent_id;
+                let message = params.message;
+                let mut gateway_event_seq = 0_u64;
+                let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32000,
+                            format!("agent.spawn failed: unable to initialize gateway causal logger: {}", e),
+                        );
+                    }
+                };
+                log_gateway_causal_event(
+                    &causal_logger,
+                    &gateway_actor_id(),
+                    &session_id,
+                    next_event_seq(&mut gateway_event_seq),
+                    "agent.spawn.requested",
+                    EntryStatus::Success,
+                    Some(serde_json::json!({
+                        "agent_id": agent_id.clone(),
+                        "source_agent_id": params.source_agent_id.clone(),
+                        "message_len": message.len(),
+                        "message_sha256": sha256_hex(&message),
+                    })),
+                );
+                match self
+                    .spawn_agent_once(
+                        &agent_id,
+                        &message,
+                        &session_id,
+                        params.source_agent_id.as_deref(),
+                        false,
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        if let Some(source_agent_id) = params.source_agent_id.as_deref() {
+                            let _ = append_delegation_task_entry(
+                                self.config.as_ref(),
+                                source_agent_id,
+                                &agent_id,
+                                "agent.spawn",
+                                TaskStatus::Completed,
+                                Some(serde_json::json!({
+                                    "session_id": result.session_id.clone(),
+                                    "assistant_reply": result.assistant_reply.clone(),
+                                })),
+                            );
+                        }
+                        log_gateway_causal_event(
+                            &causal_logger,
+                            &gateway_actor_id(),
+                            &session_id,
+                            next_event_seq(&mut gateway_event_seq),
+                            "agent.spawn.completed",
+                            EntryStatus::Success,
+                            Some(serde_json::json!({
+                                "agent_id": result.agent_id.clone(),
+                                "source_agent_id": params.source_agent_id.clone(),
+                                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
+                                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+                            })),
+                        );
+                        JsonRpcResponse::success(
+                            req.id,
+                            serde_json::json!({
+                                "agent_id": result.agent_id,
+                                "session_id": result.session_id,
+                                "assistant_reply": result.assistant_reply,
+                            }),
+                        )
+                    }
+                    Err(e) => {
+                        if let Some(source_agent_id) = params.source_agent_id.as_deref() {
+                            let _ = append_delegation_task_entry(
+                                self.config.as_ref(),
+                                source_agent_id,
+                                &agent_id,
+                                "agent.spawn",
+                                TaskStatus::Failed,
+                                Some(serde_json::json!({
+                                    "error": e.to_string(),
+                                })),
+                            );
+                        }
+                        log_gateway_causal_event(
+                            &causal_logger,
+                            &gateway_actor_id(),
+                            &session_id,
+                            next_event_seq(&mut gateway_event_seq),
+                            "agent.spawn.failed",
+                            EntryStatus::Error,
+                            Some(serde_json::json!({
+                                "agent_id": agent_id.clone(),
+                                "source_agent_id": params.source_agent_id.clone(),
+                                "reason": e.to_string(),
+                            })),
+                        );
+                        JsonRpcResponse::error(req.id, -32000, format!("agent.spawn failed: {}", e))
+                    }
+                }
+            }
+            "event.ingest" => {
+                let params: EventIngestParams = match serde_json::from_value(req.params) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32602,
+                            format!("Invalid params for event.ingest: {}", e),
+                        );
+                    }
+                };
+                let session_id = params
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let event_type = params.event_type;
+                let target_agent_id = params.target_agent_id;
+                let message = params.message;
+                let metadata = params.metadata;
+                let mut gateway_event_seq = 0_u64;
+                let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32000,
+                            format!("event.ingest failed: unable to initialize gateway causal logger: {}", e),
+                        );
+                    }
+                };
+                log_gateway_causal_event(
+                    &causal_logger,
+                    &gateway_actor_id(),
+                    &session_id,
+                    next_event_seq(&mut gateway_event_seq),
+                    "event.ingest.requested",
+                    EntryStatus::Success,
+                    Some(serde_json::json!({
+                        "event_type": event_type.clone(),
+                        "target_agent_id": target_agent_id.clone(),
+                        "source_agent_id": params.source_agent_id.clone(),
+                        "message_len": message.len(),
+                        "message_sha256": sha256_hex(&message),
+                        "metadata_sha256": metadata.as_ref().and_then(|v| serde_json::to_string(v).ok()).map(|v| sha256_hex(&v)),
+                    })),
+                );
+
+                let kickoff = match metadata {
+                    Some(metadata) => format!(
+                        "Gateway event type: {}\nMessage: {}\nMetadata: {}",
+                        event_type, message, metadata
+                    ),
+                    None => format!("Gateway event type: {}\nMessage: {}", event_type, message),
+                };
+                if self.should_signal_background_on_ingress(&target_agent_id) {
+                    let _ = append_inbox_event(
+                        self.config.as_ref(),
+                        &target_agent_id,
+                        ingress_wake_signal(&event_type, &session_id),
+                        Some(&session_id),
+                    );
+                }
+                match self
+                    .spawn_agent_once(
+                        &target_agent_id,
+                        &kickoff,
+                        &session_id,
+                        params.source_agent_id.as_deref(),
+                        false,
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        if let Some(source_agent_id) = params.source_agent_id.as_deref() {
+                            let _ = append_delegation_task_entry(
+                                self.config.as_ref(),
+                                source_agent_id,
+                                &target_agent_id,
+                                "event.ingest",
+                                TaskStatus::Completed,
+                                Some(serde_json::json!({
+                                    "session_id": result.session_id.clone(),
+                                    "assistant_reply": result.assistant_reply.clone(),
+                                    "event_type": event_type.clone(),
+                                })),
+                            );
+                        }
+                        log_gateway_causal_event(
+                            &causal_logger,
+                            &gateway_actor_id(),
+                            &session_id,
+                            next_event_seq(&mut gateway_event_seq),
+                            "event.ingest.completed",
+                            EntryStatus::Success,
+                            Some(serde_json::json!({
+                                "event_type": event_type.clone(),
+                                "target_agent_id": target_agent_id.clone(),
+                                "source_agent_id": params.source_agent_id.clone(),
+                                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
+                                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+                            })),
+                        );
+                        JsonRpcResponse::success(
+                            req.id,
+                            serde_json::json!({
+                                "event_type": event_type,
+                                "target_agent_id": target_agent_id,
+                                "session_id": result.session_id,
+                                "assistant_reply": result.assistant_reply,
+                            }),
+                        )
+                    }
+                    Err(e) => {
+                        if let Some(source_agent_id) = params.source_agent_id.as_deref() {
+                            let _ = append_delegation_task_entry(
+                                self.config.as_ref(),
+                                source_agent_id,
+                                &target_agent_id,
+                                "event.ingest",
+                                TaskStatus::Failed,
+                                Some(serde_json::json!({
+                                    "error": e.to_string(),
+                                    "event_type": event_type.clone(),
+                                })),
+                            );
+                        }
+                        log_gateway_causal_event(
+                            &causal_logger,
+                            &gateway_actor_id(),
+                            &session_id,
+                            next_event_seq(&mut gateway_event_seq),
+                            "event.ingest.failed",
+                            EntryStatus::Error,
+                            Some(serde_json::json!({
+                                "event_type": event_type.clone(),
+                                "target_agent_id": target_agent_id.clone(),
+                                "source_agent_id": params.source_agent_id.clone(),
+                                "reason": e.to_string(),
+                            })),
+                        );
+                        JsonRpcResponse::error(
+                            req.id,
+                            -32000,
+                            format!("event.ingest failed: {}", e),
+                        )
+                    }
+                }
+            }
             _ => JsonRpcResponse::error(req.id, -32601, "Method not found"),
         }
+    }
+
+    pub async fn spawn_agent_once(
+        &self,
+        agent_id: &str,
+        message: &str,
+        session_id: &str,
+        source_agent_id: Option<&str>,
+        is_message: bool,
+    ) -> anyhow::Result<SpawnResult> {
+        self.execution
+            .spawn_agent_once(agent_id, message, session_id, source_agent_id, is_message)
+            .await
+    }
+
+    #[cfg(test)]
+    async fn execute_with_reliability_controls<F, Fut, T>(
+        &self,
+        agent_id: &str,
+        operation: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        self.execution
+            .execute_with_reliability_controls(agent_id, operation)
+            .await
+    }
+
+    #[cfg(test)]
+    async fn agent_admission_semaphore(&self, agent_id: &str) -> Arc<tokio::sync::Semaphore> {
+        self.execution.agent_admission_semaphore(agent_id).await
+    }
+
+    #[cfg(test)]
+    fn execution_semaphore(&self) -> Arc<tokio::sync::Semaphore> {
+        self.execution.execution_semaphore()
+    }
+
+    fn should_signal_background_on_ingress(&self, agent_id: &str) -> bool {
+        self.execution
+            .load_agent_manifest(agent_id)
+            .ok()
+            .and_then(|(manifest, _)| manifest.background)
+            .map(|background| background.enabled && background.wake_predicates.new_messages)
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentSpawnParams {
+    agent_id: String,
+    message: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    source_agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EventIngestParams {
+    event_type: String,
+    target_agent_id: String,
+    message: String,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    source_agent_id: Option<String>,
+}
+
+fn ingress_wake_signal(event_type: &str, session_id: &str) -> String {
+    serde_json::json!({
+        "kind": "event_ingest",
+        "event_type": event_type,
+        "session_id": session_id,
+    })
+    .to_string()
+}
+
+fn append_delegation_task_entry(
+    config: &GatewayConfig,
+    source_agent_id: &str,
+    creator_id: &str,
+    action: &str,
+    status: TaskStatus,
+    result: Option<serde_json::Value>,
+) -> anyhow::Result<()> {
+    append_task_board_entry(
+        config,
+        &TaskBoardEntry {
+            task_id: uuid::Uuid::new_v4().to_string(),
+            creator_id: creator_id.to_string(),
+            title: format!("{action} result from {creator_id}"),
+            description: format!("Delegated {action} for source agent '{source_agent_id}'"),
+            status,
+            assignee_id: Some(source_agent_id.to_string()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            capabilities_required: vec![],
+            result,
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scheduler::{inbox_path, task_board_path, InboxEvent};
+    use autonoetic_types::task_board::TaskBoardEntry;
+    use tempfile::TempDir;
+
+    fn test_router() -> (TempDir, JsonRpcRouter) {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let router = JsonRpcRouter::new(GatewayConfig {
+            agents_dir: temp.path().join("agents"),
+            ..GatewayConfig::default()
+        });
+        (temp, router)
+    }
+
+    fn write_minimal_agent(agents_dir: &std::path::Path, agent_id: &str) {
+        let agent_dir = agents_dir.join(agent_id);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("SKILL.md"),
+            format!(
+                "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"{agent_id}\"\n  description: \"test\"\n---\nbody\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_background_agent(agents_dir: &std::path::Path, agent_id: &str, new_messages: bool) {
+        let agent_dir = agents_dir.join(agent_id);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("SKILL.md"),
+            format!(
+                "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"{agent_id}\"\n  description: \"test\"\nbackground:\n  enabled: true\n  interval_secs: 60\n  mode: deterministic\n  wake_predicates:\n    timer: false\n    new_messages: {new_messages}\n---\nbody\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ping() {
+        let (_temp, router) = test_router();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "1".to_string(),
+            method: "ping".to_string(),
+            params: serde_json::json!({}),
+        };
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.result, Some(serde_json::json!("pong")));
+        assert!(resp.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ingest_invalid_params() {
+        let (_temp, router) = test_router();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "2".to_string(),
+            method: "event.ingest".to_string(),
+            params: serde_json::json!({
+                "event_type": "webhook",
+                "target_agent_id": "agent_a"
+            }),
+        };
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32602));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_unauthorized() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+
+        // Create source agent without AgentSpawn capability
+        let source_dir = agents_dir.join("source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nname: source\ndescription: test\ncapabilities:\n  - type: MemoryRead\n    scopes: ['*']\n---\nbody\n",
+        ).unwrap();
+
+        // Create target agent
+        let target_dir = agents_dir.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(
+            target_dir.join("SKILL.md"),
+            "---\nname: target\ndescription: test\n---\nbody\n",
+        )
+        .unwrap();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "3".to_string(),
+            method: "agent.spawn".to_string(),
+            params: serde_json::json!({
+                "agent_id": "target",
+                "message": "hello",
+                "source_agent_id": "source"
+            }),
+        };
+
+        let resp = router.dispatch(req).await;
+        let err = resp.error.expect("Expected an error");
+        assert_eq!(err.code, -32000);
+        assert!(
+            err.message.contains("Permission Denied"),
+            "Message was: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("AgentSpawn"),
+            "Message was: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_unknown_agent() {
+        let (temp, router) = test_router();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "3".to_string(),
+            method: "agent.spawn".to_string(),
+            params: serde_json::json!({
+                "agent_id": "missing",
+                "message": "hello"
+            }),
+        };
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32000));
+        assert!(resp
+            .error
+            .as_ref()
+            .expect("error should exist")
+            .message
+            .contains("not found"));
+        let gateway_log_path = temp
+            .path()
+            .join("agents")
+            .join(".gateway")
+            .join("history")
+            .join("causal_chain.jsonl");
+        let body =
+            std::fs::read_to_string(gateway_log_path).expect("gateway causal chain should exist");
+        assert!(body.contains("\"action\":\"agent.spawn.requested\""));
+        assert!(body.contains("\"action\":\"agent.spawn.failed\""));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_enforces_max_children_per_session() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+
+        let source_dir = agents_dir.join("source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"source\"\n  name: \"source\"\n  description: \"test\"\ncapabilities:\n  - type: AgentSpawn\n    max_children: 1\n---\nbody\n",
+        )
+        .unwrap();
+
+        let target_dir = agents_dir.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(
+            target_dir.join("SKILL.md"),
+            "---\nname: target\ndescription: test\n---\nbody\n",
+        )
+        .unwrap();
+
+        let causal_logger = init_gateway_causal_logger(&GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..GatewayConfig::default()
+        })
+        .unwrap();
+        log_gateway_causal_event(
+            &causal_logger,
+            "gateway",
+            "session-1",
+            1,
+            "agent.spawn.completed",
+            EntryStatus::Success,
+            Some(serde_json::json!({
+                "agent_id": "target",
+                "source_agent_id": "source",
+                "assistant_reply_len": 0,
+            })),
+        );
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "4".to_string(),
+            method: "agent.spawn".to_string(),
+            params: serde_json::json!({
+                "agent_id": "target",
+                "message": "hello",
+                "session_id": "session-1",
+                "source_agent_id": "source"
+            }),
+        };
+
+        let resp = router.dispatch(req).await;
+        let err = resp.error.expect("Expected an error");
+        assert_eq!(err.code, -32000);
+        assert!(
+            err.message.contains("exceeded AgentSpawn limit"),
+            "Message was: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ingest_enforces_max_children_per_session() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+
+        let source_dir = agents_dir.join("source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"source\"\n  name: \"source\"\n  description: \"test\"\ncapabilities:\n  - type: AgentSpawn\n    max_children: 1\n---\nbody\n",
+        )
+        .unwrap();
+
+        let target_dir = agents_dir.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(
+            target_dir.join("SKILL.md"),
+            "---\nname: target\ndescription: test\n---\nbody\n",
+        )
+        .unwrap();
+
+        let causal_logger = init_gateway_causal_logger(&GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..GatewayConfig::default()
+        })
+        .unwrap();
+        log_gateway_causal_event(
+            &causal_logger,
+            "gateway",
+            "session-2",
+            1,
+            "event.ingest.completed",
+            EntryStatus::Success,
+            Some(serde_json::json!({
+                "event_type": "webhook",
+                "target_agent_id": "target",
+                "source_agent_id": "source",
+                "assistant_reply_len": 0,
+            })),
+        );
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "5".to_string(),
+            method: "event.ingest".to_string(),
+            params: serde_json::json!({
+                "event_type": "webhook",
+                "target_agent_id": "target",
+                "message": "hello",
+                "session_id": "session-2",
+                "source_agent_id": "source"
+            }),
+        };
+
+        let resp = router.dispatch(req).await;
+        let err = resp.error.expect("Expected an error");
+        assert_eq!(err.code, -32000);
+        assert!(
+            err.message.contains("exceeded AgentSpawn limit"),
+            "Message was: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ingest_writes_scheduler_inbox_signal_for_background_agents() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+        write_background_agent(&agents_dir, "target", true);
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "6".to_string(),
+            method: "event.ingest".to_string(),
+            params: serde_json::json!({
+                "event_type": "webhook",
+                "target_agent_id": "target",
+                "message": "deploy",
+                "session_id": "session-inbox"
+            }),
+        };
+
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32000));
+
+        let body = std::fs::read_to_string(inbox_path(router.config.as_ref(), "target"))
+            .expect("inbox should exist");
+        let event: InboxEvent =
+            serde_json::from_str(body.trim()).expect("inbox event should parse");
+        assert!(event.message.contains("\"kind\":\"event_ingest\""));
+        assert!(event.message.contains("\"event_type\":\"webhook\""));
+        assert!(event.message.contains("\"session_id\":\"session-inbox\""));
+        assert!(!event.message.contains("deploy"));
+        assert!(!event.message.contains("Gateway event type"));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_event_ingest_skips_scheduler_inbox_without_new_message_opt_in() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+        write_minimal_agent(&agents_dir, "target-no-bg");
+        write_background_agent(&agents_dir, "target-no-new-messages", false);
+
+        for agent_id in ["target-no-bg", "target-no-new-messages"] {
+            let req = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: agent_id.to_string(),
+                method: "event.ingest".to_string(),
+                params: serde_json::json!({
+                    "event_type": "webhook",
+                    "target_agent_id": agent_id,
+                    "message": "deploy",
+                    "session_id": "session-inbox"
+                }),
+            };
+
+            let resp = router.dispatch(req).await;
+            assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32000));
+            assert!(
+                !inbox_path(router.config.as_ref(), agent_id).exists(),
+                "unexpected inbox signal for {agent_id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_failure_writes_task_board_entry_for_source() {
+        let (temp, router) = test_router();
+        let agents_dir = temp.path().join("agents");
+
+        let source_dir = agents_dir.join("source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"source\"\n  name: \"source\"\n  description: \"test\"\ncapabilities:\n  - type: AgentSpawn\n    max_children: 3\n---\nbody\n",
+        )
+        .unwrap();
+        write_minimal_agent(&agents_dir, "target");
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "7".to_string(),
+            method: "agent.spawn".to_string(),
+            params: serde_json::json!({
+                "agent_id": "target",
+                "message": "hello",
+                "session_id": "session-task",
+                "source_agent_id": "source"
+            }),
+        };
+
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32000));
+
+        let body = std::fs::read_to_string(task_board_path(router.config.as_ref()))
+            .expect("task board should exist");
+        let entry: TaskBoardEntry =
+            serde_json::from_str(body.lines().next().expect("task board entry should exist"))
+                .expect("task board entry should decode");
+        assert_eq!(entry.assignee_id.as_deref(), Some("source"));
+        assert!(matches!(entry.status, TaskStatus::Failed));
+        assert_eq!(entry.creator_id, "target");
+    }
+
+    #[tokio::test]
+    async fn test_reliability_controls_reject_agent_queue_overflow() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let router = JsonRpcRouter::new(GatewayConfig {
+            agents_dir: temp.path().join("agents"),
+            max_concurrent_spawns: 2,
+            max_pending_spawns_per_agent: 2,
+            ..GatewayConfig::default()
+        });
+
+        let admission = router.agent_admission_semaphore("agent-a").await;
+        let _permit1 = admission
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("first permit should be acquired");
+        let _permit2 = admission
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("second permit should be acquired");
+
+        let third = router
+            .execute_with_reliability_controls("agent-a", || async { Ok::<_, anyhow::Error>(()) })
+            .await;
+        assert!(third.is_err());
+        assert!(third
+            .err()
+            .expect("queue overflow should error")
+            .to_string()
+            .contains("pending execution queue is full"));
+    }
+
+    #[tokio::test]
+    async fn test_reliability_controls_reject_global_execution_overflow() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let router = JsonRpcRouter::new(GatewayConfig {
+            agents_dir: temp.path().join("agents"),
+            max_concurrent_spawns: 1,
+            max_pending_spawns_per_agent: 2,
+            ..GatewayConfig::default()
+        });
+
+        let _permit = router
+            .execution_semaphore()
+            .acquire_owned()
+            .await
+            .expect("global execution permit should be acquired");
+
+        let second = router
+            .execute_with_reliability_controls("agent-b", || async { Ok::<_, anyhow::Error>(()) })
+            .await;
+        assert!(second.is_err());
+        assert!(second
+            .err()
+            .expect("global overflow should error")
+            .to_string()
+            .contains("max concurrent executions reached"));
     }
 }

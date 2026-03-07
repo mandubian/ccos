@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod artifact;
+pub mod background;
 pub mod capability;
 pub mod capsule;
 pub mod causal_chain;

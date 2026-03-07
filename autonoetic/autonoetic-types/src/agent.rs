@@ -1,5 +1,6 @@
 //! Agent Manifest types — the Rust representation of `SKILL.md` frontmatter.
 
+use crate::background::BackgroundPolicy;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::Capability;
@@ -53,6 +54,8 @@ pub struct AgentManifest {
     pub capabilities: Vec<Capability>,
     pub llm_config: Option<LlmConfig>,
     pub limits: Option<ResourceLimits>,
+    #[serde(default)]
+    pub background: Option<BackgroundPolicy>,
 }
 
 /// Lightweight metadata about a discovered agent on disk.
