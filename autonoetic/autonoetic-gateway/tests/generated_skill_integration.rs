@@ -1,218 +1,16 @@
 use autonoetic_gateway::execution::GatewayExecutionService;
-use autonoetic_gateway::router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
 use autonoetic_gateway::runtime::lifecycle::AgentExecutor;
 use autonoetic_gateway::runtime::parser::SkillParser;
 use autonoetic_gateway::scheduler::{approve_request, load_approval_requests, run_scheduler_tick};
-use autonoetic_gateway::server::jsonrpc::start_jsonrpc_server;
-use autonoetic_types::config::GatewayConfig;
 use std::path::Path;
 use std::sync::Arc;
-use tempfile::TempDir;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+mod support;
 
-// ---------------------------------------------------------------------------
-// Environment helpers
-// ---------------------------------------------------------------------------
-
-struct EnvGuard {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: impl Into<String>) -> Self {
-        let previous = std::env::var(key).ok();
-        std::env::set_var(key, value.into());
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        if let Some(ref previous) = self.previous {
-            std::env::set_var(self.key, previous);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Mock OpenAI server (responds with tool_calls or text depending on request)
-// ---------------------------------------------------------------------------
+use support::{spawn_gateway_server, EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace};
 
 /// The math-agent SKILL.md content the mock LLM will propose via `skill.draft`.
 /// Uses the nested `metadata.autonoetic` format which SkillParser reads.
 const MATH_AGENT_SKILL_CONTENT: &str = "---\nname: \"Math Agent\"\ndescription: \"Does math\"\nmetadata:\n  autonoetic:\n    version: \"1.0\"\n    agent:\n      id: \"math_agent\"\n      name: \"math_agent\"\n      description: \"Does math\"\n    llm_config:\n      provider: \"openai\"\n      model: \"gpt-4o\"\n---\n# Instructions\nReply with the sum.\n";
-
-async fn mock_openai_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let mut buf = [0; 8192];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            if n == 0 {
-                continue;
-            }
-            let req_str = String::from_utf8_lossy(&buf[..n]);
-
-            let body_start = match req_str.find("\r\n\r\n") {
-                Some(pos) => pos + 4,
-                None => continue,
-            };
-            let body_str = &req_str[body_start..];
-
-            let is_tool_result_turn = body_str.contains("\"role\":\"tool\"");
-            let is_learner_phase1 = body_str.contains("Draft content");
-            let is_learner_phase2 = body_str.contains("PoC Evidence:");
-            let is_poc = body_str.contains("PoC Execution");
-            let is_math_agent_reuse =
-                body_str.contains("math_agent") && !is_learner_phase1 && !is_learner_phase2;
-
-            let response_json = if is_learner_phase1 && !is_tool_result_turn {
-                serde_json::json!({
-                    "id": "chatcmpl-learner-1",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": format!("CONTENT_START\n{}\nCONTENT_END", MATH_AGENT_SKILL_CONTENT)
-                        },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if is_learner_phase2 && !is_tool_result_turn {
-                // Extract evidence ref from the prompt to echo it back in the tool call
-                let evidence_ref = if body_str.contains("poc_session") {
-                    "poc_session"
-                } else {
-                    "unknown"
-                };
-
-                let draft_args = serde_json::json!({
-                    "path": "skills/math.md",
-                    "content": MATH_AGENT_SKILL_CONTENT,
-                    "evidence_ref": evidence_ref
-                })
-                .to_string();
-
-                serde_json::json!({
-                    "id": "chatcmpl-learner-2",
-                    "object": "chat.completion",
-                    "created": 2,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "tool_calls": [{
-                                "id": "call_draft",
-                                "type": "function",
-                                "function": {
-                                    "name": "skill.draft",
-                                    "arguments": draft_args
-                                }
-                            }]
-                        },
-                        "finish_reason": "tool_calls"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if is_learner_phase2 && is_tool_result_turn {
-                serde_json::json!({
-                    "id": "chatcmpl-learner-3",
-                    "object": "chat.completion",
-                    "created": 3,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "Skill submitted with evidence." },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if is_poc {
-                serde_json::json!({
-                    "id": "chatcmpl-poc",
-                    "object": "chat.completion",
-                    "created": 10,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "42" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else if is_math_agent_reuse {
-                serde_json::json!({
-                    "id": "chatcmpl-reuse",
-                    "object": "chat.completion",
-                    "created": 20,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "reused math agent successfully: 42" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            } else {
-                serde_json::json!({
-                    "id": "chatcmpl-default",
-                    "object": "chat.completion",
-                    "created": 0,
-                    "model": "gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": "Default response" },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-            };
-
-            let body_bytes = serde_json::to_string(&response_json).unwrap();
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body_bytes.len(),
-                body_bytes
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-        }
-    });
-
-    format!("http://127.0.0.1:{}", port)
-}
-
-// ---------------------------------------------------------------------------
-// JSON-RPC transport helpers (copied from loopback_integration)
-// ---------------------------------------------------------------------------
-
-async fn send_jsonrpc(write_half: &mut tokio::net::tcp::OwnedWriteHalf, req: JsonRpcRequest) {
-    let msg = serde_json::to_string(&req).unwrap();
-    write_half.write_all(msg.as_bytes()).await.unwrap();
-    write_half.write_all(b"\n").await.unwrap();
-    write_half.flush().await.unwrap();
-}
-
-async fn recv_jsonrpc(
-    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
-) -> JsonRpcResponse {
-    let line = lines
-        .next_line()
-        .await
-        .unwrap()
-        .expect("End of stream before response");
-    serde_json::from_str(&line).unwrap()
-}
 
 // ---------------------------------------------------------------------------
 // Artifact loader (simulates hot-loading a skill as a new agent)
@@ -249,14 +47,140 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 
 #[tokio::test]
 async fn test_generated_skill_approval_and_execution() {
-    let mock_url = mock_openai_server().await;
-    let _g1 = EnvGuard::set("AUTONOETIC_LLM_BASE_URL", mock_url);
+    let stub = OpenAiStub::spawn(|_, body_json| async move {
+        let messages = body_json["messages"].as_array().cloned().unwrap_or_default();
+        let latest_user_message = messages
+            .iter()
+            .rev()
+            .find_map(|message| {
+                if message["role"].as_str() == Some("user") {
+                    message["content"].as_str()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+        let is_tool_result_turn = messages
+            .iter()
+            .any(|message| message["role"].as_str() == Some("tool"));
+        let is_learner_phase1 = latest_user_message.contains("Draft content");
+        let is_learner_phase2 = latest_user_message.contains("PoC Evidence:");
+        let is_poc = latest_user_message.contains("PoC Execution");
+        let is_math_agent_reuse =
+            latest_user_message.contains("math_agent") && !is_learner_phase1 && !is_learner_phase2;
+
+        if is_learner_phase1 && !is_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-learner-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": format!("CONTENT_START\n{}\nCONTENT_END", MATH_AGENT_SKILL_CONTENT)
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if is_learner_phase2 && !is_tool_result_turn {
+            let evidence_ref = if latest_user_message.contains("poc_session") {
+                "poc_session"
+            } else {
+                "unknown"
+            };
+            let draft_args = serde_json::json!({
+                "path": "skills/math.md",
+                "content": MATH_AGENT_SKILL_CONTENT,
+                "evidence_ref": evidence_ref
+            })
+            .to_string();
+            serde_json::json!({
+                "id": "chatcmpl-learner-2",
+                "object": "chat.completion",
+                "created": 2,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call_draft",
+                            "type": "function",
+                            "function": {
+                                "name": "skill.draft",
+                                "arguments": draft_args
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if is_learner_phase2 && is_tool_result_turn {
+            serde_json::json!({
+                "id": "chatcmpl-learner-3",
+                "object": "chat.completion",
+                "created": 3,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "Skill submitted with evidence." },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if is_poc {
+            serde_json::json!({
+                "id": "chatcmpl-poc",
+                "object": "chat.completion",
+                "created": 10,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "42" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else if is_math_agent_reuse {
+            serde_json::json!({
+                "id": "chatcmpl-reuse",
+                "object": "chat.completion",
+                "created": 20,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "reused math agent successfully: 42" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        } else {
+            serde_json::json!({
+                "id": "chatcmpl-default",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "Default response" },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+        }
+    })
+    .await
+    .unwrap();
+    let _g1 = EnvGuard::set("AUTONOETIC_LLM_BASE_URL", stub.completion_url());
     let _g2 = EnvGuard::set("OPENAI_API_KEY", "test-key");
 
     // --- Directory setup ---
-    let temp_dir = TempDir::new().unwrap();
-    let agents_dir = temp_dir.path().join("agents");
-    std::fs::create_dir_all(&agents_dir).unwrap();
+    let workspace = TestWorkspace::new().unwrap();
+    let agents_dir = workspace.agents_dir.clone();
     let learner_id = "learner";
     let learner_dir = agents_dir.join(learner_id);
     std::fs::create_dir_all(&learner_dir).unwrap();
@@ -296,7 +220,7 @@ background:
     std::fs::write(learner_dir.join("SKILL.md"), skill_md).unwrap();
 
     // --- Gateway setup ---
-    let config = GatewayConfig {
+    let config = autonoetic_types::config::GatewayConfig {
         port: 0,
         ofp_port: 0,
         agents_dir: agents_dir.clone(),
@@ -306,43 +230,23 @@ background:
     };
 
     let execution_service = Arc::new(GatewayExecutionService::new(config.clone()));
-    let router = JsonRpcRouter::new(config.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let listen_addr = listener.local_addr().unwrap();
-    let local_port = listen_addr.port();
-    drop(listener);
-    let server_task = tokio::spawn(async move {
-        start_jsonrpc_server(listen_addr, router).await.unwrap();
-    });
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    let stream = TcpStream::connect(format!("127.0.0.1:{}", local_port))
-        .await
-        .unwrap();
-    let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
+    let (listen_addr, server_task) = spawn_gateway_server(config.clone()).await.unwrap();
+    let mut client = JsonRpcClient::connect(listen_addr).await.unwrap();
 
     let session_id = "session-test-b";
 
     // --- Step 1: Ingest request to draft skill content ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "1".into(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": learner_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": "Draft content for a math skill.",
-            }),
-        },
-    )
-    .await;
-
-    let resp1 = recv_jsonrpc(&mut lines).await;
+    let resp1 = client
+        .event_ingest(
+            "1",
+            learner_id,
+            session_id,
+            "chat",
+            "Draft content for a math skill.",
+            None,
+        )
+        .await
+        .unwrap();
     let content_reply = resp1
         .result
         .as_ref()
@@ -358,7 +262,7 @@ background:
         .and_then(|s| s.split("\nCONTENT_END").next())
         .expect("Should extract skill content from learner reply");
 
-    let poc_dir = temp_dir.path().join("poc_temp");
+    let poc_dir = workspace.path().join("poc_temp");
     std::fs::create_dir_all(&poc_dir).expect("poc dir should create");
     let (poc_manifest, poc_instructions) = SkillParser::parse(skill_content)
         .expect("drafted skill content should be parseable by SkillParser");
@@ -417,23 +321,17 @@ background:
     // The evidence_ref is the session_id we used for the PoC
     let evidence_ref = "poc_session".to_string();
 
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "draft-with-evidence".into(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": learner_id,
-                "session_id": session_id,
-                "event_type": "chat",
-                "message": format!("PoC Evidence: {}", evidence_ref),
-            }),
-        },
-    )
-    .await;
-
-    let resp_draft = recv_jsonrpc(&mut lines).await;
+    let resp_draft = client
+        .event_ingest(
+            "draft-with-evidence",
+            learner_id,
+            session_id,
+            "chat",
+            &format!("PoC Evidence: {}", evidence_ref),
+            None,
+        )
+        .await
+        .unwrap();
     assert!(
         resp_draft.error.is_none(),
         "Draft submission failed: {:?}",
@@ -456,23 +354,17 @@ background:
     // Try to install and use the skill before approval.
     artifact_loader(&learner_dir, &agents_dir);
 
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "blocked-ingest".into(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": "math_agent",
-                "session_id": "session-blocked",
-                "event_type": "chat",
-                "message": "this should fail",
-            }),
-        },
-    )
-    .await;
-
-    let resp_blocked = recv_jsonrpc(&mut lines).await;
+    let resp_blocked = client
+        .event_ingest(
+            "blocked-ingest",
+            "math_agent",
+            "session-blocked",
+            "chat",
+            "this should fail",
+            None,
+        )
+        .await
+        .unwrap();
     assert!(
         resp_blocked.error.is_some(),
         "Ingest to math_agent MUST fail before approval. Result was: {:?}",
@@ -509,23 +401,17 @@ background:
     );
 
     // --- Step 7: Verify gateway can call the newly loaded agent ---
-    send_jsonrpc(
-        &mut write_half,
-        JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: "2".into(),
-            method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "target_agent_id": "math_agent",
-                "session_id": "session-test-b-reuse",
-                "event_type": "chat",
-                "message": "math_agent",
-            }),
-        },
-    )
-    .await;
-
-    let resp2 = recv_jsonrpc(&mut lines).await;
+    let resp2 = client
+        .event_ingest(
+            "2",
+            "math_agent",
+            "session-test-b-reuse",
+            "chat",
+            "math_agent",
+            None,
+        )
+        .await
+        .unwrap();
     let text = resp2
         .result
         .as_ref()
