@@ -52,7 +52,7 @@ impl MessageRouter {
             "Routing message from {} to local agent {}",
             sender_agent_id, target_agent_id
         );
-        
+
         // TODO: Actually deliver to local agent's session inbox
         Ok("Delivered locally (stub)".to_string())
     }
@@ -71,7 +71,10 @@ impl MessageRouter {
             .await
             .ok_or_else(|| anyhow::anyhow!("Peer {} dropped from registry", peer_node_id))?;
 
-        debug!("Connecting to OFP peer {} at {}", peer_node_id, peer.address);
+        debug!(
+            "Connecting to OFP peer {} at {}",
+            peer_node_id, peer.address
+        );
         let stream = TcpStream::connect(peer.address).await?;
         let (mut reader, mut writer) = stream.into_split();
 
@@ -122,8 +125,15 @@ impl MessageRouter {
             );
         }
         let ack_expected_data = format!("{}{}", ack_nonce, ack_node_id);
-        if !hmac_verify(&self.shared_secret, ack_expected_data.as_bytes(), &ack_auth_hmac) {
-            anyhow::bail!("HandshakeAck HMAC verification failed for peer {}", peer_node_id);
+        if !hmac_verify(
+            &self.shared_secret,
+            ack_expected_data.as_bytes(),
+            &ack_auth_hmac,
+        ) {
+            anyhow::bail!(
+                "HandshakeAck HMAC verification failed for peer {}",
+                peer_node_id
+            );
         }
         let negotiated_extensions = ack_extensions.unwrap_or_default();
         let use_msg_hmac = negotiated_extensions

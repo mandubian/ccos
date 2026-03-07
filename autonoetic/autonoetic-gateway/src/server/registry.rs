@@ -90,11 +90,28 @@ impl PeerRegistry {
         let r = self.peers.read().await;
         for (node_id, peer) in r.iter() {
             if peer.state == PeerState::Connected {
-                if peer.agents.iter().any(|a| a.id == agent_id || a.name == agent_id) {
+                if peer
+                    .agents
+                    .iter()
+                    .any(|a| a.id == agent_id || a.name == agent_id)
+                {
                     return Some(node_id.clone());
                 }
             }
         }
         None
+    }
+
+    /// Check whether a connected peer advertised a specific agent identity.
+    pub async fn peer_hosts_agent(&self, node_id: &str, agent_id: &str) -> bool {
+        let r = self.peers.read().await;
+        r.get(node_id)
+            .filter(|peer| peer.state == PeerState::Connected)
+            .map(|peer| {
+                peer.agents
+                    .iter()
+                    .any(|agent| agent.id == agent_id || agent.name == agent_id)
+            })
+            .unwrap_or(false)
     }
 }

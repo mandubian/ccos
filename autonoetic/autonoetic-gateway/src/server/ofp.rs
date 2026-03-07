@@ -21,7 +21,8 @@ const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024; // 16 MB
 
 /// Generate HMAC-SHA256 signature for message authentication.
 pub fn hmac_sign(secret: &str, data: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(data);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -46,7 +47,11 @@ pub fn sign_wire_message(secret: &str, msg: &WireMessage) -> anyhow::Result<Stri
 }
 
 /// Verify sequence and signature constraints for `msg_hmac`.
-pub fn verify_wire_message(secret: &str, msg: &WireMessage, expected_seq: u64) -> anyhow::Result<()> {
+pub fn verify_wire_message(
+    secret: &str,
+    msg: &WireMessage,
+    expected_seq: u64,
+) -> anyhow::Result<()> {
     let actual_seq = msg
         .seq_num
         .ok_or_else(|| anyhow::anyhow!("Missing seq_num for msg_hmac-protected message"))?;
@@ -77,9 +82,14 @@ pub async fn start_ofp_server(
     node_name: String,
     shared_secret: String,
     registry: PeerRegistry,
+    router: std::sync::Arc<crate::router::JsonRpcRouter>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
-    info!("OFP Server listening on {} (node_id={})", listener.local_addr()?, node_id);
+    info!(
+        "OFP Server listening on {} (node_id={})",
+        listener.local_addr()?,
+        node_id
+    );
 
     loop {
         match listener.accept().await {
@@ -89,7 +99,8 @@ pub async fn start_ofp_server(
                 let node_name_clone = node_name.clone();
                 let secret_clone = shared_secret.clone();
                 let registry_clone = registry.clone();
-                
+                let router_clone = router.clone();
+
                 tokio::spawn(async move {
                     if let Err(e) = handle_inbound_connection(
                         stream,
@@ -98,6 +109,7 @@ pub async fn start_ofp_server(
                         node_name_clone,
                         secret_clone,
                         registry_clone,
+                        router_clone,
                     )
                     .await
                     {
@@ -120,6 +132,7 @@ async fn handle_inbound_connection(
     local_node_name: String,
     shared_secret: String,
     registry: PeerRegistry,
+    router: std::sync::Arc<crate::router::JsonRpcRouter>,
 ) -> anyhow::Result<()> {
     let (mut reader, mut writer) = stream.into_split();
 
@@ -128,71 +141,74 @@ async fn handle_inbound_connection(
 
     let (peer_node_id, peer_node_name, peer_protocol_version, peer_agents, peer_extensions) =
         match msg.kind {
-        WireMessageKind::Request(WireRequest::Handshake {
-            node_id,
-            node_name,
-            protocol_version,
-            agents,
-            nonce,
-            auth_hmac,
-            extensions,
-        }) => {
-            if protocol_version != PROTOCOL_VERSION {
-                let err = WireMessage {
-                    id: msg.id.clone(),
-                    signature: None,
-                    seq_num: None,
-                    kind: WireMessageKind::Response(WireResponse::Error {
-                        code: 1,
-                        message: format!("Version mismatch. Expected {}", PROTOCOL_VERSION),
-                    }),
-                };
-                write_framed_message(&mut writer, &err).await?;
-                anyhow::bail!("Protocol version mismatch from {}", peer_addr);
-            }
-
-            // Verify HMAC
-            let expected_data = format!("{}{}", nonce, node_id);
-            if !hmac_verify(&shared_secret, expected_data.as_bytes(), &auth_hmac) {
-                let err = WireMessage {
-                    id: msg.id.clone(),
-                    signature: None,
-                    seq_num: None,
-                    kind: WireMessageKind::Response(WireResponse::Error {
-                        code: 403,
-                        message: "HMAC authentication failed".into(),
-                    }),
-                };
-                write_framed_message(&mut writer, &err).await?;
-                anyhow::bail!("HMAC auth failed for {}", peer_addr);
-            }
-
-            info!(
-                "OFP: authenticated handshake via {} ({}) from {} [{} agents]",
-                node_name, node_id, peer_addr, agents.len()
-            );
-            (
+            WireMessageKind::Request(WireRequest::Handshake {
                 node_id,
                 node_name,
                 protocol_version,
                 agents,
-                extensions.unwrap_or_default(),
-            )
-        }
-        _ => {
-            let err = WireMessage {
-                id: msg.id.clone(),
-                signature: None,
-                seq_num: None,
-                kind: WireMessageKind::Response(WireResponse::Error {
-                    code: 401,
-                    message: "First message must be Handshake".into(),
-                }),
-            };
-            write_framed_message(&mut writer, &err).await?;
-            anyhow::bail!("Unauthenticated connection attempt from {}", peer_addr);
-        }
-    };
+                nonce,
+                auth_hmac,
+                extensions,
+            }) => {
+                if protocol_version != PROTOCOL_VERSION {
+                    let err = WireMessage {
+                        id: msg.id.clone(),
+                        signature: None,
+                        seq_num: None,
+                        kind: WireMessageKind::Response(WireResponse::Error {
+                            code: 1,
+                            message: format!("Version mismatch. Expected {}", PROTOCOL_VERSION),
+                        }),
+                    };
+                    write_framed_message(&mut writer, &err).await?;
+                    anyhow::bail!("Protocol version mismatch from {}", peer_addr);
+                }
+
+                // Verify HMAC
+                let expected_data = format!("{}{}", nonce, node_id);
+                if !hmac_verify(&shared_secret, expected_data.as_bytes(), &auth_hmac) {
+                    let err = WireMessage {
+                        id: msg.id.clone(),
+                        signature: None,
+                        seq_num: None,
+                        kind: WireMessageKind::Response(WireResponse::Error {
+                            code: 403,
+                            message: "HMAC authentication failed".into(),
+                        }),
+                    };
+                    write_framed_message(&mut writer, &err).await?;
+                    anyhow::bail!("HMAC auth failed for {}", peer_addr);
+                }
+
+                info!(
+                    "OFP: authenticated handshake via {} ({}) from {} [{} agents]",
+                    node_name,
+                    node_id,
+                    peer_addr,
+                    agents.len()
+                );
+                (
+                    node_id,
+                    node_name,
+                    protocol_version,
+                    agents,
+                    extensions.unwrap_or_default(),
+                )
+            }
+            _ => {
+                let err = WireMessage {
+                    id: msg.id.clone(),
+                    signature: None,
+                    seq_num: None,
+                    kind: WireMessageKind::Response(WireResponse::Error {
+                        code: 401,
+                        message: "First message must be Handshake".into(),
+                    }),
+                };
+                write_framed_message(&mut writer, &err).await?;
+                anyhow::bail!("Unauthenticated connection attempt from {}", peer_addr);
+            }
+        };
 
     // 2. Compute agreed extensions
     let mut agreed_extensions = Vec::new();
@@ -231,7 +247,11 @@ async fn handle_inbound_connection(
             agents: vec![], // TODO: populate from Gateway state
             nonce: ack_nonce,
             auth_hmac: ack_hmac,
-            extensions: if agreed_extensions.is_empty() { None } else { Some(agreed_extensions.clone()) },
+            extensions: if agreed_extensions.is_empty() {
+                None
+            } else {
+                Some(agreed_extensions.clone())
+            },
         }),
     };
     write_framed_message(&mut writer, &ack).await?;
@@ -287,13 +307,83 @@ async fn handle_inbound_connection(
                 }
                 write_framed_message(&mut writer, &resp).await?;
             }
+            WireMessageKind::Request(WireRequest::AgentMessage {
+                agent,
+                message,
+                sender,
+            }) => {
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let mut resp = match sender.as_deref() {
+                    Some(sender_agent)
+                        if registry.peer_hosts_agent(&peer_node_id, sender_agent).await =>
+                    {
+                        match router
+                            .spawn_agent_once(&agent, &message, &session_id, None, true)
+                            .await
+                        {
+                            Ok(result) => {
+                                let text = result.assistant_reply.unwrap_or_default();
+                                WireMessage {
+                                    id: req.id.clone(),
+                                    signature: None,
+                                    seq_num: None,
+                                    kind: WireMessageKind::Response(WireResponse::AgentResponse {
+                                        text,
+                                    }),
+                                }
+                            }
+                            Err(e) => WireMessage {
+                                id: req.id.clone(),
+                                signature: None,
+                                seq_num: None,
+                                kind: WireMessageKind::Response(WireResponse::Error {
+                                    code: 500,
+                                    message: format!("Agent spawn failed: {}", e),
+                                }),
+                            },
+                        }
+                    }
+                    Some(sender_agent) => WireMessage {
+                        id: req.id.clone(),
+                        signature: None,
+                        seq_num: None,
+                        kind: WireMessageKind::Response(WireResponse::Error {
+                            code: 403,
+                            message: format!(
+                                "Sender '{}' is not advertised by authenticated peer '{}'",
+                                sender_agent, peer_node_id
+                            ),
+                        }),
+                    },
+                    None => WireMessage {
+                        id: req.id.clone(),
+                        signature: None,
+                        seq_num: None,
+                        kind: WireMessageKind::Response(WireResponse::Error {
+                            code: 400,
+                            message: "AgentMessage sender is required for federated delivery"
+                                .into(),
+                        }),
+                    },
+                };
+
+                if use_msg_hmac {
+                    resp.seq_num = Some(outbound_seq);
+                    resp.signature = Some(sign_wire_message(&shared_secret, &resp)?);
+                    outbound_seq += 1;
+                }
+                write_framed_message(&mut writer, &resp).await?;
+            }
             // For now, return Error on everything else
             WireMessageKind::Request(_) => {
                 let mut resp = WireMessage {
                     id: req.id.clone(),
                     signature: None,
                     seq_num: None,
-                    kind: WireMessageKind::Response(WireResponse::Error { code: 501, message: "Not Implemented".into() }),
+                    kind: WireMessageKind::Response(WireResponse::Error {
+                        code: 501,
+                        message: "Not Implemented".into(),
+                    }),
                 };
                 if use_msg_hmac {
                     resp.seq_num = Some(outbound_seq);
@@ -319,7 +409,11 @@ pub async fn read_framed_message(
 
     let len = decode_length(&header);
     if len > MAX_MESSAGE_SIZE {
-        anyhow::bail!("Message too large: {} exceeds limit {}", len, MAX_MESSAGE_SIZE);
+        anyhow::bail!(
+            "Message too large: {} exceeds limit {}",
+            len,
+            MAX_MESSAGE_SIZE
+        );
     }
 
     let mut body = vec![0u8; len as usize];

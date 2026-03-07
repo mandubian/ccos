@@ -7,7 +7,10 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 enum Transport {
     Stdio(StdioTransport),
-    Sse { client: reqwest::Client, url: String },
+    Sse {
+        client: reqwest::Client,
+        url: String,
+    },
 }
 
 struct StdioTransport {
@@ -93,7 +96,11 @@ impl McpClient {
         })
     }
 
-    async fn request(&mut self, method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
         let req = JsonRpcRequest::new(self.next_id, method, params);
         self.next_id += 1;
 
