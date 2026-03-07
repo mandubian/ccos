@@ -36,9 +36,7 @@ pub enum McpTransportConfig {
     Stdio,
     /// JSON-RPC HTTP endpoint for SSE-capable MCP servers.
     /// The endpoint should accept MCP JSON-RPC requests.
-    Sse {
-        url: String,
-    },
+    Sse { url: String },
 }
 
 impl Default for McpTransportConfig {

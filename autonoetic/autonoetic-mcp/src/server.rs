@@ -52,7 +52,9 @@ impl<E: AgentExecutor> AgentMcpServer<E> {
     /// Handle one MCP JSON-RPC request and return JSON-RPC response.
     pub async fn handle(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         match req.method.as_str() {
-            "tools/list" => JsonRpcResponse::ok(req.id, serde_json::json!({ "tools": self.list_tools() })),
+            "tools/list" => {
+                JsonRpcResponse::ok(req.id, serde_json::json!({ "tools": self.list_tools() }))
+            }
             "tools/call" => match self.handle_tools_call(&req.params).await {
                 Ok(result) => JsonRpcResponse::ok(req.id, result),
                 Err(e) => JsonRpcResponse::err(req.id, -32602, e.to_string()),
@@ -61,7 +63,10 @@ impl<E: AgentExecutor> AgentMcpServer<E> {
         }
     }
 
-    async fn handle_tools_call(&self, params: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn handle_tools_call(
+        &self,
+        params: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
         let tool_name = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -113,7 +118,10 @@ mod tests {
 
         let list_req = JsonRpcRequest::new(1, "tools/list", serde_json::json!({}));
         let list_resp = server.handle(list_req).await;
-        let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().clone();
+        let tools = list_resp.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "autonoetic_agent_coder");
 
