@@ -9,4 +9,5 @@ pub mod lifecycle;
 pub mod mcp;
 pub mod memory;
 pub mod parser;
+pub mod session_context;
 pub mod store;
