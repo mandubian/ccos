@@ -246,9 +246,9 @@ fn handle_stub_connection(
         .get("messages")
         .and_then(|value| value.as_array())
         .map(|messages| {
-            messages.iter().any(|message| {
-                message.get("role").and_then(|value| value.as_str()) == Some("tool")
-            })
+            messages
+                .iter()
+                .any(|message| message.get("role").and_then(|value| value.as_str()) == Some("tool"))
         })
         .unwrap_or(false);
 
@@ -256,7 +256,8 @@ fn handle_stub_connection(
         thread::sleep(Duration::from_millis(300));
     }
 
-    let response_body = if latest_user_message.contains("please store this data") && !has_tool_result
+    let response_body = if latest_user_message.contains("please store this data")
+        && !has_tool_result
     {
         serde_json::json!({
             "choices": [{
@@ -275,8 +276,7 @@ fn handle_stub_connection(
             }],
             "usage": {"prompt_tokens": 12, "completion_tokens": 3}
         })
-    } else if latest_user_message.contains("please store this data") && has_tool_result
-    {
+    } else if latest_user_message.contains("please store this data") && has_tool_result {
         serde_json::json!({
             "choices": [{
                 "message": { "content": "I stored it" },

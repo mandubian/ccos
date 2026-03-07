@@ -790,6 +790,7 @@ async fn run_agent_with_runtime_with_driver(
         instructions,
         driver,
         agent_dir,
+        autonoetic_gateway::runtime::tools::default_registry(),
     );
     if let Some(message) = kickoff_message {
         runtime = runtime.with_initial_user_message(message.to_string());
