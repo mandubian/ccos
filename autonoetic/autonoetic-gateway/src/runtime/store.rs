@@ -39,15 +39,20 @@ impl SecretStoreRuntime {
         }))
     }
 
-    pub fn apply_and_redact(&mut self, response_text: &str) -> anyhow::Result<String> {
+    pub fn apply_and_redact(
+        &mut self,
+        response_text: &str,
+    ) -> anyhow::Result<(String, Vec<String>)> {
         let mut value: Value = match serde_json::from_str(response_text) {
             Ok(v) => v,
-            Err(_) => return Ok(response_text.to_string()),
+            Err(_) => return Ok((response_text.to_string(), Vec::new())),
         };
         let mut changed = false;
+        let mut extracted_secrets = Vec::new();
 
         for d in &self.directives {
             if let Some(secret_val) = extract_json_path_as_string(&value, &d.source_path) {
+                extracted_secrets.push(secret_val.clone());
                 self.vault.set_secret(&d.secret_name, secret_val);
                 redact_json_path(&mut value, &d.source_path, "[REDACTED]");
                 changed = true;
@@ -57,7 +62,7 @@ impl SecretStoreRuntime {
         if changed {
             self.vault.persist_to_file(&self.vault_path)?;
         }
-        Ok(serde_json::to_string(&value)?)
+        Ok((serde_json::to_string(&value)?, extracted_secrets))
     }
 }
 

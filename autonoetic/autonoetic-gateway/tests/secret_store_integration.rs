@@ -25,7 +25,7 @@ fn test_response_secret_is_persisted_and_redacted() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Expected secret store directives to be loaded"))?;
 
     let tool_response = r#"{"agent_id":"agent-123","secret":"super-secret-value"}"#;
-    let redacted = runtime.apply_and_redact(tool_response)?;
+    let (redacted, extracted) = runtime.apply_and_redact(tool_response)?;
     let redacted_json: serde_json::Value = serde_json::from_str(&redacted)?;
 
     assert_eq!(redacted_json["agent_id"], "agent-123");
@@ -34,6 +34,10 @@ fn test_response_secret_is_persisted_and_redacted() -> anyhow::Result<()> {
     let vault_raw = std::fs::read_to_string(&vault_path)?;
     let vault_json: serde_json::Value = serde_json::from_str(&vault_raw)?;
     assert_eq!(vault_json["MOLTBOOK_SECRET"], "super-secret-value");
+
+    // Assert that apply_and_redact successfully extracted the core secret string as well
+    assert_eq!(extracted.len(), 1);
+    assert_eq!(extracted[0], "super-secret-value");
 
     match old_vault_env {
         Some(v) => std::env::set_var("AUTONOETIC_VAULT_PATH", v),

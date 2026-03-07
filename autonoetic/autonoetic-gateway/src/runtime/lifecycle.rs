@@ -310,6 +310,9 @@ impl AgentExecutor {
             );
         }
         let policy = PolicyEngine::new(self.manifest.clone());
+        let mut disclosure_state = crate::runtime::disclosure::DisclosureState::new(
+            self.manifest.disclosure.clone().unwrap_or_default(),
+        );
 
         let model = self
             .manifest
@@ -483,8 +486,32 @@ impl AgentExecutor {
                             anyhow::bail!("Unknown tool '{}'", tc.name)
                         };
                         let mut result = result;
+
+                        let mut path_arg = None;
+                        if tc.name == MEMORY_READ_FILE_TOOL_NAME
+                            || tc.name == MEMORY_WRITE_FILE_TOOL_NAME
+                        {
+                            if let Ok(parsed_args) =
+                                serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                            {
+                                if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str())
+                                {
+                                    path_arg = Some(path.to_string());
+                                }
+                            }
+                        }
+                        disclosure_state.register_result(&tc.name, path_arg.as_deref(), &result);
+
                         if let Some(ref mut store_runtime) = secret_store {
-                            result = store_runtime.apply_and_redact(&result)?;
+                            let (new_result, extracted_secrets) =
+                                store_runtime.apply_and_redact(&result)?;
+                            result = new_result;
+                            for secret_val in extracted_secrets {
+                                disclosure_state.register_explicit_taint(
+                                    &secret_val,
+                                    autonoetic_types::disclosure::DisclosureClass::Secret,
+                                );
+                            }
                         }
                         let mut completed_payload = serde_json::json!({
                             "tool_name": tc.name,
@@ -591,7 +618,7 @@ impl AgentExecutor {
             }
         }
 
-        Ok(latest_assistant_text)
+        Ok(latest_assistant_text.map(|t| disclosure_state.filter_reply(&t)))
     }
 }
 
@@ -1050,14 +1077,15 @@ mod tests {
                 runtime_lock: "runtime.lock".to_string(),
             },
             agent: AgentIdentity {
-                id: "agent".to_string(),
-                name: "Agent".to_string(),
-                description: "desc".to_string(),
+                id: "test-agent".to_string(),
+                name: "test-agent".to_string(),
+                description: "test".to_string(),
             },
             capabilities,
             llm_config: None,
             limits: None,
             background: None,
+            disclosure: None,
         }
     }
 
