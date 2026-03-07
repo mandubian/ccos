@@ -10,4 +10,8 @@
     "chat.tools.terminal.autoApprove": {
         "diff": true
     },
+    "rust-analyzer.linkedProjects": [
+        "./Cargo.toml",
+        "./autonoetic/Cargo.toml"
+    ]
 }

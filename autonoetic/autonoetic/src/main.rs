@@ -1,9 +1,14 @@
-use clap::{Parser, Subcommand, Args};
+use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
 use autonoetic_gateway::llm::{CompletionRequest, Message};
+use autonoetic_gateway::router::{
+    JsonRpcRequest as GatewayJsonRpcRequest, JsonRpcResponse as GatewayJsonRpcResponse,
+};
 use autonoetic_gateway::runtime::parser::SkillParser;
-use autonoetic_mcp::protocol::{JsonRpcRequest, JsonRpcResponse};
+use autonoetic_mcp::protocol::{
+    JsonRpcRequest as McpJsonRpcRequest, JsonRpcResponse as McpJsonRpcResponse,
+};
 use autonoetic_mcp::{
     AgentExecutor as McpAgentExecutor, AgentMcpServer, ExposedAgent, McpClient, McpServer, McpTool,
     McpTransportConfig,
@@ -14,9 +19,14 @@ use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 
 #[derive(Parser)]
-#[command(name = "autonoetic", about = "CLI for managing the Autonoetic Agent System", version)]
+#[command(
+    name = "autonoetic",
+    about = "CLI for managing the Autonoetic Agent System",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -40,6 +50,8 @@ enum Commands {
     Gateway(GatewayArgs),
     /// Manage Autonoetic Agents
     Agent(AgentArgs),
+    /// Chat with an agent through gateway JSON-RPC ingress
+    Chat(ChatArgs),
     /// Inspect causal chain traces
     Trace(TraceArgs),
     /// Ecosystem and Skills management
@@ -82,6 +94,37 @@ enum GatewayCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect or decide pending background approvals.
+    Approvals {
+        #[command(subcommand)]
+        command: GatewayApprovalCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum GatewayApprovalCommands {
+    /// List pending approval requests.
+    List {
+        /// Emit machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Approve one pending request.
+    Approve {
+        /// Approval request identifier.
+        request_id: String,
+        /// Optional approval note.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reject one pending request.
+    Reject {
+        /// Approval request identifier.
+        request_id: String,
+        /// Optional rejection note.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +162,28 @@ enum AgentCommands {
     },
     /// Lists all local Agents registered with the Gateway
     List,
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+#[derive(Args)]
+struct ChatArgs {
+    /// Agent ID to send chat messages to.
+    agent_id: String,
+    /// Stable sender identity for the terminal client.
+    #[arg(long)]
+    sender_id: Option<String>,
+    /// Stable channel identity for the terminal surface.
+    #[arg(long)]
+    channel_id: Option<String>,
+    /// Stable conversation/session identifier.
+    #[arg(long)]
+    session_id: Option<String>,
+    /// Suppress prompts and banners for deterministic scripted tests.
+    #[arg(long)]
+    test_mode: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +330,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Resolve config path
-    let config_path = cli.config
+    let config_path = cli
+        .config
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_or_default().join("config.yaml"));
     std::env::set_var(
@@ -310,6 +376,9 @@ async fn main() -> anyhow::Result<()> {
             GatewayCommands::Status { json } => {
                 print_gateway_status(&config_path, *json).await?;
             }
+            GatewayCommands::Approvals { command } => {
+                handle_gateway_approvals(&config_path, command)?;
+            }
         },
 
         // ---- Agent ----
@@ -318,8 +387,16 @@ async fn main() -> anyhow::Result<()> {
                 info!("Initializing Agent {} (template: {:?})", agent_id, template);
                 init_agent_scaffold(&config_path, agent_id, template.as_deref())?;
             }
-            AgentCommands::Run { agent_id, message, interactive, headless } => {
-                info!("Running Agent {} (interactive: {}, headless: {})", agent_id, interactive, headless);
+            AgentCommands::Run {
+                agent_id,
+                message,
+                interactive,
+                headless,
+            } => {
+                info!(
+                    "Running Agent {} (interactive: {}, headless: {})",
+                    agent_id, interactive, headless
+                );
                 if let Some(msg) = message {
                     info!("Kickoff message: {}", msg);
                 }
@@ -345,6 +422,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+
+        // ---- Chat ----
+        Commands::Chat(args) => {
+            run_terminal_chat(&config_path, args).await?;
+        }
 
         // ---- Trace ----
         Commands::Trace(args) => match &args.command {
@@ -399,9 +481,13 @@ async fn main() -> anyhow::Result<()> {
                     (Some(_), None) => McpTransportConfig::Stdio,
                     (None, Some(url)) => McpTransportConfig::Sse { url: url.clone() },
                     (Some(_), Some(_)) => {
-                        anyhow::bail!("Specify exactly one MCP transport: either --command or --sse-url")
+                        anyhow::bail!(
+                            "Specify exactly one MCP transport: either --command or --sse-url"
+                        )
                     }
-                    (None, None) => anyhow::bail!("Missing MCP transport: provide --command or --sse-url"),
+                    (None, None) => {
+                        anyhow::bail!("Missing MCP transport: provide --command or --sse-url")
+                    }
                 };
 
                 let server = McpServer {
@@ -473,11 +559,12 @@ fn save_mcp_servers(path: &Path, servers: &[McpServer]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_agent_scaffold(config_path: &Path, agent_id: &str, template: Option<&str>) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !agent_id.trim().is_empty(),
-        "agent_id must not be empty"
-    );
+fn init_agent_scaffold(
+    config_path: &Path,
+    agent_id: &str,
+    template: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!agent_id.trim().is_empty(), "agent_id must not be empty");
 
     let config = autonoetic_gateway::config::load_config(config_path)?;
     std::fs::create_dir_all(&config.agents_dir)?;
@@ -497,9 +584,16 @@ fn init_agent_scaffold(config_path: &Path, agent_id: &str, template: Option<&str
 
     let skill_md = render_skill_template(agent_id, template);
     std::fs::write(agent_dir.join("SKILL.md"), skill_md)?;
-    std::fs::write(agent_dir.join("runtime.lock"), default_runtime_lock_contents())?;
+    std::fs::write(
+        agent_dir.join("runtime.lock"),
+        default_runtime_lock_contents(),
+    )?;
 
-    println!("Initialized agent '{}' in {}", agent_id, agent_dir.display());
+    println!(
+        "Initialized agent '{}' in {}",
+        agent_id,
+        agent_dir.display()
+    );
     Ok(())
 }
 
@@ -664,7 +758,13 @@ fn load_agent_runtime_context(
     let target = agents
         .into_iter()
         .find(|a| a.id == agent_id)
-        .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found in {}", agent_id, config.agents_dir.display()))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Agent '{}' not found in {}",
+                agent_id,
+                config.agents_dir.display()
+            )
+        })?;
 
     let skill_path = target.dir.join("SKILL.md");
     let skill_content = std::fs::read_to_string(&skill_path)?;
@@ -782,18 +882,146 @@ async fn run_interactive_session(
     Ok(())
 }
 
+async fn run_terminal_chat(config_path: &Path, args: &ChatArgs) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let session_id = args
+        .session_id
+        .clone()
+        .unwrap_or_else(|| format!("terminal-session::{}", uuid::Uuid::new_v4()));
+    let sender_id = args
+        .sender_id
+        .clone()
+        .unwrap_or_else(default_terminal_sender_id);
+    let channel_id = args
+        .channel_id
+        .clone()
+        .unwrap_or_else(|| default_terminal_channel_id(&sender_id, &args.agent_id));
+    let gateway_addr = format!("127.0.0.1:{}", config.port);
+    let stream = TcpStream::connect(&gateway_addr).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to connect to gateway JSON-RPC at {}: {}",
+            gateway_addr,
+            e
+        )
+    })?;
+    let (read_half, mut write_half) = stream.into_split();
+    let mut gateway_lines = BufReader::new(read_half).lines();
+    let mut stdin_lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut stdout = tokio::io::stdout();
+    let envelope = terminal_channel_envelope(&channel_id, &sender_id, &session_id);
+    let mut request_counter = 0_u64;
+
+    if !args.test_mode {
+        stdout
+            .write_all(
+                format!(
+                    "Gateway terminal chat enabled for '{}' via {}. Type /exit to quit.\n",
+                    args.agent_id, gateway_addr
+                )
+                .as_bytes(),
+            )
+            .await?;
+        stdout.flush().await?;
+    }
+
+    loop {
+        if !args.test_mode {
+            stdout.write_all(b"> ").await?;
+            stdout.flush().await?;
+        }
+
+        let Some(line) = stdin_lines.next_line().await? else {
+            break;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "/exit" || trimmed == "/quit" {
+            break;
+        }
+
+        request_counter += 1;
+        let request = GatewayJsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: format!("terminal-chat-{}", request_counter),
+            method: "event.ingest".to_string(),
+            params: serde_json::json!({
+                "event_type": "chat",
+                "target_agent_id": &args.agent_id,
+                "message": trimmed,
+                "session_id": &session_id,
+                "metadata": envelope.clone(),
+            }),
+        };
+        let encoded = serde_json::to_string(&request)?;
+        write_half.write_all(encoded.as_bytes()).await?;
+        write_half.write_all(b"\n").await?;
+        write_half.flush().await?;
+
+        let response_line = gateway_lines.next_line().await?.ok_or_else(|| {
+            anyhow::anyhow!("Gateway JSON-RPC connection closed before a response was received")
+        })?;
+        let response: GatewayJsonRpcResponse = serde_json::from_str(&response_line)?;
+        if let Some(error) = response.error {
+            anyhow::bail!(
+                "Gateway chat request failed (code {}): {}",
+                error.code,
+                error.message
+            );
+        }
+
+        let reply = response
+            .result
+            .and_then(|value| {
+                value
+                    .get("assistant_reply")
+                    .and_then(|reply| reply.as_str().map(ToOwned::to_owned))
+            })
+            .unwrap_or_else(|| "[No assistant text returned]".to_string());
+        stdout.write_all(reply.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+        stdout.flush().await?;
+    }
+
+    Ok(())
+}
+
+fn default_terminal_sender_id() -> String {
+    std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "terminal-user".to_string())
+}
+
+fn default_terminal_channel_id(sender_id: &str, agent_id: &str) -> String {
+    format!("terminal:{}:{}", sender_id, agent_id)
+}
+
+fn terminal_channel_envelope(
+    channel_id: &str,
+    sender_id: &str,
+    session_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "channel": {
+            "kind": "terminal",
+            "channel_id": channel_id,
+            "sender_id": sender_id,
+            "session_id": session_id
+        }
+    })
+}
+
 async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
     let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
     let registry_path = mcp_registry_path(config_path);
     let servers = load_mcp_servers(&registry_path)?;
 
-    let mut mcp_server_rows: Vec<(
-        String,
-        String,
-        serde_json::Value,
-        Vec<McpTool>,
-    )> = Vec::with_capacity(servers.len());
+    let mut mcp_server_rows: Vec<(String, String, serde_json::Value, Vec<McpTool>)> =
+        Vec::with_capacity(servers.len());
     for server in servers {
         let mut client = McpClient::connect(&server).await?;
         let tools = client.list_tools().await?;
@@ -848,7 +1076,11 @@ async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::
                 "config_path": config_path.display().to_string(),
                 "jsonrpc_port": config.port,
                 "ofp_port": config.ofp_port,
-                "ofp_tls": config.tls
+                "ofp_tls": config.tls,
+                "background_scheduler_enabled": config.background_scheduler_enabled,
+                "background_tick_secs": config.background_tick_secs,
+                "background_min_interval_secs": config.background_min_interval_secs,
+                "max_background_due_per_tick": config.max_background_due_per_tick
             },
             "agents": {
                 "dir": config.agents_dir.display().to_string(),
@@ -870,6 +1102,13 @@ async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::
     println!(" jsonrpc_port: {}", config.port);
     println!(" ofp_port: {}", config.ofp_port);
     println!(" ofp_tls: {}", config.tls);
+    println!(
+        " background_scheduler: enabled={}, tick_secs={}, min_interval_secs={}, max_due_per_tick={}",
+        config.background_scheduler_enabled,
+        config.background_tick_secs,
+        config.background_min_interval_secs,
+        config.max_background_due_per_tick
+    );
     println!(" agents_dir: {}", config.agents_dir.display());
     println!(" agents_count: {}", agents.len());
     for agent in &agents {
@@ -890,6 +1129,68 @@ async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::
         }
     }
 
+    Ok(())
+}
+
+fn handle_gateway_approvals(
+    config_path: &Path,
+    command: &GatewayApprovalCommands,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    match command {
+        GatewayApprovalCommands::List { json } => {
+            let approvals = autonoetic_gateway::scheduler::load_approval_requests(&config)?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&approvals)?);
+                return Ok(());
+            }
+            if approvals.is_empty() {
+                println!("No pending background approval requests.");
+                return Ok(());
+            }
+            println!(
+                "{:<38} {:<20} {:<24} ACTION",
+                "REQUEST ID", "AGENT", "CREATED AT"
+            );
+            for approval in approvals {
+                println!(
+                    "{:<38} {:<20} {:<24} {}",
+                    approval.request_id,
+                    approval.agent_id,
+                    approval.created_at,
+                    approval.action.kind()
+                );
+            }
+        }
+        GatewayApprovalCommands::Approve { request_id, reason } => {
+            let decision = autonoetic_gateway::scheduler::approve_request(
+                &config,
+                request_id,
+                "cli",
+                reason.clone(),
+            )?;
+            println!(
+                "Approved {} for agent {} ({})",
+                decision.request_id,
+                decision.agent_id,
+                decision.action.kind()
+            );
+        }
+        GatewayApprovalCommands::Reject { request_id, reason } => {
+            let decision = autonoetic_gateway::scheduler::reject_request(
+                &config,
+                request_id,
+                "cli",
+                reason.clone(),
+            )?;
+            println!(
+                "Rejected {} for agent {} ({})",
+                decision.request_id,
+                decision.agent_id,
+                decision.action.kind()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -946,7 +1247,12 @@ fn print_trace_sessions(
     for s in sessions {
         println!(
             "{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}",
-            s.agent_id, s.session_id, s.first_timestamp, s.last_timestamp, s.event_count, s.max_event_seq
+            s.agent_id,
+            s.session_id,
+            s.first_timestamp,
+            s.last_timestamp,
+            s.event_count,
+            s.max_event_seq
         );
     }
     Ok(())
@@ -1088,7 +1394,10 @@ fn print_trace_event(
     Ok(())
 }
 
-fn load_agent_traces(config_path: &Path, requested_agent: Option<&str>) -> anyhow::Result<Vec<AgentTrace>> {
+fn load_agent_traces(
+    config_path: &Path,
+    requested_agent: Option<&str>,
+) -> anyhow::Result<Vec<AgentTrace>> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
     let mut agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
     if let Some(agent_id) = requested_agent {
@@ -1126,15 +1435,25 @@ fn read_trace_entries(path: &Path) -> anyhow::Result<Vec<CausalChainEntry>> {
         if trimmed.is_empty() {
             continue;
         }
-        let entry: CausalChainEntry = serde_json::from_str(trimmed)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON in {} at line {}: {}", path.display(), idx + 1, e))?;
+        let entry: CausalChainEntry = serde_json::from_str(trimmed).map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid JSON in {} at line {}: {}",
+                path.display(),
+                idx + 1,
+                e
+            )
+        })?;
         validate_trace_entry(&entry, path, idx + 1)?;
         entries.push(entry);
     }
     Ok(entries)
 }
 
-fn validate_trace_entry(entry: &CausalChainEntry, path: &Path, line_no: usize) -> anyhow::Result<()> {
+fn validate_trace_entry(
+    entry: &CausalChainEntry,
+    path: &Path,
+    line_no: usize,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         !entry.session_id.trim().is_empty(),
         "Invalid causal entry in {} at line {}: missing top-level session_id",
@@ -1199,7 +1518,8 @@ impl McpAgentExecutor for CliAgentExecutor {
             .llm_config
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
 
-        let driver = autonoetic_gateway::llm::build_driver(llm_config.clone(), self.client.clone())?;
+        let driver =
+            autonoetic_gateway::llm::build_driver(llm_config.clone(), self.client.clone())?;
         let req = CompletionRequest::simple(
             llm_config.model,
             vec![Message::system(instructions), Message::user(message)],
@@ -1218,7 +1538,13 @@ async fn run_mcp_stdio_server(agent_id: &str, config_path: &Path) -> anyhow::Res
     let meta = agents
         .into_iter()
         .find(|a| a.id == agent_id)
-        .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found in {}", agent_id, config.agents_dir.display()))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Agent '{}' not found in {}",
+                agent_id,
+                config.agents_dir.display()
+            )
+        })?;
     let skill_path = meta.dir.join("SKILL.md");
     let skill_content = std::fs::read_to_string(&skill_path)?;
     let (manifest, _) = SkillParser::parse(&skill_content)?;
@@ -1241,9 +1567,13 @@ async fn run_mcp_stdio_server(agent_id: &str, config_path: &Path) -> anyhow::Res
             continue;
         }
 
-        let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+        let response = match serde_json::from_str::<McpJsonRpcRequest>(trimmed) {
             Ok(req) => server.handle(req).await,
-            Err(e) => JsonRpcResponse::err(serde_json::Value::Null, -32700, format!("Parse error: {}", e)),
+            Err(e) => McpJsonRpcResponse::err(
+                serde_json::Value::Null,
+                -32700,
+                format!("Parse error: {}", e),
+            ),
         };
 
         let encoded = serde_json::to_vec(&response)?;
@@ -1266,7 +1596,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LlmDriver for DenySandboxExecDriver {
-        async fn complete(&self, request: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+        async fn complete(
+            &self,
+            request: &CompletionRequest,
+        ) -> anyhow::Result<CompletionResponse> {
             if !request.tools.iter().any(|t| t.name == "sandbox.exec") {
                 anyhow::bail!("sandbox.exec not exposed to model");
             }
@@ -1321,11 +1654,7 @@ Use tools when needed.
             "agents_dir: \"{}\"\nport: 4000\nofp_port: 4200\ntls: false\n",
             agents_dir.display()
         );
-        std::fs::write(
-            &config_path,
-            config_yaml,
-        )
-        .expect("config should write");
+        std::fs::write(&config_path, config_yaml).expect("config should write");
 
         let (manifest, instructions, loaded_agent_dir) =
             load_agent_runtime_context(&config_path, "agent_demo").expect("context should load");
@@ -1363,8 +1692,8 @@ Use tools when needed.
             .expect("scaffold should succeed");
 
         let agent_dir = agents_dir.join("agent_bootstrap");
-        let skill = std::fs::read_to_string(agent_dir.join("SKILL.md"))
-            .expect("SKILL.md should exist");
+        let skill =
+            std::fs::read_to_string(agent_dir.join("SKILL.md")).expect("SKILL.md should exist");
         let lock = std::fs::read_to_string(agent_dir.join("runtime.lock"))
             .expect("runtime.lock should exist");
 
