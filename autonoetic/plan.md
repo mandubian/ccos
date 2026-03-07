@@ -169,3 +169,126 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - Causal schema now promotes `session_id`, `turn_id`, and `event_seq` to top-level fields and adds explicit `entry_hash` / `payload_hash` fields for cryptographic integrity and low-cost payload introspection.
 - Hash-chain linkage now uses SHA-256 and reloads continuity across process restarts by hydrating `last_hash` from the last persisted causal entry.
 - Added CLI trace introspection commands: `autonoetic trace sessions`, `autonoetic trace show <session_id>`, and `autonoetic trace event <log_id>` with optional `--agent` and `--json`.
+
+---
+
+## Phase 8: Gateway Event Ingress & Agent Orchestration 🔜
+
+- [x] Add a real Gateway JSON-RPC listener on `config.port` (line-delimited JSON-RPC over TCP).
+- [x] Add `event.ingest` and `agent.spawn` JSON-RPC methods that trigger an agent runtime session.
+- [x] Add policy gate for spawn delegation (`AgentSpawn` / `AgentMessage`) before runtime dispatch.
+- [x] Implement OFP inbound `AgentMessage` handling to execute targeted local agent sessions (replace `501 Not Implemented` path).
+- [x] Add end-to-end integration tests for external event -> gateway ingress -> agent reply -> causal trace verification.
+- [x] Add reliability controls for ingress (`max concurrent spawns`, per-agent queueing, and backpressure behavior).
+
+### Progress notes
+
+- Gateway now boots both OFP and JSON-RPC listeners concurrently.
+- `agent.spawn` loads agent manifest/instructions from disk and executes one runtime turn via the same lifecycle engine used by CLI, including causal/session tracing.
+- `event.ingest` converts incoming event payload into a kickoff prompt and dispatches to the target agent.
+- Gateway JSON-RPC dispatch now writes its own causal entries (`*.requested` / `*.completed` / `*.failed`) to `agents/.gateway/history/causal_chain.jsonl` with shared session IDs for cross-layer trace correlation.
+- Added a hermetic live-ingress test in `autonoetic-gateway/tests/gateway_ingress_integration.rs` that hits the TCP JSON-RPC listener, runs a real `event.ingest` session through a local OpenAI-compatible stub, and verifies both gateway and agent causal traces share the same session ID.
+- Gateway ingress now enforces configurable reliability controls via `max_concurrent_spawns` and `max_pending_spawns_per_agent`, with per-agent serialization and explicit backpressure errors when either the global execution budget or an agent queue is full.
+- Added router unit coverage for delegated spawn limits, per-agent queue overflow, and global concurrent execution backpressure.
+
+---
+
+## Phase 9: Governed Background Reevaluation & Evolution 🔜
+
+- [x] Add a gateway-owned reevaluation cadence model for agents/sessions (`evaluation_interval_secs` or BPM-style policy) instead of agent-driven self-respawn.
+- [x] Keep transport/process heartbeat separate from work scheduling; heartbeat remains liveness telemetry only.
+- [x] Add a scheduler-managed `should_wake` decision path that evaluates whether an agent needs more work before waking it.
+- [x] Define wake predicates for: new inbound messages, delegated task completions, unresolved queued work, stale goals, retryable failures, and explicit timers.
+- [x] Record wake reasons in the gateway causal chain so every background wake has an auditable cause.
+- [x] Reuse existing ingress reliability controls for background wakes so cadence-driven execution respects global concurrency, per-agent admission, and backpressure.
+- [x] Add deduplication rules so periodic reevaluation cannot create overlapping or duplicate background runs for the same agent/session.
+- [x] Add policy controls for which agents are allowed background reevaluation and what maximum cadence they may request.
+- [x] Support two execution modes for cadence wakes: direct approved capability trigger for deterministic jobs, or full agent wake for open-ended reasoning jobs.
+- [x] Add memory-aware reevaluation so the scheduler can wake an agent based on persisted state markers and prior-run outcomes, not just time.
+- [x] Add integration tests for idle cadence, wake-on-new-work, dedup under rapid ticks, paused-on-approval flows, and backpressure under many due agents.
+- [x] Add an end-to-end evolution test: periodic reevaluation -> detect gap -> create candidate skill/code artifact -> request approval -> execute approved capability on a later wake.
+
+### Progress notes
+
+- Design intent: treat cadence as a gateway scheduling primitive, not as an agent recursively waking itself.
+- Existing liveness heartbeat in CCOS should remain telemetry; Autonoetic background progress should route through the gateway scheduler and policy engine.
+- The first implementation should prefer deterministic wake predicates and approved direct-capability triggers before enabling broader open-ended background reasoning.
+- Added `background` manifest policy, `BackgroundReevaluation` capability, gateway scheduler guardrails, and durable scheduler state/approval types.
+- Gateway now starts a background scheduler alongside OFP and JSON-RPC listeners; background wakes reuse the shared execution path and existing ingress admission/backpressure controls.
+- Added durable `.gateway/scheduler/` storage for agent state, inbox/task-board inputs, and pending/approved/rejected approval decisions, plus CLI commands for `gateway approvals list|approve|reject`.
+- Added deterministic direct actions for approved `write_file` and existing `sandbox_exec`, and persisted `state/reevaluation.json` markers (`retry_not_before`, `stale_goal_at`, `last_outcome`, `pending_scheduled_action`, `open_approval_request_ids`).
+- Added scheduler coverage for idle timer cadence, wake-on-new-work, rapid-tick dedup, paused-on-approval, due-agent throttling, and approval-to-approved-artifact evolution flow.
+
+### Integration test track
+
+- [ ] Add a dedicated Autonoetic integration-test harness for gateway + agent runtime + local stub LLM.
+- [ ] Keep test fixtures and helper utilities inside Autonoetic crates; do not depend on CCOS runtime code or test modules.
+- [ ] Use CCOS and OpenFang only as design references for useful patterns; reimplement only the pieces that fit Autonoetic architecture.
+
+#### Test A: Loopback channel -> memory -> outbound -> audit
+
+- [x] Add a loopback channel test transport in Autonoetic test code that simulates inbound user messages and captures outbound agent replies.
+- [x] Start the real Autonoetic gateway in test mode on ephemeral ports with temp agent directories, temp storage, and temp causal logs.
+- [x] Add a scripted local LLM stub that deterministically produces tool/action choices for the scenario.
+- [x] Drive an inbound message through the loopback transport to a real agent session.
+- [x] Assert that the agent writes state to its memory substrate during the first turn.
+- [x] Drive a later inbound message for the same logical conversation and assert the agent reads the previously stored state.
+- [x] Assert that the gateway emits the expected outbound reply through the loopback transport.
+- [ ] Strengthen audit assertions so the gateway completion entry and agent memory operation are correlated at per-turn granularity, not only by shared session ID.
+- [x] Add negative-path assertions for missing memory key/default handling and outbound backpressure or delivery failure reporting.
+
+#### Test B: Generate skill -> approval -> later approved execution
+
+- [x] Add an Autonoetic-native generated-skill test flow; do not call CCOS `ccos_create_skill` or depend on CCOS approval/runtime plumbing.
+- [x] Define the minimal Autonoetic draft-skill artifact shape needed for test generation, loading, and later execution.
+- [x] Add a temp learned-skills directory and artifact loader in the Autonoetic integration harness.
+- [x] Use a scripted local LLM stub so the first message causes the agent to draft a new skill/capability artifact.
+- [x] Execute the generated artifact once as a PoC inside the normal Autonoetic runtime path.
+- [x] Submit the generated artifact into an Autonoetic approval queue with explicit evidence from the PoC run.
+- [x] Assert that the artifact is not eligible for scheduled/background reuse until approval is granted.
+- [x] Programmatically approve the artifact in the test and verify registry/loader state updates accordingly.
+- [x] Send a later message that should reuse the approved artifact and assert the agent executes it successfully without regenerating it.
+- [x] Assert full audit coverage for draft generation, PoC execution, approval pending, approval granted, and approved reuse.
+
+#### Follow-up extraction tasks
+
+- [ ] Factor Autonoetic test helpers into a shared test-support module for temp workspace setup, local LLM stubs, message injection, and causal-log inspection.
+- [ ] Add deterministic approval-fixture helpers so approval-dependent tests do not need manual steps.
+- [ ] Add a small catalog of reusable test agents covering: memory recall, outbound messaging, generated skill draft, and approved skill reuse.
+- [ ] Document the test philosophy clearly: Autonoetic remains implementation-independent even when borrowing ideas from CCOS/OpenFang.
+
+#### Terminal chat client (gateway-native trigger surface)
+
+- [x] Add an Autonoetic CLI command for terminal chat, separate from local `agent run --interactive` runtime behavior.
+- [x] Route terminal chat through gateway JSON-RPC ingress (`event.ingest`) instead of calling agent runtime directly.
+- [x] Define a terminal-channel envelope model with stable `channel_id`, `sender_id`, and session identifiers so terminal conversations map cleanly to future channel adapters.
+- [x] Support a minimal request/reply UX first: read a user line from stdin, send an ingress event, print the agent reply, repeat until `/exit`.
+- [x] Keep the terminal chat client thin; do not duplicate runtime, policy, or orchestration logic already owned by the gateway.
+- [x] Add a test mode for the terminal chat client so integration tests can script stdin input and assert stdout replies deterministically.
+- [x] Verify that terminal chat exercises the same causal logging, policy checks, memory usage, and backpressure behavior as any other external ingress path.
+- [ ] Use the terminal chat client as the primary developer-facing trigger surface before adding Discord, WhatsApp, or other external adapters.
+
+#### Session context (thin per-session continuity)
+
+- [x] Add a gateway-owned `session context` artifact under `state/sessions/<session_id>.json` for bounded per-session continuity.
+- [x] Keep `session context` intentionally smaller than durable memory: recent exchange, compact known facts, and open threads only.
+- [x] Inject a rendered `session context` summary automatically into each new foreground `event.ingest` execution for the same session.
+- [x] Persist minimal session updates after each completed turn without requiring agent-authored tool calls.
+- [x] Keep durable memory (`memory.read` / `memory.write`) separate from `session context`; do not auto-inline the whole `state/` directory into prompts.
+- [x] Add strict size limits and pruning rules so session context remains cheap and predictable.
+- [x] Add focused runtime tests proving session context is persisted after one turn and injected on the next turn for the same session.
+- [ ] Later: promote selected durable-memory writes into session context only when there is a small, well-defined summarization rule.
+- [ ] Later: consider deriving session context updates from runtime/causal events instead of direct execution-path writes if the direct path becomes too coupled.
+
+#### Disclosure policy (reply governance over memory and tool output)
+
+- [ ] Add a first-class disclosure policy layer that evaluates whether tool results and retrieved memory may be repeated verbatim, summarized only, or withheld.
+- [ ] Keep disclosure policy separate from log/evidence redaction; logs may be redacted while assistant replies still require an explicit disclosure decision.
+- [ ] Classify output sources at minimum by origin: user input, session context, Tier 1 memory, Tier 2 memory, secret-store/vault material, sandbox output, and external tool output.
+- [ ] Add deterministic disclosure classes such as `public`, `internal`, `confidential`, and `secret`, with explicit reply behavior for each class.
+- [ ] Enforce path-based defaults for Tier 1 memory so designated locations can be marked summary-only or non-disclosable without relying on prompt wording.
+- [ ] Ensure secret-store and vault-managed values are never returned verbatim to the user unless an explicitly approved capability allows it.
+- [ ] Add a reply-filter step after tool execution and before final assistant output so disallowed content is replaced with safe summaries or refusal text.
+- [ ] Preserve the existing agent/runtime split: tools may return structured results, but disclosure enforcement should happen centrally in the runtime path.
+- [ ] Add focused tests proving the system can distinguish between normal memory recall and restricted/secret material in user-visible replies.
+- [ ] Add terminal-chat coverage that verifies session context may influence reasoning without causing protected values to be echoed back automatically.
