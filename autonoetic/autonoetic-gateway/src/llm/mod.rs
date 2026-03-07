@@ -6,6 +6,9 @@
 use autonoetic_types::agent::LlmConfig;
 use std::sync::Arc;
 
+const LLM_BASE_URL_OVERRIDE_ENV: &str = "AUTONOETIC_LLM_BASE_URL";
+const LLM_API_KEY_OVERRIDE_ENV: &str = "AUTONOETIC_LLM_API_KEY";
+
 pub mod anthropic;
 pub mod gemini;
 pub mod openai;
@@ -91,17 +94,32 @@ pub struct Message {
 impl Message {
     /// Convenience: plain text user message.
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::User,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 
     /// Convenience: system message.
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::System,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 
     /// Convenience: assistant text message.
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: content.into(), tool_calls: vec![], tool_call_id: None }
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
     }
 
     /// Convenience: tool result message.
@@ -202,10 +220,20 @@ impl CompletionResponse {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     TextDelta(String),
-    ToolUseStart { id: String, name: String },
+    ToolUseStart {
+        id: String,
+        name: String,
+    },
     ToolInputDelta(String),
-    ToolUseEnd { id: String, name: String, arguments: String },
-    Complete { stop_reason: StopReason, usage: TokenUsage },
+    ToolUseEnd {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    Complete {
+        stop_reason: StopReason,
+        usage: TokenUsage,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -247,18 +275,29 @@ pub trait LlmDriver: Send + Sync {
 ///
 /// Credential/endpoint resolution is centralised in `provider::resolve()` —
 /// drivers themselves never read environment variables.
-pub fn build_driver(config: LlmConfig, client: reqwest::Client) -> anyhow::Result<Arc<dyn LlmDriver>> {
+pub fn build_driver(
+    config: LlmConfig,
+    client: reqwest::Client,
+) -> anyhow::Result<Arc<dyn LlmDriver>> {
+    let base_url_override = std::env::var(LLM_BASE_URL_OVERRIDE_ENV).ok();
+    let api_key_override = std::env::var(LLM_API_KEY_OVERRIDE_ENV).ok();
     let resolved = provider::resolve(
         &config.provider,
         &config.model,
-        if config.temperature > 0.0 { Some(config.temperature as f32) } else { None },
+        if config.temperature > 0.0 {
+            Some(config.temperature as f32)
+        } else {
+            None
+        },
         None, // max_tokens from request, not config
-        None, // no base_url override
-        None, // no api_key override
+        base_url_override.as_deref(),
+        api_key_override.as_deref(),
     )?;
 
     let driver: Arc<dyn LlmDriver> = match resolved.kind {
-        provider::DriverKind::Anthropic => Arc::new(anthropic::AnthropicDriver::new(client, resolved)),
+        provider::DriverKind::Anthropic => {
+            Arc::new(anthropic::AnthropicDriver::new(client, resolved))
+        }
         provider::DriverKind::Gemini => Arc::new(gemini::GeminiDriver::new(client, resolved)),
         provider::DriverKind::OpenAi => Arc::new(openai::OpenAiDriver::new(client, resolved)),
     };

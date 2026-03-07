@@ -5,8 +5,8 @@
 //! All credential/endpoint resolution is done by `provider::resolve()`.
 
 use super::{
-    CompletionRequest, CompletionResponse, Role, StopReason, StreamEvent, TokenUsage, ToolCall,
-    LlmDriver,
+    CompletionRequest, CompletionResponse, LlmDriver, Role, StopReason, StreamEvent, TokenUsage,
+    ToolCall,
 };
 use crate::llm::provider::{AuthStrategy, ResolvedProvider};
 use reqwest::Client;
@@ -77,17 +77,27 @@ impl AnthropicDriver {
             "stream": stream,
         });
 
-        if !system_text.is_empty() { body["system"] = json!(system_text.trim()); }
+        if !system_text.is_empty() {
+            body["system"] = json!(system_text.trim());
+        }
 
         let t = req.temperature.or(self.provider.temperature);
-        if let Some(t) = t { if t > 0.0 { body["temperature"] = json!(t); } }
+        if let Some(t) = t {
+            if t > 0.0 {
+                body["temperature"] = json!(t);
+            }
+        }
 
         if !req.tools.is_empty() {
-            body["tools"] = json!(req.tools.iter().map(|t| json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema,
-            })).collect::<Vec<_>>());
+            body["tools"] = json!(req
+                .tools
+                .iter()
+                .map(|t| json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                }))
+                .collect::<Vec<_>>());
         }
 
         body
@@ -102,7 +112,8 @@ impl LlmDriver for AnthropicDriver {
         const MAX_RETRIES: u32 = 3;
         for attempt in 0..=MAX_RETRIES {
             let builder = self.apply_auth(
-                self.client.post(&self.provider.base_url)
+                self.client
+                    .post(&self.provider.base_url)
                     .header("Content-Type", "application/json")
                     .json(&body),
             );
@@ -119,7 +130,10 @@ impl LlmDriver for AnthropicDriver {
                 anyhow::bail!("Anthropic rate limited after {} retries", MAX_RETRIES);
             }
 
-            if !reqwest::StatusCode::from_u16(status).map(|s| s.is_success()).unwrap_or(false) {
+            if !reqwest::StatusCode::from_u16(status)
+                .map(|s| s.is_success())
+                .unwrap_or(false)
+            {
                 let text = response.text().await.unwrap_or_default();
                 anyhow::bail!("Anthropic API error {}: {}", status, text);
             }
@@ -141,7 +155,8 @@ impl LlmDriver for AnthropicDriver {
         const MAX_RETRIES: u32 = 3;
         for attempt in 0..=MAX_RETRIES {
             let builder = self.apply_auth(
-                self.client.post(&self.provider.base_url)
+                self.client
+                    .post(&self.provider.base_url)
                     .header("Content-Type", "application/json")
                     .json(&body),
             );
@@ -151,14 +166,22 @@ impl LlmDriver for AnthropicDriver {
             if status == 429 || status == 529 {
                 if attempt < MAX_RETRIES {
                     let wait_ms = (attempt + 1) as u64 * 2000;
-                    tracing::warn!(status, attempt, wait_ms, "Anthropic stream rate limited, retrying");
+                    tracing::warn!(
+                        status,
+                        attempt,
+                        wait_ms,
+                        "Anthropic stream rate limited, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
                     continue;
                 }
                 anyhow::bail!("Anthropic rate limited after {} retries", MAX_RETRIES);
             }
 
-            if !reqwest::StatusCode::from_u16(status).map(|s| s.is_success()).unwrap_or(false) {
+            if !reqwest::StatusCode::from_u16(status)
+                .map(|s| s.is_success())
+                .unwrap_or(false)
+            {
                 let text = response.text().await.unwrap_or_default();
                 anyhow::bail!("Anthropic stream error {}: {}", status, text);
             }
@@ -181,16 +204,24 @@ impl LlmDriver for AnthropicDriver {
                     let mut event_type = String::new();
                     let mut data = String::new();
                     for line in event_text.lines() {
-                        if let Some(et) = line.strip_prefix("event: ") { event_type = et.to_string(); }
-                        else if let Some(d) = line.strip_prefix("data: ") { data = d.to_string(); }
+                        if let Some(et) = line.strip_prefix("event: ") {
+                            event_type = et.to_string();
+                        } else if let Some(d) = line.strip_prefix("data: ") {
+                            data = d.to_string();
+                        }
                     }
-                    if data.is_empty() { continue; }
-                    let Ok(j) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let Ok(j) = serde_json::from_str::<serde_json::Value>(&data) else {
+                        continue;
+                    };
 
                     match event_type.as_str() {
                         "message_start" => {
                             if self.provider.capabilities.supports_usage_in_stream {
-                                usage.input_tokens = j["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
+                                usage.input_tokens =
+                                    j["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
                             }
                         }
                         "content_block_start" => {
@@ -198,7 +229,12 @@ impl LlmDriver for AnthropicDriver {
                             if block["type"].as_str() == Some("tool_use") {
                                 let id = block["id"].as_str().unwrap_or("").to_string();
                                 let name = block["name"].as_str().unwrap_or("").to_string();
-                                let _ = tx.send(StreamEvent::ToolUseStart { id: id.clone(), name: name.clone() }).await;
+                                let _ = tx
+                                    .send(StreamEvent::ToolUseStart {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                    })
+                                    .await;
                                 current_tool = Some((id, name, String::new()));
                             }
                         }
@@ -208,14 +244,19 @@ impl LlmDriver for AnthropicDriver {
                                 "text_delta" => {
                                     if let Some(text) = delta["text"].as_str() {
                                         text_accum.push_str(text);
-                                        let _ = tx.send(StreamEvent::TextDelta(text.to_string())).await;
+                                        let _ =
+                                            tx.send(StreamEvent::TextDelta(text.to_string())).await;
                                     }
                                 }
                                 "input_json_delta" => {
                                     if let Some(ref mut tool) = current_tool {
                                         if let Some(partial) = delta["partial_json"].as_str() {
                                             tool.2.push_str(partial);
-                                            let _ = tx.send(StreamEvent::ToolInputDelta(partial.to_string())).await;
+                                            let _ = tx
+                                                .send(StreamEvent::ToolInputDelta(
+                                                    partial.to_string(),
+                                                ))
+                                                .await;
                                         }
                                     }
                                 }
@@ -224,8 +265,18 @@ impl LlmDriver for AnthropicDriver {
                         }
                         "content_block_stop" => {
                             if let Some((id, name, args)) = current_tool.take() {
-                                let _ = tx.send(StreamEvent::ToolUseEnd { id: id.clone(), name: name.clone(), arguments: args.clone() }).await;
-                                tool_calls.push(ToolCall { id, name, arguments: args });
+                                let _ = tx
+                                    .send(StreamEvent::ToolUseEnd {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        arguments: args.clone(),
+                                    })
+                                    .await;
+                                tool_calls.push(ToolCall {
+                                    id,
+                                    name,
+                                    arguments: args,
+                                });
                             }
                         }
                         "message_delta" => {
@@ -233,7 +284,8 @@ impl LlmDriver for AnthropicDriver {
                                 stop_reason = parse_stop_reason(sr);
                             }
                             if self.provider.capabilities.supports_usage_in_stream {
-                                usage.output_tokens = j["usage"]["output_tokens"].as_u64().unwrap_or(0);
+                                usage.output_tokens =
+                                    j["usage"]["output_tokens"].as_u64().unwrap_or(0);
                             }
                         }
                         _ => {}
@@ -241,7 +293,12 @@ impl LlmDriver for AnthropicDriver {
                 }
             }
 
-            let resp = CompletionResponse { text: text_accum, tool_calls, stop_reason: stop_reason.clone(), usage: usage.clone() };
+            let resp = CompletionResponse {
+                text: text_accum,
+                tool_calls,
+                stop_reason: stop_reason.clone(),
+                usage: usage.clone(),
+            };
             let _ = tx.send(StreamEvent::Complete { stop_reason, usage }).await;
             return Ok(resp);
         }
@@ -256,11 +313,19 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
     if let Some(content) = j["content"].as_array() {
         for block in content {
             match block["type"].as_str().unwrap_or("") {
-                "text" => { if let Some(t) = block["text"].as_str() { text.push_str(t); } }
+                "text" => {
+                    if let Some(t) = block["text"].as_str() {
+                        text.push_str(t);
+                    }
+                }
                 "tool_use" => {
                     if let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) {
                         let arguments = serde_json::to_string(&block["input"]).unwrap_or_default();
-                        tool_calls.push(ToolCall { id: id.to_string(), name: name.to_string(), arguments });
+                        tool_calls.push(ToolCall {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            arguments,
+                        });
                     }
                 }
                 _ => {}
@@ -273,7 +338,12 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
         input_tokens: j["usage"]["input_tokens"].as_u64().unwrap_or(0),
         output_tokens: j["usage"]["output_tokens"].as_u64().unwrap_or(0),
     };
-    CompletionResponse { text, tool_calls, stop_reason, usage }
+    CompletionResponse {
+        text,
+        tool_calls,
+        stop_reason,
+        usage,
+    }
 }
 
 fn parse_stop_reason(s: &str) -> StopReason {

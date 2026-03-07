@@ -65,7 +65,11 @@ impl McpToolRuntime {
         Ok(defs)
     }
 
-    pub async fn call_tool(&mut self, tool_name: &str, arguments_json: &str) -> anyhow::Result<String> {
+    pub async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments_json: &str,
+    ) -> anyhow::Result<String> {
         let server_name = self
             .tool_server
             .get(tool_name)
@@ -76,15 +80,19 @@ impl McpToolRuntime {
             .get_mut(&server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server client '{}' not found", server_name))?;
 
-        let arguments: serde_json::Value = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for tool '{}': {}", tool_name, e))?;
+        let arguments: serde_json::Value = serde_json::from_str(arguments_json).map_err(|e| {
+            anyhow::anyhow!("Invalid JSON arguments for tool '{}': {}", tool_name, e)
+        })?;
         let result = client.call_tool(tool_name, arguments).await?;
         Ok(serde_json::to_string(&result.payload)?)
     }
 
     async fn from_registry_path(path: PathBuf) -> anyhow::Result<Self> {
         if !path.exists() {
-            tracing::debug!("MCP registry path {} not found; MCP runtime disabled", path.display());
+            tracing::debug!(
+                "MCP registry path {} not found; MCP runtime disabled",
+                path.display()
+            );
             return Ok(Self::empty());
         }
         let raw = std::fs::read_to_string(&path)?;

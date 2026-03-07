@@ -27,8 +27,9 @@ impl SecretStoreRuntime {
         if directives.is_empty() {
             return Ok(None);
         }
-        let vault_path = std::env::var(VAULT_PATH_ENV)
-            .map_err(|_| anyhow::anyhow!("Missing required environment variable {}", VAULT_PATH_ENV))?;
+        let vault_path = std::env::var(VAULT_PATH_ENV).map_err(|_| {
+            anyhow::anyhow!("Missing required environment variable {}", VAULT_PATH_ENV)
+        })?;
         let vault_path = PathBuf::from(vault_path);
         let vault = Vault::load_from_file(&vault_path)?;
         Ok(Some(Self {

@@ -4,7 +4,7 @@
 //! All credential/endpoint resolution is done by `provider::resolve()`.
 
 use super::{
-    CompletionRequest, CompletionResponse, Role, StopReason, TokenUsage, ToolCall, LlmDriver,
+    CompletionRequest, CompletionResponse, LlmDriver, Role, StopReason, TokenUsage, ToolCall,
 };
 use crate::llm::provider::{AuthStrategy, ResolvedProvider};
 use reqwest::Client;
@@ -29,7 +29,10 @@ impl GeminiDriver {
 
     /// Gemini embeds the model name in the URL path.
     fn url(&self) -> String {
-        format!("{}/models/{}:generateContent", self.provider.base_url, self.provider.model)
+        format!(
+            "{}/models/{}:generateContent",
+            self.provider.base_url, self.provider.model
+        )
     }
 
     fn build_body(&self, req: &CompletionRequest) -> serde_json::Value {
@@ -53,11 +56,15 @@ impl GeminiDriver {
                 }
                 Role::Assistant => {
                     if !m.tool_calls.is_empty() {
-                        let parts: Vec<serde_json::Value> = m.tool_calls.iter().map(|tc| {
-                            let args: serde_json::Value =
-                                serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
-                            json!({ "functionCall": { "name": tc.name, "args": args } })
-                        }).collect();
+                        let parts: Vec<serde_json::Value> = m
+                            .tool_calls
+                            .iter()
+                            .map(|tc| {
+                                let args: serde_json::Value =
+                                    serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                                json!({ "functionCall": { "name": tc.name, "args": args } })
+                            })
+                            .collect();
                         contents.push(json!({ "role": "model", "parts": parts }));
                     } else {
                         contents.push(json!({ "role": "model", "parts": [{ "text": m.content }] }));
@@ -68,13 +75,23 @@ impl GeminiDriver {
         }
 
         let mut body = json!({ "contents": contents });
-        if let Some(sys) = system_instruction { body["systemInstruction"] = sys; }
+        if let Some(sys) = system_instruction {
+            body["systemInstruction"] = sys;
+        }
 
         let mut gen: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        if let Some(max) = req.max_tokens.or(self.provider.max_tokens) { gen.insert("maxOutputTokens".into(), json!(max)); }
+        if let Some(max) = req.max_tokens.or(self.provider.max_tokens) {
+            gen.insert("maxOutputTokens".into(), json!(max));
+        }
         let t = req.temperature.or(self.provider.temperature);
-        if let Some(t) = t { if t > 0.0 { gen.insert("temperature".into(), json!(t)); } }
-        if !gen.is_empty() { body["generationConfig"] = serde_json::Value::Object(gen); }
+        if let Some(t) = t {
+            if t > 0.0 {
+                gen.insert("temperature".into(), json!(t));
+            }
+        }
+        if !gen.is_empty() {
+            body["generationConfig"] = serde_json::Value::Object(gen);
+        }
 
         if !req.tools.is_empty() {
             body["tools"] = json!([{
@@ -98,7 +115,8 @@ impl LlmDriver for GeminiDriver {
         const MAX_RETRIES: u32 = 3;
         for attempt in 0..=MAX_RETRIES {
             let builder = self.apply_auth(
-                self.client.post(&url)
+                self.client
+                    .post(&url)
                     .header("Content-Type", "application/json")
                     .json(&body),
             );
@@ -115,7 +133,10 @@ impl LlmDriver for GeminiDriver {
                 anyhow::bail!("Gemini rate limited after {} retries", MAX_RETRIES);
             }
 
-            if !reqwest::StatusCode::from_u16(status).map(|s| s.is_success()).unwrap_or(false) {
+            if !reqwest::StatusCode::from_u16(status)
+                .map(|s| s.is_success())
+                .unwrap_or(false)
+            {
                 let text = response.text().await.unwrap_or_default();
                 anyhow::bail!("Gemini API error {}: {}", status, text);
             }
@@ -134,11 +155,17 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
 
     if let Some(parts_arr) = parts.as_array() {
         for part in parts_arr {
-            if let Some(t) = part["text"].as_str() { text.push_str(t); }
+            if let Some(t) = part["text"].as_str() {
+                text.push_str(t);
+            }
             if let Some(fc) = part.get("functionCall") {
                 let name = fc["name"].as_str().unwrap_or("").to_string();
                 let arguments = serde_json::to_string(&fc["args"]).unwrap_or_default();
-                tool_calls.push(ToolCall { id: format!("gemini-{}", name), name, arguments });
+                tool_calls.push(ToolCall {
+                    id: format!("gemini-{}", name),
+                    name,
+                    arguments,
+                });
             }
         }
     }
@@ -151,8 +178,15 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
     };
     let usage = TokenUsage {
         input_tokens: j["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0),
-        output_tokens: j["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0),
+        output_tokens: j["usageMetadata"]["candidatesTokenCount"]
+            .as_u64()
+            .unwrap_or(0),
     };
 
-    CompletionResponse { text, tool_calls, stop_reason, usage }
+    CompletionResponse {
+        text,
+        tool_calls,
+        stop_reason,
+        usage,
+    }
 }

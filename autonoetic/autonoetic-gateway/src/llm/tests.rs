@@ -143,7 +143,7 @@ mod tests {
         #[test]
         fn test_tool_result_turn() {
             // Golden: the shape of a tool result (role="tool") message
-            let mut result_msg = Message::tool_result(
+            let result_msg = Message::tool_result(
                 "call_abc123",
                 "search",
                 "Rust lifetimes control ownership scopes.",

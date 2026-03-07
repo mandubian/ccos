@@ -5,8 +5,7 @@
 //! externally by `provider::resolve()` before this driver is instantiated.
 
 use super::{
-    CompletionRequest, CompletionResponse, StopReason, StreamEvent, TokenUsage, ToolCall,
-    LlmDriver,
+    CompletionRequest, CompletionResponse, LlmDriver, StopReason, StreamEvent, TokenUsage, ToolCall,
 };
 use crate::llm::provider::{AuthStrategy, ResolvedProvider};
 use reqwest::Client;
@@ -45,27 +44,38 @@ impl OpenAiDriver {
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
-        let messages: Vec<serde_json::Value> = req.messages.iter().map(|m| {
-            let mut msg = json!({ "role": m.role.as_str() });
+        let messages: Vec<serde_json::Value> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let mut msg = json!({ "role": m.role.as_str() });
 
-            if !m.content.is_empty() {
-                msg["content"] = json!(m.content);
-            }
-            if !m.tool_calls.is_empty() {
-                msg["tool_calls"] = json!(m.tool_calls.iter().map(|tc| json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": { "name": tc.name, "arguments": tc.arguments }
-                })).collect::<Vec<_>>());
-            }
-            if let Some(ref id) = m.tool_call_id {
-                msg["tool_call_id"] = json!(id);
-            }
-            msg
-        }).collect();
+                if !m.content.is_empty() {
+                    msg["content"] = json!(m.content);
+                }
+                if !m.tool_calls.is_empty() {
+                    msg["tool_calls"] = json!(m
+                        .tool_calls
+                        .iter()
+                        .map(|tc| json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": { "name": tc.name, "arguments": tc.arguments }
+                        }))
+                        .collect::<Vec<_>>());
+                }
+                if let Some(ref id) = m.tool_call_id {
+                    msg["tool_call_id"] = json!(id);
+                }
+                msg
+            })
+            .collect();
 
         let (token_key, token_val) = if uses_completion_tokens(&self.provider.model) {
-            ("max_completion_tokens", req.max_tokens.or(self.provider.max_tokens))
+            (
+                "max_completion_tokens",
+                req.max_tokens.or(self.provider.max_tokens),
+            )
         } else {
             ("max_tokens", req.max_tokens.or(self.provider.max_tokens))
         };
@@ -76,20 +86,30 @@ impl OpenAiDriver {
             "stream": stream,
         });
 
-        if let Some(v) = token_val { body[token_key] = json!(v); }
+        if let Some(v) = token_val {
+            body[token_key] = json!(v);
+        }
 
         let t = req.temperature.or(self.provider.temperature);
-        if let Some(t) = t { if t > 0.0 { body["temperature"] = json!(t); } }
+        if let Some(t) = t {
+            if t > 0.0 {
+                body["temperature"] = json!(t);
+            }
+        }
 
         if !req.tools.is_empty() {
-            body["tools"] = json!(req.tools.iter().map(|t| json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.input_schema,
-                }
-            })).collect::<Vec<_>>());
+            body["tools"] = json!(req
+                .tools
+                .iter()
+                .map(|t| json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                }))
+                .collect::<Vec<_>>());
             body["tool_choice"] = json!("auto");
         }
 
@@ -105,7 +125,8 @@ impl LlmDriver for OpenAiDriver {
         const MAX_RETRIES: u32 = 3;
         for attempt in 0..=MAX_RETRIES {
             let builder = self.apply_auth(
-                self.client.post(&self.provider.base_url)
+                self.client
+                    .post(&self.provider.base_url)
                     .header("Content-Type", "application/json")
                     .json(&body),
             );
@@ -116,7 +137,12 @@ impl LlmDriver for OpenAiDriver {
             if status.as_u16() == 429 || status.as_u16() == 529 {
                 if attempt < MAX_RETRIES {
                     let wait_ms = (attempt + 1) as u64 * 2000;
-                    tracing::warn!(status = status.as_u16(), attempt, wait_ms, "Rate limited, retrying");
+                    tracing::warn!(
+                        status = status.as_u16(),
+                        attempt,
+                        wait_ms,
+                        "Rate limited, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
                     continue;
                 }
@@ -143,16 +169,13 @@ impl LlmDriver for OpenAiDriver {
 
         if !self.provider.capabilities.supports_streaming {
             // Fall back to complete() and emit one chunk
-            return super::LlmDriver::stream(
-                self as &dyn super::LlmDriver,
-                req,
-                tx,
-            ).await;
+            return super::LlmDriver::stream(self as &dyn super::LlmDriver, req, tx).await;
         }
 
         let body = self.build_body(req, true);
         let builder = self.apply_auth(
-            self.client.post(&self.provider.base_url)
+            self.client
+                .post(&self.provider.base_url)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .json(&body),
@@ -179,13 +202,20 @@ impl LlmDriver for OpenAiDriver {
                 let event_text = buffer[..pos].to_string();
                 buffer = buffer[pos + 2..].to_string();
 
-                let data = event_text.lines()
+                let data = event_text
+                    .lines()
                     .find_map(|l| l.strip_prefix("data: "))
-                    .unwrap_or("").trim().to_string();
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
 
-                if data.is_empty() || data == "[DONE]" { continue; }
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
 
-                let Ok(j) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+                let Ok(j) = serde_json::from_str::<serde_json::Value>(&data) else {
+                    continue;
+                };
                 let delta = &j["choices"][0]["delta"];
 
                 if let Some(text) = delta["content"].as_str() {
@@ -200,11 +230,21 @@ impl LlmDriver for OpenAiDriver {
                         for tc_delta in tcs {
                             let idx = tc_delta["index"].as_u64().unwrap_or(0) as usize;
                             while tool_calls_accum.len() <= idx {
-                                tool_calls_accum.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+                                tool_calls_accum.push(ToolCall {
+                                    id: String::new(),
+                                    name: String::new(),
+                                    arguments: String::new(),
+                                });
                             }
-                            if let Some(id) = tc_delta["id"].as_str() { tool_calls_accum[idx].id = id.to_string(); }
-                            if let Some(name) = tc_delta["function"]["name"].as_str() { tool_calls_accum[idx].name = name.to_string(); }
-                            if let Some(args) = tc_delta["function"]["arguments"].as_str() { tool_calls_accum[idx].arguments.push_str(args); }
+                            if let Some(id) = tc_delta["id"].as_str() {
+                                tool_calls_accum[idx].id = id.to_string();
+                            }
+                            if let Some(name) = tc_delta["function"]["name"].as_str() {
+                                tool_calls_accum[idx].name = name.to_string();
+                            }
+                            if let Some(args) = tc_delta["function"]["arguments"].as_str() {
+                                tool_calls_accum[idx].arguments.push_str(args);
+                            }
                         }
                     }
                 }
@@ -216,7 +256,13 @@ impl LlmDriver for OpenAiDriver {
         }
 
         for tc in &tool_calls_accum {
-            let _ = tx.send(StreamEvent::ToolUseEnd { id: tc.id.clone(), name: tc.name.clone(), arguments: tc.arguments.clone() }).await;
+            let _ = tx
+                .send(StreamEvent::ToolUseEnd {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                })
+                .await;
         }
 
         let resp = CompletionResponse {
@@ -225,7 +271,12 @@ impl LlmDriver for OpenAiDriver {
             stop_reason: stop_reason.clone(),
             usage: TokenUsage::default(),
         };
-        let _ = tx.send(StreamEvent::Complete { stop_reason, usage: resp.usage.clone() }).await;
+        let _ = tx
+            .send(StreamEvent::Complete {
+                stop_reason,
+                usage: resp.usage.clone(),
+            })
+            .await;
         Ok(resp)
     }
 }
@@ -235,13 +286,21 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
     let choice = &j["choices"][0];
     let text = extract_text_content(&choice["message"]["content"]);
 
-    let tool_calls = choice["message"]["tool_calls"].as_array()
+    let tool_calls = choice["message"]["tool_calls"]
+        .as_array()
         .map(|arr| {
-            arr.iter().filter_map(|tc| Some(ToolCall {
-                id: tc["id"].as_str()?.to_string(),
-                name: tc["function"]["name"].as_str()?.to_string(),
-                arguments: tc["function"]["arguments"].as_str().unwrap_or("{}").to_string(),
-            })).collect()
+            arr.iter()
+                .filter_map(|tc| {
+                    Some(ToolCall {
+                        id: tc["id"].as_str()?.to_string(),
+                        name: tc["function"]["name"].as_str()?.to_string(),
+                        arguments: tc["function"]["arguments"]
+                            .as_str()
+                            .unwrap_or("{}")
+                            .to_string(),
+                    })
+                })
+                .collect()
         })
         .unwrap_or_default();
 
@@ -252,7 +311,12 @@ fn parse_response(j: &serde_json::Value) -> CompletionResponse {
         output_tokens: j["usage"]["completion_tokens"].as_u64().unwrap_or(0),
     };
 
-    CompletionResponse { text, tool_calls, stop_reason, usage }
+    CompletionResponse {
+        text,
+        tool_calls,
+        stop_reason,
+        usage,
+    }
 }
 
 fn extract_text_content(content: &serde_json::Value) -> String {

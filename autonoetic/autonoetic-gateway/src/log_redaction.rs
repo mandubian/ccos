@@ -47,7 +47,9 @@ fn redact_json_value(value: &Value) -> Value {
 /// Redact potentially sensitive content for structured logging.
 pub fn redact_text_for_logs(text: &str) -> String {
     match serde_json::from_str::<Value>(text) {
-        Ok(v) => serde_json::to_string(&redact_json_value(&v)).unwrap_or_else(|_| REDACTED.to_string()),
+        Ok(v) => {
+            serde_json::to_string(&redact_json_value(&v)).unwrap_or_else(|_| REDACTED.to_string())
+        }
         Err(_) => {
             // Non-JSON payloads: avoid accidentally dumping long secrets.
             if text.to_ascii_lowercase().contains("token")
