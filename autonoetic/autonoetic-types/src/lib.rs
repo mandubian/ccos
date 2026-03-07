@@ -10,6 +10,7 @@ pub mod capability;
 pub mod capsule;
 pub mod causal_chain;
 pub mod config;
+pub mod disclosure;
 pub mod memory;
 pub mod runtime_lock;
 pub mod task_board;

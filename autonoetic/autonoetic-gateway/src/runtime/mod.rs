@@ -4,6 +4,7 @@
 //! managing Tier 1 and Tier 2 memory, and enforcing the execution lifecycle.
 
 pub mod crypto;
+pub mod disclosure;
 pub mod guard;
 pub mod lifecycle;
 pub mod mcp;

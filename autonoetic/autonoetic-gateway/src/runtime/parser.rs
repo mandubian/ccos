@@ -32,6 +32,8 @@ struct AutonoeticMetadata {
     llm_config: Option<LlmConfig>,
     limits: Option<ResourceLimits>,
     background: Option<BackgroundPolicy>,
+    #[serde(default)]
+    disclosure: Option<autonoetic_types::disclosure::DisclosurePolicy>,
 }
 
 /// Parser for `SKILL.md` files.
@@ -97,6 +99,7 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         llm_config: meta.llm_config,
         limits: meta.limits,
         background: meta.background,
+        disclosure: meta.disclosure,
     }
 }
 
