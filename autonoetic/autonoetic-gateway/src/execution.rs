@@ -137,8 +137,14 @@ impl GatewayExecutionService {
                 .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
             let driver = build_driver(llm_config, self.http_client.clone())?;
 
-            let mut runtime = AgentExecutor::new(manifest, instructions, driver, target.dir)
-                .with_initial_user_message(message.to_string())
+            let mut runtime = AgentExecutor::new(
+                manifest,
+                instructions,
+                driver,
+                target.dir,
+                crate::runtime::tools::default_registry(),
+            )
+            .with_initial_user_message(message.to_string())
                 .with_session_id(session_id.to_string());
             let mut history = build_initial_history(
                 &runtime.agent_dir,
@@ -181,7 +187,12 @@ impl GatewayExecutionService {
     ) -> anyhow::Result<String> {
         self.execute_with_reliability_controls(agent_id, || async move {
             let (manifest, agent_dir) = self.load_agent_manifest(agent_id)?;
-            execute_scheduled_action(&manifest, &agent_dir, action)
+            execute_scheduled_action(
+                &manifest,
+                &agent_dir,
+                action,
+                &crate::runtime::tools::default_registry(),
+            )
         })
         .await
     }
