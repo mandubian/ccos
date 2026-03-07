@@ -2,6 +2,7 @@
 
 mod support;
 
+use support::agents::install_memory_recall_agent;
 use support::{spawn_gateway_server, EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace};
 
 #[tokio::test]
@@ -158,33 +159,7 @@ async fn test_loopback_memory_audit_and_negatives() {
     let agent_dir = agents_dir.join(agent_id);
     std::fs::create_dir_all(&agent_dir).unwrap();
 
-    let manifest_yaml = format!(
-        r#"
-name: "Memory Agent"
-description: "Integration test memory agent"
-metadata:
-  autonoetic:
-    version: "1.0"
-    agent:
-      id: "{agent_id}"
-      name: "memory_agent"
-      description: "mock agent"
-    llm_config:
-      provider: "openai"
-      model: "gpt-4o"
-    capabilities:
-      - type: "MemoryWrite"
-        scopes: ["*"]
-      - type: "MemoryRead"
-        scopes: ["*"]
-"#
-    );
-
-    let skill_md = format!(
-        "---\n{}\n---\n# Instructions\nYou are a memory agent.",
-        manifest_yaml.trim()
-    );
-    std::fs::write(agent_dir.join("SKILL.md"), skill_md).unwrap();
+    install_memory_recall_agent(&agent_dir, agent_id).unwrap();
 
     // Use small limits to easily trigger backpressure for negative tests
     let config = autonoetic_types::config::GatewayConfig {

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod agents;
+
 use autonoetic_gateway::router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
 use autonoetic_gateway::scheduler::{approve_request, load_approval_requests, run_scheduler_tick};
 use autonoetic_gateway::server::jsonrpc::start_jsonrpc_server;

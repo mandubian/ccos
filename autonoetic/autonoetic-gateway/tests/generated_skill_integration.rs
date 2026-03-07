@@ -5,14 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 mod support;
 
+use support::agents::{install_generated_skill_learner_agent, APPROVED_REUSE_MATH_AGENT_SKILL};
 use support::{
     approve_pending_request_and_tick, require_single_pending_approval, spawn_gateway_server,
     EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace,
 };
-
-/// The math-agent SKILL.md content the mock LLM will propose via `skill.draft`.
-/// Uses the nested `metadata.autonoetic` format which SkillParser reads.
-const MATH_AGENT_SKILL_CONTENT: &str = "---\nname: \"Math Agent\"\ndescription: \"Does math\"\nmetadata:\n  autonoetic:\n    version: \"1.0\"\n    agent:\n      id: \"math_agent\"\n      name: \"math_agent\"\n      description: \"Does math\"\n    llm_config:\n      provider: \"openai\"\n      model: \"gpt-4o\"\n---\n# Instructions\nReply with the sum.\n";
 
 // ---------------------------------------------------------------------------
 // Artifact loader (simulates hot-loading a skill as a new agent)
@@ -81,7 +78,7 @@ async fn test_generated_skill_approval_and_execution() {
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": format!("CONTENT_START\n{}\nCONTENT_END", MATH_AGENT_SKILL_CONTENT)
+                        "content": format!("CONTENT_START\n{}\nCONTENT_END", APPROVED_REUSE_MATH_AGENT_SKILL)
                     },
                     "finish_reason": "stop"
                 }],
@@ -95,7 +92,7 @@ async fn test_generated_skill_approval_and_execution() {
             };
             let draft_args = serde_json::json!({
                 "path": "skills/math.md",
-                "content": MATH_AGENT_SKILL_CONTENT,
+                "content": APPROVED_REUSE_MATH_AGENT_SKILL,
                 "evidence_ref": evidence_ref
             })
             .to_string();
@@ -185,41 +182,7 @@ async fn test_generated_skill_approval_and_execution() {
     let agents_dir = workspace.agents_dir.clone();
     let learner_id = "learner";
     let learner_dir = agents_dir.join(learner_id);
-    std::fs::create_dir_all(&learner_dir).unwrap();
-
-    // Write the learner's SKILL.md with BackgroundReevaluation + MemoryWrite capabilities.
-    let manifest_yaml = format!(
-        r#"version: "1.0"
-runtime:
-  engine: "autonoetic"
-  gateway_version: "0.1.0"
-  sdk_version: "0.1.0"
-  type: "stateful"
-  sandbox: "bubblewrap"
-  runtime_lock: "runtime.lock"
-agent:
-  id: "{learner_id}"
-  name: "learner"
-  description: "A learning agent"
-llm_config:
-  provider: "openai"
-  model: "gpt-4o"
-capabilities:
-  - type: "MemoryWrite"
-    scopes: ["skills/*"]
-  - type: "BackgroundReevaluation"
-    min_interval_secs: 1
-    allow_reasoning: true
-background:
-  enabled: true
-  mode: "reasoning"
-  interval_secs: 1"#
-    );
-    let skill_md = format!(
-        "---\n{}\n---\n# Instructions\nYou are a learning agent.\n",
-        manifest_yaml.trim()
-    );
-    std::fs::write(learner_dir.join("SKILL.md"), skill_md).unwrap();
+    install_generated_skill_learner_agent(&learner_dir, learner_id).unwrap();
 
     // --- Gateway setup ---
     let config = autonoetic_types::config::GatewayConfig {
@@ -278,10 +241,15 @@ background:
     // Enable evidence capture for the PoC
     let _g3 = EnvGuard::set("AUTONOETIC_EVIDENCE_MODE", "full");
 
-    let mut poc_executor =
-        AgentExecutor::new(poc_manifest, poc_instructions, poc_driver, poc_dir.clone())
-            .with_initial_user_message("PoC Execution".to_string())
-            .with_session_id("poc_session".to_string());
+    let mut poc_executor = AgentExecutor::new(
+        poc_manifest,
+        poc_instructions,
+        poc_driver,
+        poc_dir.clone(),
+        autonoetic_gateway::runtime::tools::default_registry(),
+    )
+    .with_initial_user_message("PoC Execution".to_string())
+    .with_session_id("poc_session".to_string());
 
     let mut poc_history = vec![autonoetic_gateway::llm::Message::user(
         "PoC Execution".to_string(),
