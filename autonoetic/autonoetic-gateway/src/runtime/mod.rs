@@ -12,3 +12,4 @@ pub mod memory;
 pub mod parser;
 pub mod session_context;
 pub mod store;
+pub mod tools;
