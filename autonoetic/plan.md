@@ -437,12 +437,20 @@ Progress notes (2026-03-08):
 
 ##### 7. Tool registry cleanup and shared path-tool helpers
 
-- [ ] Remove dead or redundant registry types such as unused discovery metadata.
-- [ ] Factor shared JSON argument parsing / path extraction for file-backed native tools.
-- [ ] Keep the registry intentionally thin and static; do not turn it into a plugin framework.
+- [x] Remove dead or redundant registry types such as unused discovery metadata.
+- [x] Factor shared JSON argument parsing / path extraction for file-backed native tools.
+- [x] Keep the registry intentionally thin and static; do not turn it into a plugin framework.
 
 Acceptance criteria:
-- Path-based native tools do not duplicate argument parsing and metadata extraction logic.
-- Registry code stays small and in-process only.
-- Tool behavior and MCP/native precedence remain unchanged.
+- [x] Path-based native tools do not duplicate argument parsing and metadata extraction logic.
+- [x] Registry code stays small and in-process only.
+- [x] Tool behavior and MCP/native precedence remain unchanged.
+
+Progress notes (2026-03-08):
+- Removed unused `DiscoveryMetadata` struct (redundant with `ToolMetadata`)
+- Created shared `extract_path_from_args()` helper for path extraction from tool arguments
+- Refactored `MemoryReadTool`, `MemoryWriteTool`, and `SkillDraftTool` to use shared helper
+- Reduced `tools.rs` from 687 to 675 lines (12 lines removed)
+- All 6 tool registry tests pass, no compiler warnings
+- Registry remains thin and static with 4 core tools (sandbox.exec, memory.read, memory.write, skill.draft)
 ```
