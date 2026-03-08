@@ -3,8 +3,8 @@
 use crate::causal_chain::CausalLogger;
 use crate::llm::{build_driver, Message};
 use crate::runtime::lifecycle::{execute_scheduled_action, AgentExecutor};
-use crate::runtime::parser::SkillParser;
 use crate::runtime::session_context::SessionContext;
+use crate::agent::AgentRepository;
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
@@ -67,29 +67,22 @@ impl GatewayExecutionService {
         anyhow::ensure!(!message.trim().is_empty(), "message must not be empty");
 
         self.execute_with_reliability_controls(agent_id, || async move {
-            let agents = crate::agent::scan_agents(&self.config.agents_dir)?;
+            let repo = AgentRepository::from_config(&self.config);
 
             if let Some(source_id) = source_agent_id {
                 if source_id != agent_id {
-                    let source_agent = agents
-                        .iter()
-                        .find(|a| a.id == source_id)
-                        .ok_or_else(|| anyhow::anyhow!("Source agent '{}' not found", source_id))?;
-
-                    let source_skill_path = source_agent.dir.join("SKILL.md");
-                    let source_skill_content = std::fs::read_to_string(&source_skill_path)?;
-                    let (source_manifest, _) = SkillParser::parse(&source_skill_content)?;
-                    let policy = crate::policy::PolicyEngine::new(source_manifest);
+                    let source_loaded = repo.get_sync(source_id)?;
+                    let source_policy = crate::policy::PolicyEngine::new(source_loaded.manifest);
 
                     if is_message {
                         anyhow::ensure!(
-                            policy.can_message_agent(agent_id),
+                            source_policy.can_message_agent(agent_id),
                             "Permission Denied: Source agent '{}' lacks 'AgentMessage' capability to message '{}'",
                             source_id,
                             agent_id
                         );
                     } else {
-                        let spawn_limit = policy.spawn_agent_limit().ok_or_else(|| {
+                        let spawn_limit = source_policy.spawn_agent_limit().ok_or_else(|| {
                             anyhow::anyhow!(
                                 "Permission Denied: Source agent '{}' lacks 'AgentSpawn' capability",
                                 source_id
@@ -117,31 +110,19 @@ impl GatewayExecutionService {
                 }
             }
 
-            let target = agents
-                .into_iter()
-                .find(|a| a.id == agent_id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Agent '{}' not found in {}",
-                        agent_id,
-                        self.config.agents_dir.display()
-                    )
-                })?;
-
-            let skill_path = target.dir.join("SKILL.md");
-            let skill_content = std::fs::read_to_string(&skill_path)?;
-            let (manifest, instructions) = SkillParser::parse(&skill_content)?;
-            let llm_config = manifest
+            let loaded = repo.get_sync(agent_id)?;
+            let llm_config = loaded
+                .manifest
                 .llm_config
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
             let driver = build_driver(llm_config, self.http_client.clone())?;
 
             let mut runtime = AgentExecutor::new(
-                manifest,
-                instructions,
+                loaded.manifest,
+                loaded.instructions,
                 driver,
-                target.dir,
+                loaded.dir,
                 crate::runtime::tools::default_registry(),
             )
             .with_initial_user_message(message.to_string())
@@ -201,21 +182,9 @@ impl GatewayExecutionService {
         &self,
         agent_id: &str,
     ) -> anyhow::Result<(AgentManifest, std::path::PathBuf)> {
-        let agents = crate::agent::scan_agents(&self.config.agents_dir)?;
-        let target = agents
-            .into_iter()
-            .find(|a| a.id == agent_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Agent '{}' not found in {}",
-                    agent_id,
-                    self.config.agents_dir.display()
-                )
-            })?;
-        let skill_path = target.dir.join("SKILL.md");
-        let skill_content = std::fs::read_to_string(skill_path)?;
-        let (manifest, _) = SkillParser::parse(&skill_content)?;
-        Ok((manifest, target.dir))
+        let repo = AgentRepository::from_config(&self.config);
+        let loaded = repo.get_sync(agent_id)?;
+        Ok((loaded.manifest, loaded.dir))
     }
 
     pub async fn execute_with_reliability_controls<F, Fut, T>(

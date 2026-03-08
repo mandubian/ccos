@@ -18,9 +18,10 @@ pub mod runtime_lock;
 pub mod sandbox;
 pub mod scheduler;
 pub mod server;
+pub mod tracing;
 pub mod vault;
 
-pub use agent::scan_agents;
+pub use agent::{scan_agents, AgentRepository, LoadedAgent, cached};
 pub use artifact_store::ArtifactStore;
 pub use autonoetic_types::agent::AgentMeta;
 pub use autonoetic_types::config::GatewayConfig;
@@ -33,4 +34,5 @@ pub use router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};
 pub use runtime_lock::resolve_runtime_lock;
 pub use sandbox::SandboxRunner;
 pub use server::GatewayServer;
+pub use tracing::session_tracer::{EventScope, EventSeq, SessionId, TraceSession};
 pub use vault::Vault;

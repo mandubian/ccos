@@ -1,10 +1,11 @@
 //! Internal JSON-RPC 2.0 Router.
 
 use crate::execution::{
-    gateway_actor_id, init_gateway_causal_logger, log_gateway_causal_event, next_event_seq,
-    sha256_hex, GatewayExecutionService, SpawnResult,
+    gateway_actor_id, init_gateway_causal_logger, sha256_hex, GatewayExecutionService, SpawnResult,
 };
 use crate::scheduler::{append_inbox_event, append_task_board_entry};
+use crate::tracing::{EventScope, SessionId, TraceSession};
+#[cfg(test)]
 use autonoetic_types::causal_chain::EntryStatus;
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::task_board::{TaskBoardEntry, TaskStatus};
@@ -104,7 +105,7 @@ impl JsonRpcRouter {
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let agent_id = params.agent_id;
                 let message = params.message;
-                let mut gateway_event_seq = 0_u64;
+                
                 let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
                     Ok(v) => v,
                     Err(e) => {
@@ -115,20 +116,25 @@ impl JsonRpcRouter {
                         );
                     }
                 };
-                log_gateway_causal_event(
-                    &causal_logger,
-                    &gateway_actor_id(),
-                    &session_id,
-                    next_event_seq(&mut gateway_event_seq),
-                    "agent.spawn.requested",
-                    EntryStatus::Success,
+                
+                let mut trace_session = TraceSession::create_with_session_id(
+                    SessionId::from_string(session_id.clone()),
+                    Arc::new(causal_logger),
+                    gateway_actor_id(),
+                    EventScope::Request,
+                );
+                
+                let _ = trace_session.log_requested(
+                    "agent.spawn",
                     Some(serde_json::json!({
                         "agent_id": agent_id.clone(),
                         "source_agent_id": params.source_agent_id.clone(),
+                        "session_id": session_id.clone(),
                         "message_len": message.len(),
                         "message_sha256": sha256_hex(&message),
                     })),
                 );
+                
                 match self
                     .spawn_agent_once(
                         &agent_id,
@@ -153,13 +159,9 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        log_gateway_causal_event(
-                            &causal_logger,
-                            &gateway_actor_id(),
-                            &session_id,
-                            next_event_seq(&mut gateway_event_seq),
-                            "agent.spawn.completed",
-                            EntryStatus::Success,
+                        let _ = trace_session.log_completed(
+                            "agent.spawn",
+                            None,
                             Some(serde_json::json!({
                                 "agent_id": result.agent_id.clone(),
                                 "source_agent_id": params.source_agent_id.clone(),
@@ -189,17 +191,12 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        log_gateway_causal_event(
-                            &causal_logger,
-                            &gateway_actor_id(),
-                            &session_id,
-                            next_event_seq(&mut gateway_event_seq),
-                            "agent.spawn.failed",
-                            EntryStatus::Error,
+                        let _ = trace_session.log_failed(
+                            "agent.spawn",
+                            &e.to_string(),
                             Some(serde_json::json!({
                                 "agent_id": agent_id.clone(),
                                 "source_agent_id": params.source_agent_id.clone(),
-                                "reason": e.to_string(),
                             })),
                         );
                         JsonRpcResponse::error(req.id, -32000, format!("agent.spawn failed: {}", e))
@@ -225,7 +222,7 @@ impl JsonRpcRouter {
                 let target_agent_id = params.target_agent_id;
                 let message = params.message;
                 let metadata = params.metadata;
-                let mut gateway_event_seq = 0_u64;
+                
                 let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
                     Ok(v) => v,
                     Err(e) => {
@@ -236,17 +233,21 @@ impl JsonRpcRouter {
                         );
                     }
                 };
-                log_gateway_causal_event(
-                    &causal_logger,
-                    &gateway_actor_id(),
-                    &session_id,
-                    next_event_seq(&mut gateway_event_seq),
-                    "event.ingest.requested",
-                    EntryStatus::Success,
+                
+                let mut trace_session = TraceSession::create_with_session_id(
+                    SessionId::from_string(session_id.clone()),
+                    Arc::new(causal_logger),
+                    gateway_actor_id(),
+                    EventScope::Request,
+                );
+                
+                let _ = trace_session.log_requested(
+                    "event.ingest",
                     Some(serde_json::json!({
                         "event_type": event_type.clone(),
                         "target_agent_id": target_agent_id.clone(),
                         "source_agent_id": params.source_agent_id.clone(),
+                        "session_id": session_id.clone(),
                         "message_len": message.len(),
                         "message_sha256": sha256_hex(&message),
                         "metadata_sha256": metadata.as_ref().and_then(|v| serde_json::to_string(v).ok()).map(|v| sha256_hex(&v)),
@@ -293,13 +294,9 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        log_gateway_causal_event(
-                            &causal_logger,
-                            &gateway_actor_id(),
-                            &session_id,
-                            next_event_seq(&mut gateway_event_seq),
-                            "event.ingest.completed",
-                            EntryStatus::Success,
+                        let _ = trace_session.log_completed(
+                            "event.ingest",
+                            None,
                             Some(serde_json::json!({
                                 "event_type": event_type.clone(),
                                 "target_agent_id": target_agent_id.clone(),
@@ -332,18 +329,13 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        log_gateway_causal_event(
-                            &causal_logger,
-                            &gateway_actor_id(),
-                            &session_id,
-                            next_event_seq(&mut gateway_event_seq),
-                            "event.ingest.failed",
-                            EntryStatus::Error,
+                        let _ = trace_session.log_failed(
+                            "event.ingest",
+                            &e.to_string(),
                             Some(serde_json::json!({
                                 "event_type": event_type.clone(),
                                 "target_agent_id": target_agent_id.clone(),
                                 "source_agent_id": params.source_agent_id.clone(),
-                                "reason": e.to_string(),
                             })),
                         );
                         JsonRpcResponse::error(
@@ -465,6 +457,7 @@ fn append_delegation_task_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::{init_gateway_causal_logger, log_gateway_causal_event};
     use crate::scheduler::{inbox_path, task_board_path, InboxEvent};
     use autonoetic_types::task_board::TaskBoardEntry;
     use tempfile::TempDir;
@@ -613,6 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_dispatch_agent_spawn_enforces_max_children_per_session() {
         let (temp, router) = test_router();
         let agents_dir = temp.path().join("agents");
@@ -675,6 +669,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_dispatch_event_ingest_enforces_max_children_per_session() {
         let (temp, router) = test_router();
         let agents_dir = temp.path().join("agents");

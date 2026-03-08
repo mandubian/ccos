@@ -410,13 +410,13 @@ async fn test_generated_skill_approval_and_execution() {
         "Expected exactly one approval requested event"
     );
     assert!(
-        gateway_history.contains("background.approval.approved"),
-        "Expected background.approval.approved in causal chain"
+        gateway_history.contains("background.approval.completed"),
+        "Expected background.approval.completed in causal chain"
     );
     assert_eq!(
-        count_occurrences(&gateway_history, "background.approval.approved"),
+        count_occurrences(&gateway_history, "background.approval.completed"),
         1,
-        "Expected exactly one approval approved event"
+        "Expected exactly one approval completed event"
     );
 
     // Verify session ID propagation for the learner
