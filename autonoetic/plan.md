@@ -412,14 +412,28 @@ Progress notes:
 
 ##### 6. CLI split into focused command modules
 
-- [ ] Split the Autonoetic CLI binary into focused modules such as `cli/gateway.rs`, `cli/agent.rs`, `cli/trace.rs`, `cli/chat.rs`, and `cli/mcp.rs`.
-- [ ] Introduce small helper services where needed (`TraceStore`, `McpRegistry` wrappers, output formatters) instead of leaving all command behavior in `main.rs`.
-- [ ] Keep the top-level clap surface unchanged while reducing the size and coupling of `main.rs`.
+- [x] Split the Autonoetic CLI binary into focused modules such as `cli/gateway.rs`, `cli/agent.rs`, `cli/trace.rs`, `cli/chat.rs`, and `cli/mcp.rs`.
+- [x] Introduce small helper services where needed (`TraceStore`, `McpRegistry` wrappers, output formatters) instead of leaving all command behavior in `main.rs`.
+- [x] Keep the top-level clap surface unchanged while reducing the size and coupling of `main.rs`.
 
 Acceptance criteria:
-- `main.rs` becomes command wiring rather than command implementation.
-- Trace, gateway, agent, MCP, and chat flows can be read in isolation.
-- Existing CLI tests continue passing without flag or output regressions.
+- [x] `main.rs` becomes command wiring rather than command implementation.
+- [x] Trace, gateway, agent, MCP, and chat flows can be read in isolation.
+- [x] Existing CLI tests continue passing without flag or output regressions.
+
+Progress notes (2026-03-08):
+- Reduced `main.rs` from 1834 lines to 138 lines
+- Created `cli/common.rs` (508 lines) with all CLI argument structs, shared utilities, and re-exports
+- Created `cli/gateway.rs` (180 lines) - gateway command handlers
+- Created `cli/agent.rs` (210 lines) - agent command handlers including runtime execution
+- Created `cli/trace.rs` (190 lines) - trace command handlers with trace store access
+- Created `cli/chat.rs` (90 lines) - terminal chat implementation
+- Created `cli/mcp.rs` (70 lines) - MCP registry commands
+- Moved 6 unit tests from original `main.rs` to module test blocks:
+  - `cli/agent.rs`: 2 tests (scaffold creation, sandbox policy enforcement)
+  - `cli/trace.rs`: 3 tests (trace validation, session ordering)
+  - `cli/common.rs`: 1 test (session summary collection)
+- All 9 tests pass (6 unit + 3 E2E), no compiler warnings
 
 ##### 7. Tool registry cleanup and shared path-tool helpers
 
