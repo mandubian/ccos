@@ -368,27 +368,47 @@ Progress notes:
 - Scheduler tracing paths now use `TraceSession` helpers in decision/approval/runner modules instead of manual gateway event-sequence plumbing.
 - Verified with focused scheduler and tracing runs: `cargo test -p autonoetic-gateway scheduler -- --nocapture` and `cargo test -p autonoetic-gateway test_trace_ordering_with_duplicate_event_seqs -- --nocapture`.
 
-##### 4. Router spawn/ingest unification
+##### 4. Router spawn/ingest unification ✅
 
-- [ ] Extract one internal helper for the shared `agent.spawn` / `event.ingest` workflow: parse input, resolve session, emit gateway causal events, optionally append task-board metadata, and call the execution service.
-- [ ] Stop reloading target agent data in router-only prechecks when the same path is reloaded again by the execution layer.
-- [ ] Keep param parsing and user-facing response shapes distinct, but collapse the duplicated orchestration path.
+- [x] Extract one internal helper for the shared `agent.spawn` / `event.ingest` workflow: parse input, resolve session, emit gateway causal events, optionally append task-board metadata, and call the execution service.
+- [x] Stop reloading target agent data in router-only prechecks when the same path is reloaded again by the execution layer.
+- [x] Keep param parsing and user-facing response shapes distinct, but collapse the duplicated orchestration path.
 
 Acceptance criteria:
 - `agent.spawn` and `event.ingest` share one internal execution pipeline.
 - Gateway causal logging shape remains unchanged externally.
 - Tests continue covering both JSON-RPC methods independently.
 
-##### 5. Lifecycle collaborator extraction
+Progress notes:
+- Introduced `IngressType` enum to distinguish between `Spawn` and `Ingest` variants while sharing common execution logic.
+- Extracted `execute_agent_request()` helper that handles causal logger initialization, trace session creation, `.requested`/`.completed`/`.failed` event logging, and agent spawning.
+- Handler methods now focus on param parsing, task board delegation entries, and response formatting.
+- Eliminated all duplicate agent manifest loads in router: background signal detection and inbox writing now happen entirely in execution layer using already-loaded manifest.
+- `SpawnResult` now includes `should_signal_background` flag computed from loaded manifest, eliminating router-side manifest reloads.
+- Removed router helper `should_signal_background_on_ingress()` and unused `append_inbox_event` import.
+- All 11 router unit tests pass, including failure path coverage for unknown agents and unauthorized spawns.
+- Full gateway test suite (113 tests total) passes without regressions.
 
-- [ ] Shrink `runtime/lifecycle.rs` by extracting at least `SessionTracer`, `ToolCallProcessor`, and reevaluation-state persistence helpers into focused collaborators.
-- [ ] Keep the agent loop centered on: build completion request, invoke model, dispatch stop reason, apply reply filter.
-- [ ] Preserve centralized disclosure, evidence, and causal logging semantics while moving plumbing out of the loop body.
+##### 5. Lifecycle collaborator extraction ✅
+
+- [x] Shrink `runtime/lifecycle.rs` by extracting at least `SessionTracer`, `ToolCallProcessor`, and reevaluation-state persistence helpers into focused collaborators.
+- [x] Keep the agent loop centered on: build completion request, invoke model, dispatch stop reason, apply reply filter.
+- [x] Preserve centralized disclosure, evidence, and causal logging semantics while moving plumbing out of the loop body.
 
 Acceptance criteria:
 - The main loop reads primarily as orchestration, not as a long list of audit/persistence details.
 - Tool execution remains MCP-first, then native.
 - Current lifecycle/disclosure/tool tests remain green.
+
+Progress notes:
+- Created `runtime/session_tracer.rs` (380 lines) - owns `EvidenceMode`, `EvidenceStore`, `SessionTracer` struct with methods for causal logging, session tracing, and evidence capture.
+- Created `runtime/tool_call_processor.rs` (100 lines) - handles tool execution, disclosure tracking, and secret store integration; takes mutable references to `McpToolRuntime` and `Option<&mut SecretStoreRuntime>` for reuse across loop iterations.
+- Created `runtime/reevaluation_state.rs` (84 lines) - contains `reevaluation_state_path`, `load_reevaluation_state`, `persist_reevaluation_state`, `execute_scheduled_action`.
+- Removed orphaned `EvidenceMode` impl block and `EvidenceStore` struct from `lifecycle.rs` (they now live in `session_tracer.rs`).
+- Updated imports in `runtime/tools.rs`, `scheduler/runner.rs`, `scheduler/approval.rs`, `scheduler.rs`, and `execution.rs` to use new module paths.
+- `lifecycle.rs` reduced from 859 lines to 460 lines (47% reduction).
+- All 113 tests pass without regressions.
+- No compiler warnings.
 
 ##### 6. CLI split into focused command modules
 
