@@ -81,7 +81,7 @@ fn decide_request(
 
     if matches!(status, ApprovalStatus::Rejected) {
         let agent_dir = config.agents_dir.join(&decision.agent_id);
-        crate::runtime::lifecycle::persist_reevaluation_state(&agent_dir, |state| {
+        crate::runtime::reevaluation_state::persist_reevaluation_state(&agent_dir, |state| {
             state
                 .open_approval_request_ids
                 .retain(|existing| existing != &decision.request_id);

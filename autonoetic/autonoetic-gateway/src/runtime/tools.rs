@@ -1,6 +1,6 @@
 use crate::llm::ToolDefinition;
 use crate::policy::PolicyEngine;
-use crate::runtime::lifecycle::persist_reevaluation_state;
+use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::background::ScheduledAction;

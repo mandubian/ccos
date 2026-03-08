@@ -2,7 +2,8 @@
 
 use crate::causal_chain::CausalLogger;
 use crate::llm::{build_driver, Message};
-use crate::runtime::lifecycle::{execute_scheduled_action, AgentExecutor};
+use crate::runtime::lifecycle::AgentExecutor;
+use crate::runtime::reevaluation_state::execute_scheduled_action;
 use crate::runtime::session_context::SessionContext;
 use crate::agent::AgentRepository;
 use autonoetic_types::agent::AgentManifest;
@@ -20,6 +21,7 @@ pub struct SpawnResult {
     pub agent_id: String,
     pub session_id: String,
     pub assistant_reply: Option<String>,
+    pub should_signal_background: bool,
 }
 
 #[derive(Clone)]
@@ -53,6 +55,7 @@ impl GatewayExecutionService {
         session_id: &str,
         source_agent_id: Option<&str>,
         is_message: bool,
+        ingest_event_type: Option<&str>,
     ) -> anyhow::Result<SpawnResult> {
         let span = tracing::info_span!(
             "spawn_agent_once",
@@ -111,6 +114,24 @@ impl GatewayExecutionService {
             }
 
             let loaded = repo.get_sync(agent_id)?;
+            // Determine if background signaling is needed
+            let should_signal_background = ingest_event_type.is_some()
+                && loaded
+                    .manifest
+                    .background
+                    .as_ref()
+                    .map(|bg| bg.enabled && bg.wake_predicates.new_messages)
+                    .unwrap_or(false);
+            // Signal inbox for background scheduler if this is an event.ingest call
+            if should_signal_background {
+                let event_type = ingest_event_type.unwrap();
+                let _ = crate::scheduler::append_inbox_event(
+                    &self.config,
+                    agent_id,
+                    crate::router::ingress_wake_signal_internal(event_type, session_id),
+                    Some(session_id),
+                );
+            }
             let llm_config = loaded
                 .manifest
                 .llm_config
@@ -155,6 +176,7 @@ impl GatewayExecutionService {
                 agent_id: agent_id.to_string(),
                 session_id: resolved_session_id,
                 assistant_reply,
+                should_signal_background,
             })
         })
         .await
