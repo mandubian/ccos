@@ -3,7 +3,7 @@
 //! executing scheduled actions, and handling approval resolutions.
 
 use crate::execution::{gateway_actor_id, init_gateway_causal_logger, GatewayExecutionService};
-use crate::runtime::lifecycle::persist_reevaluation_state;
+use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::tracing::{EventScope, SessionId, TraceSession};
 use autonoetic_types::background::{
     ApprovalDecision, ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState,
@@ -174,7 +174,7 @@ pub async fn handle_due_wake(
         let kickoff = background_kickoff_prompt(&reason, &reevaluation);
         Some(
             execution
-                .spawn_agent_once(agent_id, &kickoff, session_id, None, false)
+                .spawn_agent_once(agent_id, &kickoff, session_id, None, false, None)
                 .await
                 .map(|spawn| spawn.assistant_reply.unwrap_or_default()),
         )

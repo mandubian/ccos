@@ -102,7 +102,7 @@ async fn run_scheduler_tick_at(
             store::save_background_state(&state_path, &state)?;
         }
 
-        let reevaluation = crate::runtime::lifecycle::load_reevaluation_state(&loaded.dir)?;
+        let reevaluation = crate::runtime::reevaluation_state::load_reevaluation_state(&loaded.dir)?;
         let reason = decision::should_wake(
             &config,
             &loaded.manifest.agent.id,

@@ -3,7 +3,7 @@
 use crate::execution::{
     gateway_actor_id, init_gateway_causal_logger, sha256_hex, GatewayExecutionService, SpawnResult,
 };
-use crate::scheduler::{append_inbox_event, append_task_board_entry};
+use crate::scheduler::append_task_board_entry;
 use crate::tracing::{EventScope, SessionId, TraceSession};
 #[cfg(test)]
 use autonoetic_types::causal_chain::EntryStatus;
@@ -13,6 +13,22 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::future::Future;
 use std::sync::Arc;
+
+#[derive(Debug)]
+enum IngressType {
+    Spawn {
+        agent_id: String,
+        source_agent_id: Option<String>,
+        message: String,
+    },
+    Ingest {
+        target_agent_id: String,
+        source_agent_id: Option<String>,
+        event_type: String,
+        message: String,
+        metadata: Option<serde_json::Value>,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -84,6 +100,122 @@ impl JsonRpcRouter {
         self.execution.clone()
     }
 
+    async fn execute_agent_request(
+        &self,
+        ingress: IngressType,
+        session_id: String,
+    ) -> Result<(SpawnResult, Option<TraceSession>), (String, Option<TraceSession>)> {
+        let (action_name, agent_id, source_agent_id, message, event_type_for_inbox, event_type_str, metadata_for_trace) = match &ingress {
+            IngressType::Spawn {
+                agent_id,
+                source_agent_id,
+                message,
+            } => (
+                "agent.spawn",
+                agent_id.clone(),
+                source_agent_id.clone(),
+                message.clone(),
+                None,
+                None,
+                None,
+            ),
+            IngressType::Ingest {
+                target_agent_id,
+                source_agent_id,
+                event_type,
+                message,
+                metadata,
+            } => {
+                let kickoff = match metadata {
+                    Some(metadata) => format!(
+                        "Gateway event type: {}\nMessage: {}\nMetadata: {}",
+                        event_type, message, metadata
+                    ),
+                    None => format!("Gateway event type: {}\nMessage: {}", event_type, message),
+                };
+                (
+                    "event.ingest",
+                    target_agent_id.clone(),
+                    source_agent_id.clone(),
+                    kickoff,
+                    Some(event_type.clone()),
+                    Some(event_type.clone()),
+                    metadata.clone(),
+                )
+            }
+        };
+
+        let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
+            Ok(logger) => logger,
+            Err(e) => {
+                return Err((
+                    format!("{} failed: unable to initialize gateway causal logger: {}", action_name, e),
+                    None,
+                ));
+            }
+        };
+
+        let mut trace_session = TraceSession::create_with_session_id(
+            SessionId::from_string(session_id.clone()),
+            Arc::new(causal_logger),
+            gateway_actor_id(),
+            EventScope::Request,
+        );
+
+        let requested_data = match (&ingress, &metadata_for_trace) {
+            (IngressType::Spawn { agent_id, source_agent_id, message }, _) => serde_json::json!({
+                "agent_id": agent_id,
+                "source_agent_id": source_agent_id,
+                "session_id": session_id,
+                "message_len": message.len(),
+                "message_sha256": sha256_hex(message),
+            }),
+            (IngressType::Ingest { target_agent_id, source_agent_id, event_type, message, metadata }, _) => serde_json::json!({
+                "event_type": event_type,
+                "target_agent_id": target_agent_id,
+                "source_agent_id": source_agent_id,
+                "session_id": session_id,
+                "message_len": message.len(),
+                "message_sha256": sha256_hex(message),
+                "metadata_sha256": metadata.as_ref().and_then(|v| serde_json::to_string(v).ok()).as_ref().map(|v| sha256_hex(v)),
+            }),
+        };
+
+        let _ = trace_session.log_requested(action_name, Some(requested_data));
+
+        let result = match self
+            .spawn_agent_once(&agent_id, &message, &session_id, source_agent_id.as_deref(), false, event_type_for_inbox.as_deref())
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err((e.to_string(), Some(trace_session)));
+            }
+        };
+
+        // Background signal already sent in execution layer if needed (result.should_signal_background)
+
+        let completed_data = match (&ingress, &event_type_str) {
+            (IngressType::Spawn { source_agent_id, .. }, _) => serde_json::json!({
+                "agent_id": result.agent_id,
+                "source_agent_id": source_agent_id,
+                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
+                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+            }),
+            (IngressType::Ingest { target_agent_id, source_agent_id, event_type, .. }, _) => serde_json::json!({
+                "event_type": event_type,
+                "target_agent_id": target_agent_id,
+                "source_agent_id": source_agent_id,
+                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
+                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+            }),
+        };
+
+        let _ = trace_session.log_completed(action_name, None, Some(completed_data));
+
+        Ok((result, None))
+    }
+
     pub async fn dispatch(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         tracing::debug!("Dispatching JSON-RPC method: {}", req.method);
 
@@ -103,49 +235,16 @@ impl JsonRpcRouter {
                 let session_id = params
                     .session_id
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                let agent_id = params.agent_id;
-                let message = params.message;
+                let agent_id = params.agent_id.clone();
                 
-                let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return JsonRpcResponse::error(
-                            req.id,
-                            -32000,
-                            format!("agent.spawn failed: unable to initialize gateway causal logger: {}", e),
-                        );
-                    }
+                let ingress = IngressType::Spawn {
+                    agent_id: params.agent_id.clone(),
+                    source_agent_id: params.source_agent_id.clone(),
+                    message: params.message.clone(),
                 };
                 
-                let mut trace_session = TraceSession::create_with_session_id(
-                    SessionId::from_string(session_id.clone()),
-                    Arc::new(causal_logger),
-                    gateway_actor_id(),
-                    EventScope::Request,
-                );
-                
-                let _ = trace_session.log_requested(
-                    "agent.spawn",
-                    Some(serde_json::json!({
-                        "agent_id": agent_id.clone(),
-                        "source_agent_id": params.source_agent_id.clone(),
-                        "session_id": session_id.clone(),
-                        "message_len": message.len(),
-                        "message_sha256": sha256_hex(&message),
-                    })),
-                );
-                
-                match self
-                    .spawn_agent_once(
-                        &agent_id,
-                        &message,
-                        &session_id,
-                        params.source_agent_id.as_deref(),
-                        false,
-                    )
-                    .await
-                {
-                    Ok(result) => {
+                match self.execute_agent_request(ingress, session_id.clone()).await {
+                    Ok((result, _trace_session)) => {
                         if let Some(source_agent_id) = params.source_agent_id.as_deref() {
                             let _ = append_delegation_task_entry(
                                 self.config.as_ref(),
@@ -159,16 +258,6 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        let _ = trace_session.log_completed(
-                            "agent.spawn",
-                            None,
-                            Some(serde_json::json!({
-                                "agent_id": result.agent_id.clone(),
-                                "source_agent_id": params.source_agent_id.clone(),
-                                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
-                                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
-                            })),
-                        );
                         JsonRpcResponse::success(
                             req.id,
                             serde_json::json!({
@@ -178,7 +267,7 @@ impl JsonRpcRouter {
                             }),
                         )
                     }
-                    Err(e) => {
+                    Err((e, maybe_trace_session)) => {
                         if let Some(source_agent_id) = params.source_agent_id.as_deref() {
                             let _ = append_delegation_task_entry(
                                 self.config.as_ref(),
@@ -187,18 +276,20 @@ impl JsonRpcRouter {
                                 "agent.spawn",
                                 TaskStatus::Failed,
                                 Some(serde_json::json!({
-                                    "error": e.to_string(),
+                                    "error": e.clone(),
                                 })),
                             );
                         }
-                        let _ = trace_session.log_failed(
-                            "agent.spawn",
-                            &e.to_string(),
-                            Some(serde_json::json!({
-                                "agent_id": agent_id.clone(),
-                                "source_agent_id": params.source_agent_id.clone(),
-                            })),
-                        );
+                        if let Some(mut trace_session) = maybe_trace_session {
+                            let _ = trace_session.log_failed(
+                                "agent.spawn",
+                                &e,
+                                Some(serde_json::json!({
+                                    "agent_id": agent_id.clone(),
+                                    "source_agent_id": params.source_agent_id.clone(),
+                                })),
+                            );
+                        }
                         JsonRpcResponse::error(req.id, -32000, format!("agent.spawn failed: {}", e))
                     }
                 }
@@ -218,68 +309,19 @@ impl JsonRpcRouter {
                     .session_id
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                let event_type = params.event_type;
-                let target_agent_id = params.target_agent_id;
-                let message = params.message;
-                let metadata = params.metadata;
+                let event_type = params.event_type.clone();
+                let target_agent_id = params.target_agent_id.clone();
                 
-                let causal_logger = match init_gateway_causal_logger(self.config.as_ref()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return JsonRpcResponse::error(
-                            req.id,
-                            -32000,
-                            format!("event.ingest failed: unable to initialize gateway causal logger: {}", e),
-                        );
-                    }
+                let ingress = IngressType::Ingest {
+                    target_agent_id: params.target_agent_id.clone(),
+                    source_agent_id: params.source_agent_id.clone(),
+                    event_type: params.event_type.clone(),
+                    message: params.message.clone(),
+                    metadata: params.metadata.clone(),
                 };
                 
-                let mut trace_session = TraceSession::create_with_session_id(
-                    SessionId::from_string(session_id.clone()),
-                    Arc::new(causal_logger),
-                    gateway_actor_id(),
-                    EventScope::Request,
-                );
-                
-                let _ = trace_session.log_requested(
-                    "event.ingest",
-                    Some(serde_json::json!({
-                        "event_type": event_type.clone(),
-                        "target_agent_id": target_agent_id.clone(),
-                        "source_agent_id": params.source_agent_id.clone(),
-                        "session_id": session_id.clone(),
-                        "message_len": message.len(),
-                        "message_sha256": sha256_hex(&message),
-                        "metadata_sha256": metadata.as_ref().and_then(|v| serde_json::to_string(v).ok()).map(|v| sha256_hex(&v)),
-                    })),
-                );
-
-                let kickoff = match metadata {
-                    Some(metadata) => format!(
-                        "Gateway event type: {}\nMessage: {}\nMetadata: {}",
-                        event_type, message, metadata
-                    ),
-                    None => format!("Gateway event type: {}\nMessage: {}", event_type, message),
-                };
-                if self.should_signal_background_on_ingress(&target_agent_id) {
-                    let _ = append_inbox_event(
-                        self.config.as_ref(),
-                        &target_agent_id,
-                        ingress_wake_signal(&event_type, &session_id),
-                        Some(&session_id),
-                    );
-                }
-                match self
-                    .spawn_agent_once(
-                        &target_agent_id,
-                        &kickoff,
-                        &session_id,
-                        params.source_agent_id.as_deref(),
-                        false,
-                    )
-                    .await
-                {
-                    Ok(result) => {
+                match self.execute_agent_request(ingress, session_id.clone()).await {
+                    Ok((result, _trace_session)) => {
                         if let Some(source_agent_id) = params.source_agent_id.as_deref() {
                             let _ = append_delegation_task_entry(
                                 self.config.as_ref(),
@@ -294,17 +336,6 @@ impl JsonRpcRouter {
                                 })),
                             );
                         }
-                        let _ = trace_session.log_completed(
-                            "event.ingest",
-                            None,
-                            Some(serde_json::json!({
-                                "event_type": event_type.clone(),
-                                "target_agent_id": target_agent_id.clone(),
-                                "source_agent_id": params.source_agent_id.clone(),
-                                "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
-                                "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
-                            })),
-                        );
                         JsonRpcResponse::success(
                             req.id,
                             serde_json::json!({
@@ -315,7 +346,7 @@ impl JsonRpcRouter {
                             }),
                         )
                     }
-                    Err(e) => {
+                    Err((e, maybe_trace_session)) => {
                         if let Some(source_agent_id) = params.source_agent_id.as_deref() {
                             let _ = append_delegation_task_entry(
                                 self.config.as_ref(),
@@ -324,20 +355,22 @@ impl JsonRpcRouter {
                                 "event.ingest",
                                 TaskStatus::Failed,
                                 Some(serde_json::json!({
-                                    "error": e.to_string(),
+                                    "error": e.clone(),
                                     "event_type": event_type.clone(),
                                 })),
                             );
                         }
-                        let _ = trace_session.log_failed(
-                            "event.ingest",
-                            &e.to_string(),
-                            Some(serde_json::json!({
-                                "event_type": event_type.clone(),
-                                "target_agent_id": target_agent_id.clone(),
-                                "source_agent_id": params.source_agent_id.clone(),
-                            })),
-                        );
+                        if let Some(mut trace_session) = maybe_trace_session {
+                            let _ = trace_session.log_failed(
+                                "event.ingest",
+                                &e,
+                                Some(serde_json::json!({
+                                    "event_type": event_type.clone(),
+                                    "target_agent_id": target_agent_id.clone(),
+                                    "source_agent_id": params.source_agent_id.clone(),
+                                })),
+                            );
+                        }
                         JsonRpcResponse::error(
                             req.id,
                             -32000,
@@ -357,9 +390,10 @@ impl JsonRpcRouter {
         session_id: &str,
         source_agent_id: Option<&str>,
         is_message: bool,
+        ingest_event_type: Option<&str>,
     ) -> anyhow::Result<SpawnResult> {
         self.execution
-            .spawn_agent_once(agent_id, message, session_id, source_agent_id, is_message)
+            .spawn_agent_once(agent_id, message, session_id, source_agent_id, is_message, ingest_event_type)
             .await
     }
 
@@ -388,15 +422,7 @@ impl JsonRpcRouter {
         self.execution.execution_semaphore()
     }
 
-    fn should_signal_background_on_ingress(&self, agent_id: &str) -> bool {
-        self.execution
-            .load_agent_manifest(agent_id)
-            .ok()
-            .and_then(|(manifest, _)| manifest.background)
-            .map(|background| background.enabled && background.wake_predicates.new_messages)
-            .unwrap_or(false)
-    }
-}
+  }
 
 #[derive(Debug, Deserialize)]
 struct AgentSpawnParams {
@@ -421,7 +447,7 @@ struct EventIngestParams {
     source_agent_id: Option<String>,
 }
 
-fn ingress_wake_signal(event_type: &str, session_id: &str) -> String {
+pub(crate) fn ingress_wake_signal_internal(event_type: &str, session_id: &str) -> String {
     serde_json::json!({
         "kind": "event_ingest",
         "event_type": event_type,
