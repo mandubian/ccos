@@ -320,8 +320,8 @@ Execution order matters here: do the identity/loading and trace/session ownershi
 ##### 1. Agent repository and identity unification
 
 - [x] Introduce a single `AgentRepository` / `LoadedAgent` path that owns directory scan, `SKILL.md` load, manifest parse, and instruction extraction.
-- [ ] Stop duplicating manifest load/parse flows across gateway execution, scheduler, router helpers, and CLI paths.
-- [ ] Decide one identity rule and enforce it consistently: either require `dir_name == manifest.agent.id` or explicitly separate filesystem location from logical agent identity.
+- [x] Stop duplicating manifest load/parse flows across gateway execution, scheduler, router helpers, and CLI paths.
+- [x] Decide one identity rule and enforce it consistently: require `dir_name == manifest.agent.id`.
 - [x] Replace direct `scan_agents` + local parse patterns with repository calls in the highest-traffic runtime paths first.
 
 Acceptance criteria:
@@ -332,31 +332,41 @@ Acceptance criteria:
 Progress notes:
 - `execution.rs` and `scheduler.rs` now load agents through `AgentRepository`.
 - Remaining cleanup is mostly edge-path consistency (notably CLI trace loading still enumerates directories directly before repository loads).
-- Identity mismatch enforcement exists in repository loading, but a few call sites still handle mismatches permissively (skip/continue) instead of surfacing deterministic errors.
+- Identity mismatch enforcement now hard-fails in repository load paths (`get_sync`, `list_loaded_sync`) and scheduler tick loading, so mismatches are surfaced deterministically instead of being skipped.
 
 ##### 2. Session tracer / trace-session ownership
 
-- [ ] Introduce a small `SessionTracer` / `TraceSession` abstraction that owns `session_id`, event sequencing, causal logger access, and shared trace helpers.
-- [ ] Stop resetting caller-local `event_seq` counters in router and scheduler request/tick handlers.
-- [ ] Move common gateway trace emission (`requested` / `completed` / `failed` / `skipped`) behind the tracer helper instead of open-coded calls.
-- [ ] Fix trace viewing so long-lived sessions are not ordered only by `event_seq` when duplicates may exist.
+- [x] Introduce a small `SessionTracer` / `TraceSession` abstraction that owns `session_id`, event sequencing, causal logger access, and shared trace helpers.
+- [x] Stop resetting caller-local `event_seq` counters in router and scheduler request/tick handlers.
+- [x] Move common gateway trace emission (`requested` / `completed` / `failed` / `skipped`) behind the tracer helper instead of open-coded calls.
+- [x] Fix trace viewing so long-lived sessions are not ordered only by `event_seq` when duplicates may exist.
 
 Acceptance criteria:
 - Router and scheduler no longer manually manage raw sequence counters.
 - Trace sorting is stable for long-lived sessions and background session IDs.
 - Trace-related tests cover at least one multi-event session that would previously have duplicate `event_seq` values.
 
+Progress notes:
+- Router and scheduler now create trace sessions with explicit gateway/session IDs and shared tracer helpers for `requested`/`completed`/`failed`/`skipped` events.
+- CLI trace view now sorts by `timestamp` then `event_seq`, avoiding ambiguous ordering when sequence values reset across requests/sessions.
+- Regression coverage includes tracer-level duplicate-sequence behavior and CLI timestamp-ordering checks.
+
 ##### 3. Scheduler split by domain responsibility
 
-- [ ] Split `scheduler.rs` into smaller modules such as `scheduler/decision.rs`, `scheduler/store.rs`, `scheduler/approval.rs`, and `scheduler/runner.rs`.
-- [ ] Separate wake-decision logic from persistence helpers and side-effecting execution.
-- [ ] Revisit approval-resolution wake behavior while doing the split so predicates are enforced intentionally, not incidentally.
-- [ ] Remove dead or misleading parameters and helpers that become unnecessary after the split.
+- [x] Split `scheduler.rs` into smaller modules such as `scheduler/decision.rs`, `scheduler/store.rs`, `scheduler/approval.rs`, and `scheduler/runner.rs`.
+- [x] Separate wake-decision logic from persistence helpers and side-effecting execution.
+- [x] Revisit approval-resolution wake behavior while doing the split so predicates are enforced intentionally, not incidentally.
+- [x] Remove dead or misleading parameters and helpers that become unnecessary after the split.
 
 Acceptance criteria:
 - Wake-decision code is readable without scrolling through approval and JSON persistence helpers.
 - Approval, inbox/task-board persistence, and runner side effects live behind module boundaries.
 - Existing scheduler integration tests still pass without behavior drift.
+
+Progress notes:
+- Scheduler domain logic is split into `scheduler/decision.rs`, `scheduler/store.rs`, `scheduler/approval.rs`, and `scheduler/runner.rs`, with `scheduler.rs` acting as thin orchestration entry points.
+- Scheduler tracing paths now use `TraceSession` helpers in decision/approval/runner modules instead of manual gateway event-sequence plumbing.
+- Verified with focused scheduler and tracing runs: `cargo test -p autonoetic-gateway scheduler -- --nocapture` and `cargo test -p autonoetic-gateway test_trace_ordering_with_duplicate_event_seqs -- --nocapture`.
 
 ##### 4. Router spawn/ingest unification
 

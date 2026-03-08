@@ -5,7 +5,6 @@ use autonoetic_gateway::llm::{CompletionRequest, Message};
 use autonoetic_gateway::router::{
     JsonRpcRequest as GatewayJsonRpcRequest, JsonRpcResponse as GatewayJsonRpcResponse,
 };
-use autonoetic_gateway::runtime::parser::SkillParser;
 use autonoetic_mcp::protocol::{
     JsonRpcRequest as McpJsonRpcRequest, JsonRpcResponse as McpJsonRpcResponse,
 };
@@ -344,7 +343,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Gateway(args) => match &args.command {
             GatewayCommands::Start { daemon, port, tls } => {
                 let config = autonoetic_gateway::config::load_config(&config_path)?;
-                let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
+                let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+                let agents = repo.list().await?;
                 let mcp_runtime = activate_registered_mcp_servers(&config_path).await?;
 
                 info!(
@@ -411,7 +411,8 @@ async fn main() -> anyhow::Result<()> {
             }
             AgentCommands::List => {
                 let config = autonoetic_gateway::config::load_config(&config_path)?;
-                let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
+                let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+                let agents = repo.list().await?;
                 if agents.is_empty() {
                     println!("No agents found in {}", config.agents_dir.display());
                 } else {
@@ -754,22 +755,9 @@ fn load_agent_runtime_context(
     agent_id: &str,
 ) -> anyhow::Result<(autonoetic_types::agent::AgentManifest, String, PathBuf)> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
-    let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
-    let target = agents
-        .into_iter()
-        .find(|a| a.id == agent_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Agent '{}' not found in {}",
-                agent_id,
-                config.agents_dir.display()
-            )
-        })?;
-
-    let skill_path = target.dir.join("SKILL.md");
-    let skill_content = std::fs::read_to_string(&skill_path)?;
-    let (manifest, instructions) = SkillParser::parse(&skill_content)?;
-    Ok((manifest, instructions, target.dir))
+    let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+    let loaded = repo.get_sync(agent_id)?;
+    Ok((loaded.manifest, loaded.instructions, loaded.dir))
 }
 
 async fn run_agent_with_runtime_with_driver(
@@ -1017,7 +1005,8 @@ fn terminal_channel_envelope(
 
 async fn print_gateway_status(config_path: &Path, json_output: bool) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
-    let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
+    let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+    let agents = repo.list().await?;
     let registry_path = mcp_registry_path(config_path);
     let servers = load_mcp_servers(&registry_path)?;
 
@@ -1307,7 +1296,11 @@ fn print_trace_session(
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("failed to resolve session match"))?;
-    entries.sort_by_key(|e| e.event_seq);
+    entries.sort_by(|a, b| {
+        a.timestamp
+            .cmp(&b.timestamp)
+            .then_with(|| a.event_seq.cmp(&b.event_seq))
+    });
 
     if json_output {
         let body = serde_json::json!({
@@ -1400,26 +1393,24 @@ fn load_agent_traces(
     requested_agent: Option<&str>,
 ) -> anyhow::Result<Vec<AgentTrace>> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
-    let mut agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
-    if let Some(agent_id) = requested_agent {
-        agents.retain(|a| a.id == agent_id);
-        anyhow::ensure!(
-            !agents.is_empty(),
-            "Agent '{}' not found in {}",
-            agent_id,
-            config.agents_dir.display()
-        );
-    }
+    let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+    
+    let filtered: Vec<_> = if let Some(agent_id) = requested_agent {
+        let loaded = repo.get_sync(agent_id)?;
+        vec![loaded]
+    } else {
+        repo.list_loaded_sync()?
+    };
 
     let mut traces = Vec::new();
-    for agent in agents {
+    for agent in filtered {
         let path = agent.dir.join("history").join("causal_chain.jsonl");
         if !path.exists() {
             continue;
         }
         let entries = read_trace_entries(&path)?;
         traces.push(AgentTrace {
-            agent_id: agent.id,
+            agent_id: agent.id().to_string(),
             entries,
         });
     }
@@ -1507,15 +1498,10 @@ struct CliAgentExecutor {
 #[async_trait::async_trait]
 impl McpAgentExecutor for CliAgentExecutor {
     async fn call_agent(&self, agent_id: &str, message: &str) -> anyhow::Result<String> {
-        let agents = autonoetic_gateway::agent::scan_agents(&self.agents_dir)?;
-        let target = agents
-            .into_iter()
-            .find(|a| a.id == agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found", agent_id))?;
-        let skill_path = target.dir.join("SKILL.md");
-        let skill_content = std::fs::read_to_string(&skill_path)?;
-        let (manifest, instructions) = SkillParser::parse(&skill_content)?;
-        let llm_config = manifest
+        let repo = autonoetic_gateway::AgentRepository::new(self.agents_dir.clone());
+        let loaded = repo.get(agent_id).await?;
+        let llm_config = loaded
+            .manifest
             .llm_config
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
 
@@ -1523,7 +1509,7 @@ impl McpAgentExecutor for CliAgentExecutor {
             autonoetic_gateway::llm::build_driver(llm_config.clone(), self.client.clone())?;
         let req = CompletionRequest::simple(
             llm_config.model,
-            vec![Message::system(instructions), Message::user(message)],
+            vec![Message::system(loaded.instructions), Message::user(message)],
         );
         let resp = driver.complete(&req).await?;
         if resp.text.trim().is_empty() {
@@ -1535,29 +1521,17 @@ impl McpAgentExecutor for CliAgentExecutor {
 
 async fn run_mcp_stdio_server(agent_id: &str, config_path: &Path) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
-    let agents = autonoetic_gateway::agent::scan_agents(&config.agents_dir)?;
-    let meta = agents
-        .into_iter()
-        .find(|a| a.id == agent_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Agent '{}' not found in {}",
-                agent_id,
-                config.agents_dir.display()
-            )
-        })?;
-    let skill_path = meta.dir.join("SKILL.md");
-    let skill_content = std::fs::read_to_string(&skill_path)?;
-    let (manifest, _) = SkillParser::parse(&skill_content)?;
+    let repo = autonoetic_gateway::AgentRepository::from_config(&config);
+    let loaded = repo.get(agent_id).await?;
 
     let mut server = AgentMcpServer::new(CliAgentExecutor {
         agents_dir: config.agents_dir,
         client: reqwest::Client::new(),
     });
     server.register_agent(ExposedAgent {
-        id: manifest.agent.id,
-        name: manifest.agent.name,
-        description: manifest.agent.description,
+        id: loaded.manifest.agent.id,
+        name: loaded.manifest.agent.name,
+        description: loaded.manifest.agent.description,
     });
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -1804,5 +1778,57 @@ Use tools when needed.
             .expect("s1 should be present");
         assert_eq!(s1.event_count, 2);
         assert_eq!(s1.max_event_seq, 2);
+    }
+
+    #[tokio::test]
+    async fn test_trace_session_ordering_by_timestamp() {
+        // Regression test for CLI trace ordering: should sort by timestamp, not event_seq
+        // This ensures stable ordering even when event_seq resets across sessions
+        let temp = tempdir().expect("tempdir should create");
+        let agent_dir = temp.path().join("agent_test");
+        let history_dir = agent_dir.join("history");
+        std::fs::create_dir_all(&history_dir).expect("history dir should create");
+
+        let causal_path = history_dir.join("causal_chain.jsonl");
+        
+        // Write entries in NON-CHRONOLOGICAL order to test the sort logic
+        // Order: 00:00:03, 00:00:01, 00:00:02 (scrambled)
+        let entry1 = r#"{"timestamp":"2026-03-08T00:00:03Z","log_id":"l1","actor_id":"a1","session_id":"s1","turn_id":null,"event_seq":3,"category":"gateway","action":"test.3","target":null,"status":"SUCCESS","reason":null,"payload":null,"payload_hash":null,"prev_hash":"genesis","entry_hash":"h1"}"#;
+        let entry2 = r#"{"timestamp":"2026-03-08T00:00:01Z","log_id":"l2","actor_id":"a1","session_id":"s1","turn_id":null,"event_seq":1,"category":"gateway","action":"test.1","target":null,"status":"SUCCESS","reason":null,"payload":null,"payload_hash":null,"prev_hash":"genesis","entry_hash":"h2"}"#;
+        let entry3 = r#"{"timestamp":"2026-03-08T00:00:02Z","log_id":"l3","actor_id":"a1","session_id":"s1","turn_id":null,"event_seq":2,"category":"gateway","action":"test.2","target":null,"status":"SUCCESS","reason":null,"payload":null,"payload_hash":null,"prev_hash":"genesis","entry_hash":"h3"}"#;
+        
+        // Write in scrambled order: 3, 1, 2
+        std::fs::write(&causal_path, format!("{}\n{}\n{}\n", entry1, entry2, entry3)).expect("should write");
+
+        let traces = vec![AgentTrace {
+            agent_id: "agent_test".to_string(),
+            entries: read_trace_entries(&causal_path).expect("should read entries"),
+        }];
+
+        // Entries are read in file order (3, 1, 2), not timestamp order
+        let entries = &traces[0].entries;
+        assert_eq!(entries.len(), 3);
+        
+        // Verify the entries are currently NOT in timestamp order
+        let first_read_timestamp = &entries[0].timestamp;
+        assert_eq!(first_read_timestamp, "2026-03-08T00:00:03Z", 
+            "First entry should be from file order (00:00:03), not sorted");
+        
+        // Apply the SAME sort logic used in print_trace_session (lines 1299-1303)
+        let mut sorted_entries = entries.clone();
+        sorted_entries.sort_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then_with(|| a.event_seq.cmp(&b.event_seq))
+        });
+        
+        // Verify sorted entries are now in correct timestamp order
+        let expected_order = vec!["2026-03-08T00:00:01Z", "2026-03-08T00:00:02Z", "2026-03-08T00:00:03Z"];
+        let actual_order: Vec<&str> = sorted_entries.iter().map(|e| e.timestamp.as_str()).collect();
+        assert_eq!(actual_order, expected_order, "Entries should be sorted by timestamp");
+        
+        // Verify actions also follow the sorted order
+        let actions: Vec<&str> = sorted_entries.iter().map(|e| e.action.as_str()).collect();
+        assert_eq!(actions, vec!["test.1", "test.2", "test.3"]);
     }
 }

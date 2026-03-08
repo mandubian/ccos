@@ -118,7 +118,7 @@ async fn test_background_scheduler_idle_timer_through_public_api() -> anyhow::Re
 
     let gateway_entries = read_jsonl_entries(&gateway_causal_path(&config))?;
     assert_eq!(
-        count_action(&gateway_entries, &session_id, "background.should_wake"),
+        count_action(&gateway_entries, &session_id, "background.should_wake.completed"),
         1
     );
     assert_eq!(
@@ -254,12 +254,11 @@ async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow
         count_action(
             &gateway_entries,
             &session_id,
-            "background.approval.approved"
+            "background.approval.completed"
         ),
         1
     );
-    assert_eq!(
-        count_action(&gateway_entries, &session_id, "background.wake.completed"),
+    assert_eq!(count_action(&gateway_entries, &session_id, "background.wake.completed"),
         1
     );
     assert_eq!(decision.agent_id, agent_id);

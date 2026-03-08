@@ -2,12 +2,12 @@
 
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 pub struct CausalLogger {
-    log_path: PathBuf,
+    pub log_path: PathBuf,
     last_hash: Mutex<String>,
 }
 
@@ -86,6 +86,28 @@ impl CausalLogger {
 
         *last_hash_guard = entry_hash;
         Ok(())
+    }
+
+    /// Get the log file path.
+    pub fn path(&self) -> &std::path::Path {
+        &self.log_path
+    }
+
+    /// Read all entries from the log file.
+    pub fn read_entries(path: &std::path::Path) -> anyhow::Result<Vec<CausalChainEntry>> {
+        let file = std::fs::File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let entry: CausalChainEntry = serde_json::from_str(trimmed)?;
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 }
 
