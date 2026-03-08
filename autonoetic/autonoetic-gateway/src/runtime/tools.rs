@@ -14,10 +14,16 @@ pub struct ToolMetadata {
     pub path: Option<String>,
 }
 
-/// Metadata about a tool's discovery, for logging and auditing.
-#[derive(Debug, Default)]
-pub struct DiscoveryMetadata {
-    pub path: Option<String>,
+/// Extracts the `path` field from tool arguments JSON.
+/// Shared helper for file-backed native tools (memory.read, memory.write, skill.draft).
+fn extract_path_from_args(arguments_json: &str) -> ToolMetadata {
+    let mut meta = ToolMetadata::default();
+    if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
+        if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str()) {
+            meta.path = Some(path.to_string());
+        }
+    }
+    meta
 }
 
 /// Defines a native, in-process tool handler.
@@ -265,13 +271,7 @@ impl NativeTool for MemoryReadTool {
     }
 
     fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        let mut meta = ToolMetadata::default();
-        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
-            if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str()) {
-                meta.path = Some(path.to_string());
-            }
-        }
-        meta
+        extract_path_from_args(arguments_json)
     }
 }
 
@@ -340,13 +340,7 @@ impl NativeTool for MemoryWriteTool {
     }
 
     fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        let mut meta = ToolMetadata::default();
-        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
-            if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str()) {
-                meta.path = Some(path.to_string());
-            }
-        }
-        meta
+        extract_path_from_args(arguments_json)
     }
 }
 
@@ -432,13 +426,7 @@ impl NativeTool for SkillDraftTool {
     }
 
     fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        let mut meta = ToolMetadata::default();
-        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
-            if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str()) {
-                meta.path = Some(path.to_string());
-            }
-        }
-        meta
+        extract_path_from_args(arguments_json)
     }
 }
 
