@@ -19,6 +19,7 @@ pub struct AgentExecutor {
     pub instructions: String,
     pub llm: std::sync::Arc<dyn LlmDriver>,
     pub agent_dir: PathBuf,
+    pub gateway_dir: Option<PathBuf>,
     pub registry: crate::runtime::tools::NativeToolRegistry,
     pub initial_user_message: String,
     pub guard: LoopGuard,
@@ -28,7 +29,7 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
-    pub fn new(
+     pub fn new(
         manifest: AgentManifest,
         instructions: String,
         llm: std::sync::Arc<dyn LlmDriver>,
@@ -40,6 +41,7 @@ impl AgentExecutor {
             instructions,
             llm,
             agent_dir,
+            gateway_dir: None,
             registry,
             initial_user_message: "What is your next action?".to_string(),
             guard: LoopGuard::new(5),
@@ -47,6 +49,11 @@ impl AgentExecutor {
             session_started: false,
             turn_counter: 0,
         }
+    }
+
+    pub fn with_gateway_dir(mut self, gateway_dir: PathBuf) -> Self {
+        self.gateway_dir = Some(gateway_dir);
+        self
     }
 
     pub fn with_initial_user_message(mut self, message: impl Into<String>) -> Self {
@@ -214,9 +221,10 @@ impl AgentExecutor {
                         &self.manifest,
                         &mut disclosure_state,
                         secret_store.as_mut(),
-                    );
+                    )
+                    .with_session_context(self.session_id.clone(), Some(turn_id.clone()));
 
-                    let results = processor.process_tool_calls(&response.tool_calls, &self.agent_dir, &mut tracer).await?;
+                    let results = processor.process_tool_calls(&response.tool_calls, &self.agent_dir, self.gateway_dir.as_deref(), &mut tracer).await?;
 
                     for (id, name, result) in results {
                         history.push(Message::tool_result(id, name, result));

@@ -15,6 +15,12 @@ pub enum Capability {
     MemoryWrite {
         scopes: Vec<String>,
     },
+    MemoryShare {
+        allowed_targets: Vec<String>,
+    },
+    MemorySearch {
+        scopes: Vec<String>,
+    },
     NetConnect {
         hosts: Vec<String>,
     },
