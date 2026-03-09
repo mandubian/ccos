@@ -7,6 +7,7 @@ use autonoetic_types::background::{
     BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
 use autonoetic_types::capability::Capability;
+use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::runtime_lock::{
     LockedDependencySet, LockedGateway, LockedSandbox, LockedSdk, RuntimeLock,
 };
@@ -48,10 +49,14 @@ fn validate_relative_agent_path(path: &str) -> anyhow::Result<()> {
 fn validate_agent_id(agent_id: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!agent_id.trim().is_empty(), "agent_id must not be empty");
     anyhow::ensure!(
+        !agent_id.starts_with('.') && !agent_id.ends_with('.') && !agent_id.contains(".."),
+        "agent_id must not start or end with '.', or contain '..'"
+    );
+    anyhow::ensure!(
         agent_id
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'),
-        "agent_id may only contain ASCII letters, digits, '-' and '_'"
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.'),
+        "agent_id may only contain ASCII letters, digits, '.', '-' and '_'"
     );
     Ok(())
 }
@@ -1254,6 +1259,113 @@ fn normalize_install_background(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct SpawnAgentArgs {
+    agent_id: String,
+    message: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+pub struct AgentSpawnTool;
+
+impl NativeTool for AgentSpawnTool {
+    fn name(&self) -> &'static str {
+        "agent.spawn"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Delegate the current task to an existing specialist agent and receive its reply in-session.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string" },
+                    "message": { "type": "string" },
+                    "session_id": { "type": "string" }
+                },
+                "required": ["agent_id", "message"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let args: SpawnAgentArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+        validate_agent_id(&args.agent_id)?;
+        anyhow::ensure!(
+            !args.message.trim().is_empty(),
+            "message must not be empty"
+        );
+
+        let resolved_session_id = args
+            .session_id
+            .clone()
+            .or_else(|| session_id.map(ToOwned::to_owned))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let agents_dir = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+        let config = GatewayConfig {
+            agents_dir: agents_dir.to_path_buf(),
+            ..GatewayConfig::default()
+        };
+        let execution = crate::execution::GatewayExecutionService::new(config);
+
+        let source_agent_id = manifest.agent.id.clone();
+        let target_agent_id = args.agent_id.clone();
+        let kickoff_message = args.message.clone();
+        let spawn_future = async move {
+            execution
+                .spawn_agent_once(
+                    &target_agent_id,
+                    &kickoff_message,
+                    &resolved_session_id,
+                    Some(&source_agent_id),
+                    false,
+                    None,
+                )
+                .await
+        };
+
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(spawn_future))?
+        } else {
+            tokio::runtime::Runtime::new()?.block_on(spawn_future)?
+        };
+
+        Ok(
+            serde_json::json!({
+                "ok": true,
+                "status": "agent_spawned",
+                "agent_id": result.agent_id,
+                "session_id": result.session_id,
+                "assistant_reply": result.assistant_reply,
+            })
+            .to_string(),
+        )
+    }
+}
+
 pub struct AgentInstallTool;
 
 impl NativeTool for AgentInstallTool {
@@ -1608,6 +1720,7 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(MemorySearchTool));
     registry.register(Box::new(MemoryShareTool));
     registry.register(Box::new(SkillDraftTool));
+    registry.register(Box::new(AgentSpawnTool));
     registry.register(Box::new(AgentInstallTool));
     registry
 }
@@ -1667,8 +1780,39 @@ mod tests {
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
-        assert_eq!(defs_spawn.len(), 1);
-        assert_eq!(defs_spawn[0].name, "agent.install");
+        assert_eq!(defs_spawn.len(), 2);
+        assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
+        assert!(defs_spawn.iter().any(|d| d.name == "agent.install"));
+    }
+
+    #[test]
+    fn test_agent_spawn_tool_validates_non_empty_message() {
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 2 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "researcher.default",
+            "message": ""
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "agent.spawn",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                Some("session-1"),
+                None,
+            )
+            .expect_err("empty message should be rejected");
+        assert!(err.to_string().contains("message must not be empty"));
     }
 
     #[test]
@@ -1756,6 +1900,44 @@ mod tests {
         )
         .expect("background state should exist");
         assert!(background_state.contains("background::fib_worker"));
+    }
+
+    #[test]
+    fn test_agent_install_tool_allows_dotted_agent_ids() {
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 2 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "researcher.default",
+            "name": "Researcher Default",
+            "description": "Research specialist",
+            "instructions": "# Researcher Default\nCollect evidence and summarize it."
+        });
+
+        let registry = default_registry();
+        registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("agent install should accept dotted IDs");
+
+        let child_dir = agents_dir.join("researcher.default");
+        assert!(child_dir.join("SKILL.md").exists());
+        assert!(child_dir.join("runtime.lock").exists());
+
+        let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should read");
+        assert!(skill.contains("id: researcher.default"));
     }
 
     #[test]

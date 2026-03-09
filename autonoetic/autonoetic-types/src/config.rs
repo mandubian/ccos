@@ -18,6 +18,10 @@ pub struct GatewayConfig {
     #[serde(default = "default_ofp_port")]
     pub ofp_port: u16,
 
+    /// Default lead agent used for ambiguous ingress when target_agent_id is omitted.
+    #[serde(default = "default_lead_agent_id")]
+    pub default_lead_agent_id: String,
+
     /// Enable TLS on the OFP port.
     #[serde(default)]
     pub tls: bool,
@@ -60,6 +64,10 @@ fn default_ofp_port() -> u16 {
     4200
 }
 
+fn default_lead_agent_id() -> String {
+    "planner.default".to_string()
+}
+
 fn default_max_concurrent_spawns() -> usize {
     8
 }
@@ -86,6 +94,7 @@ impl Default for GatewayConfig {
             agents_dir: default_agents_dir(),
             port: default_port(),
             ofp_port: default_ofp_port(),
+            default_lead_agent_id: default_lead_agent_id(),
             tls: false,
             max_concurrent_spawns: default_max_concurrent_spawns(),
             max_pending_spawns_per_agent: default_max_pending_spawns_per_agent(),
@@ -108,5 +117,6 @@ mod tests {
         assert_eq!(config.background_tick_secs, 5);
         assert_eq!(config.background_min_interval_secs, 60);
         assert_eq!(config.max_background_due_per_tick, 32);
+        assert_eq!(config.default_lead_agent_id, "planner.default");
     }
 }
