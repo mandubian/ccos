@@ -14,6 +14,21 @@ use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::disclosure::DisclosurePolicy;
 use std::path::PathBuf;
 
+const FOUNDATION_INSTRUCTIONS: &str = include_str!("foundation_instructions.md");
+
+pub(crate) fn compose_system_instructions(agent_instructions: &str) -> String {
+    let trimmed = agent_instructions.trim();
+    if trimmed.is_empty() {
+        FOUNDATION_INSTRUCTIONS.trim().to_string()
+    } else {
+        format!(
+            "{}\n\n---\n\nAgent-Specific Instructions\n\n{}",
+            FOUNDATION_INSTRUCTIONS.trim(),
+            trimmed
+        )
+    }
+}
+
 pub struct AgentExecutor {
     pub manifest: AgentManifest,
     pub instructions: String,
@@ -102,8 +117,9 @@ impl AgentExecutor {
 
     /// Run the agent loop until completion or guard trip.
     pub async fn execute_loop(&mut self) -> anyhow::Result<()> {
+        let system_instructions = compose_system_instructions(&self.instructions);
         let mut history: Vec<Message> = vec![
-            Message::system(self.instructions.clone()),
+            Message::system(system_instructions),
             Message::user(self.initial_user_message.clone()),
         ];
         match self.execute_with_history(&mut history).await {
@@ -267,6 +283,7 @@ mod tests {
     use autonoetic_types::capability::Capability;
     use autonoetic_types::disclosure::{DisclosureClass, DisclosurePolicy};
     use std::sync::Arc;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     fn manifest_with_capabilities(capabilities: Vec<Capability>) -> AgentManifest {
@@ -347,6 +364,59 @@ mod tests {
             .await
             .expect("execution should succeed");
         assert_eq!(reply.as_deref(), Some("assistant reply"));
+    }
+
+    struct CaptureSystemDriver {
+        system_message: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmDriver for CaptureSystemDriver {
+        async fn complete(
+            &self,
+            request: &CompletionRequest,
+        ) -> anyhow::Result<CompletionResponse> {
+            let system = request
+                .messages
+                .iter()
+                .find(|m| m.role == crate::llm::Role::System)
+                .map(|m| m.content.clone());
+            *self.system_message.lock().expect("mutex should lock") = system;
+            Ok(CompletionResponse {
+                text: "ok".to_string(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: TokenUsage::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_loop_includes_foundation_in_system_prompt() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let captured = Arc::new(Mutex::new(None));
+        let driver = CaptureSystemDriver {
+            system_message: Arc::clone(&captured),
+        };
+        let mut runtime = AgentExecutor::new(
+            manifest,
+            "Agent local rules".to_string(),
+            Arc::new(driver),
+            temp.path().to_path_buf(),
+            crate::runtime::tools::default_registry(),
+        );
+
+        runtime.execute_loop().await.expect("execution should succeed");
+
+        let system = captured
+            .lock()
+            .expect("mutex should lock")
+            .clone()
+            .expect("system message should be captured");
+        assert!(system.contains("Autonoetic Gateway Foundation Rules"));
+        assert!(system.contains("Python sandbox code can import `autonoetic_sdk`"));
+        assert!(system.contains("Agent local rules"));
     }
 
     #[test]

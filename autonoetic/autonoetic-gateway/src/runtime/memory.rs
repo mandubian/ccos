@@ -327,21 +327,12 @@ impl Tier2Memory {
     /// Lists all scopes available to the current agent.
     /// Only returns scopes where the agent has at least one visible memory.
     pub fn list_scopes(&self) -> anyhow::Result<Vec<String>> {
-        // Select distinct scopes from memories that are visible to the current agent
         // A memory is visible if:
         // 1. visibility = '"global"', OR
-        // 2. visibility = '"private"' AND owner_agent_id = current_agent_id, OR
-        // 3. visibility = '"shared"' AND current_agent_id is in allowed_agents
+        // 2. visibility = '"private"' AND (owner_agent_id = current_agent_id OR writer_agent_id = current_agent_id), OR
+        // 3. visibility = '"shared"' AND (owner_agent_id = current_agent_id OR writer_agent_id = current_agent_id OR current_agent_id is in allowed_agents)
         // Note: visibility is stored as JSON string (e.g., '"private"')
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT scope FROM memories
-             WHERE (json_extract(visibility, '$') = 'global')
-                OR (json_extract(visibility, '$') = 'private' AND owner_agent_id = ?1)
-                OR (json_extract(visibility, '$') = 'shared' AND allowed_agents IS NOT NULL
-                    AND json_valid(allowed_agents)
-                    AND ?1 IN (SELECT value FROM json_each(allowed_agents)))
-             ORDER BY scope",
-        )?;
+        let mut stmt = self.conn.prepare(LIST_SCOPES_SQL)?;
         let mut rows = stmt.query(params![&self.current_agent_id])?;
 
         let mut scopes = Vec::new();
@@ -353,6 +344,616 @@ impl Tier2Memory {
         Ok(scopes)
     }
 }
+
+const LIST_SCOPES_SQL: &str = r#"
+    SELECT DISTINCT scope FROM memories
+    WHERE json_extract(visibility, '
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::memory::{MemorySourceType, MemoryVisibility};
+
+    #[test]
+    fn test_tier1_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier1Memory::new(temp.path()).unwrap();
+
+        mem.write_file("notes.txt", "hello world").unwrap();
+        assert_eq!(mem.read_file("notes.txt").unwrap(), "hello world");
+        assert!(mem.write_file("../out.txt", "hacker").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_basic() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:test:turn:1",
+                "The sky is blue",
+            )
+            .unwrap();
+
+        assert_eq!(memory.memory_id, "fact_1");
+        assert_eq!(memory.content, "The sky is blue");
+        assert_eq!(memory.owner_agent_id, "agent-1");
+        assert_eq!(memory.visibility, MemoryVisibility::Private);
+
+        // Verify content hash is set
+        assert!(!memory.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_tier2_memory_recall() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "The sky is blue",
+        )
+        .unwrap();
+
+        let recalled = mem.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "The sky is blue");
+
+        // Non-existent memory should fail
+        assert!(mem.recall("fact_2").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_visibility_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Private fact",
+        )
+        .unwrap();
+
+        // agent-1 can read its own memory
+        assert!(mem1.recall("fact_1").is_ok());
+
+        // agent-2 cannot read agent-1's private memory
+        assert!(mem2.recall("fact_1").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_sharing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Shared fact",
+        )
+        .unwrap();
+
+        // Share with agent-2
+        mem1.share_with("fact_1", vec!["agent-2".to_string()])
+            .unwrap();
+
+        // Now agent-2 can read it
+        let recalled = mem2.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "Shared fact");
+        assert_eq!(recalled.visibility, MemoryVisibility::Shared);
+        assert!(recalled.allowed_agents.contains(&"agent-2".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_memory_global() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Global fact",
+        )
+        .unwrap();
+
+        // Make global
+        mem1.make_global("fact_1").unwrap();
+
+        // All agents can read it
+        assert!(mem1.recall("fact_1").is_ok());
+        assert!(mem2.recall("fact_1").is_ok());
+    }
+
+    #[test]
+    fn test_tier2_memory_search() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "weather",
+            "agent-1",
+            "session:test:turn:1",
+            "Paris is sunny",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_2",
+            "weather",
+            "agent-1",
+            "session:test:turn:2",
+            "London is rainy",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_3",
+            "geography",
+            "agent-1",
+            "session:test:turn:3",
+            "Paris is in France",
+        )
+        .unwrap();
+
+        // Search by scope
+        let results = mem.search("weather", None).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search by scope and query
+        let results = mem.search("weather", Some("Paris")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory_id, "fact_1");
+    }
+
+    #[test]
+    fn test_tier2_memory_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:abc123:turn:5",
+                "Important fact",
+            )
+            .unwrap();
+
+        // Verify provenance fields
+        assert_eq!(memory.writer_agent_id, "agent-1");
+        assert_eq!(memory.source_ref, "session:abc123:turn:5");
+        assert_eq!(memory.source_type, MemorySourceType::AgentWrite);
+        assert!(!memory.created_at.is_empty());
+        assert!(!memory.updated_at.is_empty());
+        assert!(!memory.content_hash.is_empty());
+    }
+}
+) = 'global'
+       OR (json_extract(visibility, '
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::memory::{MemorySourceType, MemoryVisibility};
+
+    #[test]
+    fn test_tier1_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier1Memory::new(temp.path()).unwrap();
+
+        mem.write_file("notes.txt", "hello world").unwrap();
+        assert_eq!(mem.read_file("notes.txt").unwrap(), "hello world");
+        assert!(mem.write_file("../out.txt", "hacker").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_basic() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:test:turn:1",
+                "The sky is blue",
+            )
+            .unwrap();
+
+        assert_eq!(memory.memory_id, "fact_1");
+        assert_eq!(memory.content, "The sky is blue");
+        assert_eq!(memory.owner_agent_id, "agent-1");
+        assert_eq!(memory.visibility, MemoryVisibility::Private);
+
+        // Verify content hash is set
+        assert!(!memory.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_tier2_memory_recall() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "The sky is blue",
+        )
+        .unwrap();
+
+        let recalled = mem.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "The sky is blue");
+
+        // Non-existent memory should fail
+        assert!(mem.recall("fact_2").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_visibility_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Private fact",
+        )
+        .unwrap();
+
+        // agent-1 can read its own memory
+        assert!(mem1.recall("fact_1").is_ok());
+
+        // agent-2 cannot read agent-1's private memory
+        assert!(mem2.recall("fact_1").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_sharing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Shared fact",
+        )
+        .unwrap();
+
+        // Share with agent-2
+        mem1.share_with("fact_1", vec!["agent-2".to_string()])
+            .unwrap();
+
+        // Now agent-2 can read it
+        let recalled = mem2.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "Shared fact");
+        assert_eq!(recalled.visibility, MemoryVisibility::Shared);
+        assert!(recalled.allowed_agents.contains(&"agent-2".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_memory_global() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Global fact",
+        )
+        .unwrap();
+
+        // Make global
+        mem1.make_global("fact_1").unwrap();
+
+        // All agents can read it
+        assert!(mem1.recall("fact_1").is_ok());
+        assert!(mem2.recall("fact_1").is_ok());
+    }
+
+    #[test]
+    fn test_tier2_memory_search() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "weather",
+            "agent-1",
+            "session:test:turn:1",
+            "Paris is sunny",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_2",
+            "weather",
+            "agent-1",
+            "session:test:turn:2",
+            "London is rainy",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_3",
+            "geography",
+            "agent-1",
+            "session:test:turn:3",
+            "Paris is in France",
+        )
+        .unwrap();
+
+        // Search by scope
+        let results = mem.search("weather", None).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search by scope and query
+        let results = mem.search("weather", Some("Paris")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory_id, "fact_1");
+    }
+
+    #[test]
+    fn test_tier2_memory_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:abc123:turn:5",
+                "Important fact",
+            )
+            .unwrap();
+
+        // Verify provenance fields
+        assert_eq!(memory.writer_agent_id, "agent-1");
+        assert_eq!(memory.source_ref, "session:abc123:turn:5");
+        assert_eq!(memory.source_type, MemorySourceType::AgentWrite);
+        assert!(!memory.created_at.is_empty());
+        assert!(!memory.updated_at.is_empty());
+        assert!(!memory.content_hash.is_empty());
+    }
+}
+) = 'private'
+           AND (owner_agent_id = ?1 OR writer_agent_id = ?1))
+       OR (json_extract(visibility, '
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::memory::{MemorySourceType, MemoryVisibility};
+
+    #[test]
+    fn test_tier1_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier1Memory::new(temp.path()).unwrap();
+
+        mem.write_file("notes.txt", "hello world").unwrap();
+        assert_eq!(mem.read_file("notes.txt").unwrap(), "hello world");
+        assert!(mem.write_file("../out.txt", "hacker").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_basic() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:test:turn:1",
+                "The sky is blue",
+            )
+            .unwrap();
+
+        assert_eq!(memory.memory_id, "fact_1");
+        assert_eq!(memory.content, "The sky is blue");
+        assert_eq!(memory.owner_agent_id, "agent-1");
+        assert_eq!(memory.visibility, MemoryVisibility::Private);
+
+        // Verify content hash is set
+        assert!(!memory.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_tier2_memory_recall() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "The sky is blue",
+        )
+        .unwrap();
+
+        let recalled = mem.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "The sky is blue");
+
+        // Non-existent memory should fail
+        assert!(mem.recall("fact_2").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_visibility_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Private fact",
+        )
+        .unwrap();
+
+        // agent-1 can read its own memory
+        assert!(mem1.recall("fact_1").is_ok());
+
+        // agent-2 cannot read agent-1's private memory
+        assert!(mem2.recall("fact_1").is_err());
+    }
+
+    #[test]
+    fn test_tier2_memory_sharing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Shared fact",
+        )
+        .unwrap();
+
+        // Share with agent-2
+        mem1.share_with("fact_1", vec!["agent-2".to_string()])
+            .unwrap();
+
+        // Now agent-2 can read it
+        let recalled = mem2.recall("fact_1").unwrap();
+        assert_eq!(recalled.content, "Shared fact");
+        assert_eq!(recalled.visibility, MemoryVisibility::Shared);
+        assert!(recalled.allowed_agents.contains(&"agent-2".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_memory_global() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem1 = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+        let mem2 = Tier2Memory::new(temp.path(), "agent-2").unwrap();
+
+        mem1.remember(
+            "fact_1",
+            "general",
+            "agent-1",
+            "session:test:turn:1",
+            "Global fact",
+        )
+        .unwrap();
+
+        // Make global
+        mem1.make_global("fact_1").unwrap();
+
+        // All agents can read it
+        assert!(mem1.recall("fact_1").is_ok());
+        assert!(mem2.recall("fact_1").is_ok());
+    }
+
+    #[test]
+    fn test_tier2_memory_search() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        mem.remember(
+            "fact_1",
+            "weather",
+            "agent-1",
+            "session:test:turn:1",
+            "Paris is sunny",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_2",
+            "weather",
+            "agent-1",
+            "session:test:turn:2",
+            "London is rainy",
+        )
+        .unwrap();
+
+        mem.remember(
+            "fact_3",
+            "geography",
+            "agent-1",
+            "session:test:turn:3",
+            "Paris is in France",
+        )
+        .unwrap();
+
+        // Search by scope
+        let results = mem.search("weather", None).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search by scope and query
+        let results = mem.search("weather", Some("Paris")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory_id, "fact_1");
+    }
+
+    #[test]
+    fn test_tier2_memory_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let mem = Tier2Memory::new(temp.path(), "agent-1").unwrap();
+
+        let memory = mem
+            .remember(
+                "fact_1",
+                "general",
+                "agent-1",
+                "session:abc123:turn:5",
+                "Important fact",
+            )
+            .unwrap();
+
+        // Verify provenance fields
+        assert_eq!(memory.writer_agent_id, "agent-1");
+        assert_eq!(memory.source_ref, "session:abc123:turn:5");
+        assert_eq!(memory.source_type, MemorySourceType::AgentWrite);
+        assert!(!memory.created_at.is_empty());
+        assert!(!memory.updated_at.is_empty());
+        assert!(!memory.content_hash.is_empty());
+    }
+}
+) = 'shared'
+           AND (owner_agent_id = ?1 OR writer_agent_id = ?1
+                OR (allowed_agents IS NOT NULL
+                    AND json_valid(allowed_agents)
+                    AND ?1 IN (SELECT value FROM json_each(allowed_agents)))))
+    ORDER BY scope
+"#;
 
 #[cfg(test)]
 mod tests {
