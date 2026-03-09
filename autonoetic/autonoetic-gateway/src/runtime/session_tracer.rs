@@ -142,7 +142,7 @@ impl SessionTracer {
         action: &str,
         status: EntryStatus,
         payload: Option<serde_json::Value>,
-    ) {
+    ) -> anyhow::Result<()> {
         let event_seq = self.next_event_seq();
         log_causal_event(
             &self.causal_logger,
@@ -154,7 +154,7 @@ impl SessionTracer {
             &self.session_id,
             self.turn_id.as_deref(),
             event_seq,
-        );
+        )
     }
 
     pub fn log_session_start(
@@ -184,12 +184,12 @@ impl SessionTracer {
             "start",
             EntryStatus::Success,
             Some(session_payload),
-        );
+        )?;
         Ok(())
     }
 
     pub fn log_session_end(&mut self, reason: &str) {
-        self.log_event(
+        let _ = self.log_event(
             "session",
             "end",
             EntryStatus::Success,
@@ -198,7 +198,7 @@ impl SessionTracer {
     }
 
     pub fn log_wake(&mut self, history_messages: usize, evidence_mode: EvidenceMode) {
-        self.log_event(
+        let _ = self.log_event(
             "lifecycle",
             "wake",
             EntryStatus::Success,
@@ -248,7 +248,7 @@ impl SessionTracer {
         )? {
             llm_payload["evidence_ref"] = serde_json::json!(evidence_ref);
         }
-        self.log_event("llm", "completion", EntryStatus::Success, Some(llm_payload));
+        self.log_event("llm", "completion", EntryStatus::Success, Some(llm_payload))?;
         Ok(())
     }
 
@@ -276,7 +276,7 @@ impl SessionTracer {
             "requested",
             EntryStatus::Success,
             Some(requested_payload),
-        );
+        )?;
         Ok(())
     }
 
@@ -304,12 +304,12 @@ impl SessionTracer {
             "completed",
             EntryStatus::Success,
             Some(completed_payload),
-        );
+        )?;
         Ok(())
     }
 
     pub fn log_hibernate(&mut self, stop_reason: &str) {
-        self.log_event(
+        let _ = self.log_event(
             "lifecycle",
             "hibernate",
             EntryStatus::Success,
@@ -318,7 +318,7 @@ impl SessionTracer {
     }
 
     pub fn log_stopped(&mut self, stop_reason: &str) {
-        self.log_event(
+        let _ = self.log_event(
             "lifecycle",
             "stopped",
             EntryStatus::Error,
@@ -343,12 +343,20 @@ fn log_causal_event(
     session_id: &str,
     turn_id: Option<&str>,
     event_seq: u64,
-) {
-    if let Err(e) = logger.log(
-        actor_id, session_id, turn_id, event_seq, category, action, status, payload,
-    ) {
-        tracing::warn!(error = %e, category, action, "Failed to append causal log entry");
-    }
+) -> anyhow::Result<()> {
+    logger
+        .log(
+            actor_id, session_id, turn_id, event_seq, category, action, status, payload,
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to append causal log entry for {}/{} in session {}: {}",
+                category,
+                action,
+                session_id,
+                e
+            )
+        })
 }
 
 fn truncate_for_log(value: &str, max_len: usize) -> String {
@@ -377,4 +385,23 @@ fn sha256_hex(value: &str) -> String {
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
     format!("{:x}", digest)
+}
+
+#[cfg(test)]
+impl SessionTracer {
+    /// Creates a test tracer that discards all output.
+    pub fn test_tracer() -> Self {
+        Self {
+            causal_logger: CausalLogger::test_logger("/dev/null"),
+            agent_id: "test-agent".to_string(),
+            session_id: "test-session".to_string(),
+            turn_id: Some("test-turn".to_string()),
+            event_seq: 0,
+            evidence_store: EvidenceStore {
+                mode: EvidenceMode::Off,
+                agent_dir: std::path::PathBuf::from("/tmp"),
+                base_dir: None,
+            },
+        }
+    }
 }
