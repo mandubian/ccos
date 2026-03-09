@@ -1,6 +1,6 @@
 """Python SDK for Autonoetic sandbox scripts."""
 
-from .client import AutonoeticSdk, init
+from .client import AutonoeticSdk, Client, init
 from .errors import (
     ApprovalRequiredError,
     AutonoeticSdkError,
@@ -10,6 +10,7 @@ from .errors import (
 
 __all__ = [
     "AutonoeticSdk",
+    "Client",
     "init",
     "AutonoeticSdkError",
     "PolicyViolation",
