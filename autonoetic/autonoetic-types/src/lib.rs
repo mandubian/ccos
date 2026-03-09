@@ -14,3 +14,4 @@ pub mod disclosure;
 pub mod memory;
 pub mod runtime_lock;
 pub mod task_board;
+pub mod tool_error;
