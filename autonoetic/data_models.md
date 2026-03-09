@@ -152,6 +152,25 @@ output_schema:
     json_path:
       type: "string"
 
+# Thin interoperability contract for downstream skills/agents
+output_contract:
+  memory_keys:
+    - "skills.pdf_table_extractor.last_run"
+    - "skills.pdf_table_extractor.latest_summary"
+  state_files:
+    - "state/pdf_table_extractor.json"
+  history_files:
+    - "history/pdf_table_extractor.log"
+  return_schema:
+    type: "object"
+    required: ["status", "tables_extracted"]
+    properties:
+      status:
+        type: "string"
+      tables_extracted:
+        type: "integer"
+  long_term_memory_mode: "sdk_preferred_with_file_fallback"
+
 # Physical constraints applied to the bwrap/Docker sandbox
 resource_limits:
   max_memory_mb: 256
@@ -175,6 +194,16 @@ artifact_dependencies:
 ```
 
 ## 4. Artifact Handle
+
+### Simplicity Note
+
+`output_contract` is intentionally lightweight metadata. It is not a second runtime planner. Its purpose is discoverability: other skills can reliably find where a worker writes data (memory keys, state files, history files, and optional return schema) without reverse-engineering script internals.
+
+For scheduled tasks, recommended behavior is:
+
+- keep deterministic tick checkpoints in `state/*`
+- use `autonoetic_sdk` for long-term memory keys when available
+- declare explicit file fallback in `output_contract` when SDK is unavailable in the runtime
 
 Large files, binaries, datasets, and shared outputs are represented as immutable content-addressed artifact handles.
 

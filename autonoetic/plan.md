@@ -315,17 +315,43 @@ Progress notes (2026-03-09):
 
 3. Iterative repair behavior
 
-- [ ] Ensure agents can observe gateway/tool validation failures, emit a corrected tool call, and continue in the same session.
-- [ ] Teach the foundation rules that gateway validation errors are normal and should trigger repair/retry when the user's intent is clear.
-- [ ] Teach the foundation rules that user questions are reserved for ambiguity, missing business decisions, or approval/policy boundaries.
-- [ ] Add an explicit execution-loop rule that agents should check real outcomes against expectations and update plans/actions based on observed mismatch.
-- [ ] Avoid one-shot success assumptions in planner/builder examples; examples should model propose -> execute -> inspect -> repair behavior.
+- [x] Ensure agents can observe gateway/tool validation failures, emit a corrected tool call, and continue in the same session.
+- [x] Teach the foundation rules that gateway validation errors are normal and should trigger repair/retry when the user's intent is clear.
+- [x] Teach the foundation rules that user questions are reserved for ambiguity, missing business decisions, or approval/policy boundaries.
+- [x] Add an explicit execution-loop rule that agents should check real outcomes against expectations and update plans/actions based on observed mismatch.
+- [x] Avoid one-shot success assumptions in planner/builder examples; examples should model propose -> execute -> inspect -> repair behavior.
+
+Progress notes (2026-03-09):
+- Foundation rules now explicitly describe validation failures as normal repair signals and reserve user clarification for ambiguity/policy boundaries.
+- Foundation rules now define iteration as the default loop (`propose -> execute -> inspect -> repair -> converge`) and require outcome-vs-expectation checks.
+- Builder example instructions (`specialized_builder` and `tiered_memory_probe`) now explicitly forbid one-shot assumptions and require structured error inspection/retry.
+- Runtime test `test_in_session_repair_loop_recovery_from_structured_error` in tool_call_processor.rs proves malformed tool calls can be repaired in-session.
+- Runbook: `docs/iteration-repair-validation-runbook.md` (manual + automated validation steps, KPIs, and pass/fail criteria).
 
 4. Validation scenarios
 
-- [ ] Add a focused runtime test where the model emits a malformed native tool call, receives a structured error `tool_result`, repairs it, and succeeds on the next turn.
-- [ ] Add a gateway-ingress or terminal-chat test proving invalid `agent.install` payloads can be repaired in-session instead of surfacing only as `event.ingest failed` to the CLI user.
-- [ ] Add a prompt-assembly regression test proving gateway-native runs and direct executor runs receive the same foundation rules.
+- [x] Add a focused runtime test where the model emits a malformed native tool call, receives a structured error `tool_result`, repairs it, and succeeds on the next turn.
+- [x] Add a gateway-ingress or terminal-chat test proving invalid `agent.install` payloads can be repaired in-session instead of surfacing only as `event.ingest failed` to the CLI user.
+- [x] Add a prompt-assembly regression test proving gateway-native runs and direct executor runs receive the same foundation rules.
+
+5. Scheduled-action install-time validation ✅
+
+- [x] Execute scheduled actions once at `agent.install` time by default (dry-start validation) to prove the worker can run at least one successful cycle before background-only operation.
+- [x] If install-time validation fails, surface a structured recoverable `tool_result` error to the installing agent in the same turn so it can repair files/skills and retry immediately.
+- [x] Keep an explicit escape hatch (`validate_on_install: false`) for advanced workflows that intentionally defer first execution.
+- [x] Add regression tests covering: successful first-run validation, structured in-session repair on first-run failure, and opt-out behavior.
+
+Progress notes (2026-03-09):
+- Added `validate_on_install: bool` field to `BackgroundPolicy` in `autonoetic-types/src/background.rs` with default `true`
+- Install-time validation executes the scheduled action once immediately after agent creation in `AgentInstallTool::execute()`
+- On success: reevaluation state marked with `install_validation_success`, init files created during validation
+- On failure: structured `ToolError` returned with `error_type: "execution"` allowing in-session repair
+- Fatal errors still abort the session; recoverable errors allow the agent to continue and retry
+- Opt-out via `validate_on_install: false` skips validation but still persists scheduled action for later execution
+- 3 regression tests in `autonoetic-gateway/src/runtime/tools.rs`:
+  - `test_install_time_validation_successful_first_run` - validates write_file action succeeds and creates init file
+  - `test_install_time_validation_structured_error_on_failure` - validates sandbox_exec failure returns structured error JSON
+  - `test_install_validate_on_install_opt_out` - validates deferred installation behavior with failing action
 
 Acceptance criteria:
 

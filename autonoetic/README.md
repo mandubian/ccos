@@ -94,3 +94,21 @@ You can inspect traces with:
 - `autonoetic trace sessions [--agent <agent_id>] [--json]`
 - `autonoetic trace show <session_id> [--agent <agent_id>] [--json]`
 - `autonoetic trace event <log_id> [--agent <agent_id>] [--json]`
+
+## Specialized Builder Example
+
+A second runnable example now lives at [`examples/specialized_builder`](examples/specialized_builder/README.md).
+
+From `autonoetic/`:
+
+```bash
+bash examples/specialized_builder/run.sh
+```
+
+This example promotes the builder flow into a real agent: you chat with a builder agent, it uses `agent.install` to create a durable child worker, and the background scheduler picks that worker up automatically. The default scripted demo sends:
+
+```text
+schedule every 20sec next fibonacci series element from previous element computed in last turn
+```
+
+and verifies that the spawned `fib_worker` runs its first scheduled tick and persists Fibonacci state/history under `agents/fib_worker/`.
