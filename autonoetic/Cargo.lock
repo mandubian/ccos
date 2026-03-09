@@ -181,8 +181,12 @@ dependencies = [
 name = "autonoetic-types"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -285,6 +289,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
