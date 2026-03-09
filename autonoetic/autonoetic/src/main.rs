@@ -63,6 +63,9 @@ async fn main() -> anyhow::Result<()> {
             cli::common::AgentCommands::List => {
                 cli::agent::handle_agent_list(&config_path).await?;
             }
+            cli::common::AgentCommands::Bootstrap { from, overwrite } => {
+                cli::agent::handle_agent_bootstrap(&config_path, from.as_deref(), *overwrite)?;
+            }
         },
 
         Commands::Chat(args) => {

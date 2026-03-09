@@ -45,6 +45,11 @@ pub fn init_agent_scaffold(
 
 pub fn render_skill_template(agent_id: &str, template: Option<&str>) -> String {
     let (name_suffix, description, body) = match template.unwrap_or("generic") {
+        "planner" => (
+            "Planner",
+            "Front-door lead agent for ambiguous goals.",
+            "You are a planner agent. Interpret ambiguous goals, decide whether to answer directly or structure specialist work, and keep delegation explicit and auditable.",
+        ),
         "researcher" => (
             "Researcher",
             "Research-focused autonomous agent.",
@@ -120,6 +125,150 @@ pub async fn handle_agent_list(config_path: &Path) -> anyhow::Result<()> {
         println!("{:<30} {}", "AGENT ID", "DIRECTORY");
         for a in &agents {
             println!("{:<30} {}", a.id, a.dir.display());
+        }
+    }
+    Ok(())
+}
+
+pub fn handle_agent_bootstrap(
+    config_path: &Path,
+    from: Option<&str>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        config_path.exists(),
+        "Config file not found at {}. Create it first (or pass a valid --config path) before running 'agent bootstrap'.",
+        config_path.display()
+    );
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    std::fs::create_dir_all(&config.agents_dir)?;
+
+    let reference_root = resolve_reference_agents_dir(from)?;
+    let bundles = discover_reference_bundles(&reference_root)?;
+    anyhow::ensure!(
+        !bundles.is_empty(),
+        "No reference bundles found under {}",
+        reference_root.display()
+    );
+
+    let mut copied = 0_usize;
+    let mut overwritten = 0_usize;
+    let mut skipped = 0_usize;
+
+    for bundle in bundles {
+        let agent_id = bundle
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid bundle directory name: {}", bundle.display()))?;
+        let target_dir = config.agents_dir.join(agent_id);
+        if target_dir.exists() {
+            if overwrite {
+                std::fs::remove_dir_all(&target_dir)?;
+                copy_dir_recursive(&bundle, &target_dir)?;
+                overwritten += 1;
+                println!(
+                    "Overwrote '{}' from {}",
+                    agent_id,
+                    bundle.display()
+                );
+            } else {
+                skipped += 1;
+                println!(
+                    "Skipped '{}' (already exists at {})",
+                    agent_id,
+                    target_dir.display()
+                );
+            }
+            continue;
+        }
+        copy_dir_recursive(&bundle, &target_dir)?;
+        copied += 1;
+        println!(
+            "Installed '{}' from {}",
+            agent_id,
+            bundle.display()
+        );
+    }
+
+    println!(
+        "Bootstrap complete: {} installed, {} overwritten, {} skipped (target: {}).",
+        copied,
+        overwritten,
+        skipped,
+        config.agents_dir.display()
+    );
+
+    Ok(())
+}
+
+fn resolve_reference_agents_dir(from: Option<&str>) -> anyhow::Result<std::path::PathBuf> {
+    if let Some(path) = from {
+        let explicit = std::path::PathBuf::from(path);
+        anyhow::ensure!(
+            explicit.is_dir(),
+            "Provided --from path is not a directory: {}",
+            explicit.display()
+        );
+        return Ok(explicit);
+    }
+
+    if let Ok(path) = std::env::var("AUTONOETIC_REFERENCE_AGENTS_DIR") {
+        let env_path = std::path::PathBuf::from(path);
+        if env_path.is_dir() {
+            return Ok(env_path);
+        }
+    }
+
+    let mut candidates = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../agents")];
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("agents"));
+        candidates.push(cwd.join("../agents"));
+    }
+
+    for candidate in candidates {
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+    }
+
+    anyhow::bail!(
+        "Could not auto-detect reference bundles directory. Provide --from <path> or set AUTONOETIC_REFERENCE_AGENTS_DIR."
+    )
+}
+
+fn discover_reference_bundles(root: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut bundles = Vec::new();
+    for group in std::fs::read_dir(root)? {
+        let group = group?;
+        if !group.file_type()?.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(group.path())? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let bundle_dir = entry.path();
+            if bundle_dir.join("SKILL.md").exists() {
+                bundles.push(bundle_dir);
+            }
+        }
+    }
+    bundles.sort();
+    Ok(bundles)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(src.is_dir(), "Source is not a directory: {}", src.display());
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
         }
     }
     Ok(())
@@ -403,5 +552,120 @@ Use tools when needed.
         assert!(skill.contains("id: \"agent_bootstrap\""));
         assert!(skill.contains("description: \"Software engineering autonomous agent.\""));
         assert!(lock.contains("dependencies: []"));
+    }
+
+    #[test]
+    fn test_render_skill_template_supports_planner_template() {
+        let skill = render_skill_template("planner.default", Some("planner"));
+        assert!(skill.contains("agent:\n      id: \"planner.default\""));
+        assert!(skill.contains("Front-door lead agent for ambiguous goals."));
+        assert!(skill.contains("You are a planner agent."));
+    }
+
+    fn write_reference_bundle(root: &std::path::Path, group: &str, agent_id: &str, marker: &str) {
+        let dir = root.join(group).join(agent_id);
+        std::fs::create_dir_all(&dir).expect("bundle dir should create");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!(
+                "---\nname: \"{agent_id}\"\ndescription: \"{marker}\"\nmetadata:\n  autonoetic:\n    version: \"1.0\"\n    runtime:\n      engine: \"autonoetic\"\n      gateway_version: \"0.1.0\"\n      sdk_version: \"0.1.0\"\n      type: \"stateful\"\n      sandbox: \"bubblewrap\"\n      runtime_lock: \"runtime.lock\"\n    agent:\n      id: \"{agent_id}\"\n      name: \"{agent_id}\"\n      description: \"{marker}\"\n---\n#{agent_id}\n"
+            ),
+        )
+        .expect("skill should write");
+        std::fs::write(dir.join("runtime.lock"), default_runtime_lock_contents())
+            .expect("runtime.lock should write");
+    }
+
+    #[test]
+    fn test_handle_agent_bootstrap_installs_reference_bundles() {
+        let temp = tempdir().expect("tempdir should create");
+        let reference_root = temp.path().join("reference_agents");
+        write_reference_bundle(&reference_root, "lead", "planner.default", "planner");
+        write_reference_bundle(&reference_root, "specialists", "coder.default", "coder");
+
+        let config_path = temp.path().join("config.yaml");
+        let agents_dir = temp.path().join("runtime_agents");
+        std::fs::write(
+            &config_path,
+            format!(
+                "agents_dir: \"{}\"\nport: 4000\nofp_port: 4200\ntls: false\n",
+                agents_dir.display()
+            ),
+        )
+        .expect("config should write");
+
+        handle_agent_bootstrap(
+            &config_path,
+            Some(reference_root.to_str().expect("utf-8 path")),
+            false,
+        )
+        .expect("bootstrap should succeed");
+
+        assert!(agents_dir.join("planner.default").join("SKILL.md").exists());
+        assert!(agents_dir.join("coder.default").join("runtime.lock").exists());
+    }
+
+    #[test]
+    fn test_handle_agent_bootstrap_overwrite_behavior() {
+        let temp = tempdir().expect("tempdir should create");
+        let reference_root = temp.path().join("reference_agents");
+        write_reference_bundle(&reference_root, "lead", "planner.default", "v1");
+
+        let config_path = temp.path().join("config.yaml");
+        let agents_dir = temp.path().join("runtime_agents");
+        std::fs::write(
+            &config_path,
+            format!(
+                "agents_dir: \"{}\"\nport: 4000\nofp_port: 4200\ntls: false\n",
+                agents_dir.display()
+            ),
+        )
+        .expect("config should write");
+
+        handle_agent_bootstrap(
+            &config_path,
+            Some(reference_root.to_str().expect("utf-8 path")),
+            false,
+        )
+        .expect("first bootstrap should succeed");
+
+        let installed_path = agents_dir.join("planner.default").join("SKILL.md");
+        let first = std::fs::read_to_string(&installed_path).expect("installed skill should read");
+        assert!(first.contains("description: \"v1\""));
+
+        write_reference_bundle(&reference_root, "lead", "planner.default", "v2");
+        handle_agent_bootstrap(
+            &config_path,
+            Some(reference_root.to_str().expect("utf-8 path")),
+            false,
+        )
+        .expect("second bootstrap should succeed");
+        let second = std::fs::read_to_string(&installed_path).expect("installed skill should read");
+        assert!(second.contains("description: \"v1\""));
+
+        handle_agent_bootstrap(
+            &config_path,
+            Some(reference_root.to_str().expect("utf-8 path")),
+            true,
+        )
+        .expect("overwrite bootstrap should succeed");
+        let third = std::fs::read_to_string(&installed_path).expect("installed skill should read");
+        assert!(third.contains("description: \"v2\""));
+    }
+
+    #[test]
+    fn test_handle_agent_bootstrap_requires_existing_config_file() {
+        let temp = tempdir().expect("tempdir should create");
+        let config_path = temp.path().join("missing-config.yaml");
+        let reference_root = temp.path().join("reference_agents");
+        write_reference_bundle(&reference_root, "lead", "planner.default", "planner");
+
+        let err = handle_agent_bootstrap(
+            &config_path,
+            Some(reference_root.to_str().expect("utf-8 path")),
+            false,
+        )
+        .expect_err("missing config should fail fast");
+        assert!(err.to_string().contains("Config file not found"));
     }
 }

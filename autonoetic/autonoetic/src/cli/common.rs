@@ -151,6 +151,15 @@ pub enum AgentCommands {
     },
     /// Lists all local Agents registered with the Gateway
     List,
+    /// Bootstraps runtime agents from reference bundles
+    Bootstrap {
+        /// Optional path to reference bundles root (defaults to auto-detection)
+        #[arg(long)]
+        from: Option<String>,
+        /// Overwrite existing target agent directories
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -159,8 +168,8 @@ pub enum AgentCommands {
 
 #[derive(Args)]
 pub struct ChatArgs {
-    /// Agent ID to send chat messages to.
-    pub agent_id: String,
+    /// Optional target agent ID. If omitted, gateway ingress resolves to session/default lead agent.
+    pub agent_id: Option<String>,
     /// Stable sender identity for the terminal client.
     #[arg(long)]
     pub sender_id: Option<String>,
@@ -347,8 +356,8 @@ pub fn default_terminal_sender_id() -> String {
         .unwrap_or_else(|| "terminal-user".to_string())
 }
 
-pub fn default_terminal_channel_id(sender_id: &str, agent_id: &str) -> String {
-    format!("terminal:{}:{}", sender_id, agent_id)
+pub fn default_terminal_channel_id(sender_id: &str, target_hint: &str) -> String {
+    format!("terminal:{}:{}", sender_id, target_hint)
 }
 
 pub fn terminal_channel_envelope(
