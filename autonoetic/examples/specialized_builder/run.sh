@@ -293,9 +293,11 @@ if [[ "${MODE}" == "demo_fibonacci" ]]; then
     sleep 0.5
   done
 
-  echo "==> Waiting for ${REQUIRED_SCHEDULER_TICKS} scheduler ticks to validate cadence"
+  echo "==> Waiting for ${REQUIRED_SCHEDULER_TICKS} new scheduler ticks to validate cadence"
+  INITIAL_TICKS="$(count_background_scheduler_ticks "${CHILD_AGENT_ID}")"
   for _ in $(seq 1 "${CADENCE_WAIT_TIMEOUT_SECS}"); do
-    ticks="$(count_background_scheduler_ticks "${CHILD_AGENT_ID}")"
+    current_ticks="$(count_background_scheduler_ticks "${CHILD_AGENT_ID}")"
+    ticks=$(( current_ticks - INITIAL_TICKS ))
     if [[ "${ticks}" -ge "${REQUIRED_SCHEDULER_TICKS}" ]]; then
       break
     fi
