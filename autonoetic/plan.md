@@ -278,6 +278,62 @@ Progress notes (2026-03-09):
 - 7 integration tests in `autonoetic-gateway/tests/tier2_memory_integration.rs` covering cross-agent sharing, ACL enforcement, provenance tracking, global visibility, and scope listing
 - All 132 tests pass (92 unit + 40 integration)
 
+#### Gateway-native agent foundations and iterative repair (next) 🔜
+
+Goal: make every Autonoetic agent aware of the platform's runtime model and allow it to iteratively repair malformed gateway/tool requests before escalating to the user.
+
+Why this matters:
+
+- Models cannot reliably infer Autonoetic-specific runtime mechanisms (Tier 1 vs Tier 2, SDK availability, output contract expectations) from generic prompts alone.
+- Tool/gateway failures should normally be part of the agent loop, not immediate terminal errors shown only to the user.
+- Agents need a clear path to: try -> receive structured failure -> repair -> retry -> ask user only when ambiguity or approval requires it.
+- Agents are non-deterministic planners/executors, so iteration and result-checking must be treated as the default execution model, not as an exceptional recovery path.
+
+Thin implementation plan:
+
+1. Shared foundational agent rules
+
+- [x] Add a gateway-level foundation instruction document describing Tier 1 vs Tier 2 memory, SDK availability, output contract semantics, and platform-native persistence expectations.
+- [x] Inject foundation rules into the system prompt for normal agent execution paths so all agents receive the same base runtime model before local `SKILL.md` instructions.
+- [x] Add focused tests proving the composed system prompt includes both foundation rules and agent-specific instructions.
+
+2. Structured tool/gateway failure feedback inside the agent loop ✅
+
+- [x] Convert native tool failures into structured `tool_result` error payloads instead of aborting the entire agent session immediately.
+- [x] Convert MCP tool failures into structured `tool_result` error payloads with stable error fields (`ok`, `error_type`, `message`, optional `repair_hint`).
+- [x] Preserve hard-abort behavior only for runtime failures that truly make continuation unsafe (for example corrupted state or internal invariant failure).
+- [x] Add causal entries for tool failure results that are surfaced back to the model for repair.
+
+Progress notes (2026-03-09):
+- Added `tool_error` module in `autonoetic-types` with `ToolError` struct and `ToolErrorType` enum
+- Error types: `validation`, `permission`, `resource`, `execution` (recoverable), and `fatal` (non-recoverable)
+- `ToolCallProcessor` now catches recoverable errors, converts them to structured JSON, and returns them as `tool_result`
+- Fatal errors still abort the session; recoverable errors allow the agent to continue and repair
+- Added `log_tool_failure()` to emit causal chain entries for tool failures with full context
+- 5 unit tests for `ToolError` covering all error types and JSON serialization
+- Foundation instructions updated to explain structured error format and repair behavior
+
+3. Iterative repair behavior
+
+- [ ] Ensure agents can observe gateway/tool validation failures, emit a corrected tool call, and continue in the same session.
+- [ ] Teach the foundation rules that gateway validation errors are normal and should trigger repair/retry when the user's intent is clear.
+- [ ] Teach the foundation rules that user questions are reserved for ambiguity, missing business decisions, or approval/policy boundaries.
+- [ ] Add an explicit execution-loop rule that agents should check real outcomes against expectations and update plans/actions based on observed mismatch.
+- [ ] Avoid one-shot success assumptions in planner/builder examples; examples should model propose -> execute -> inspect -> repair behavior.
+
+4. Validation scenarios
+
+- [ ] Add a focused runtime test where the model emits a malformed native tool call, receives a structured error `tool_result`, repairs it, and succeeds on the next turn.
+- [ ] Add a gateway-ingress or terminal-chat test proving invalid `agent.install` payloads can be repaired in-session instead of surfacing only as `event.ingest failed` to the CLI user.
+- [ ] Add a prompt-assembly regression test proving gateway-native runs and direct executor runs receive the same foundation rules.
+
+Acceptance criteria:
+
+- Every agent receives foundational Autonoetic runtime rules without duplicating them in each `SKILL.md`.
+- Tool/gateway validation errors are normally visible to the agent as structured feedback inside the same loop.
+- Agents retry with corrected requests when the intent is clear and ask the user only when clarification or authorization is actually required.
+- Iteration, result inspection, and repair are described and implemented as the default Autonoetic execution mechanism.
+
 ### Integration test track
 
 - [ ] Add a dedicated Autonoetic integration-test harness for gateway + agent runtime + local stub LLM.
