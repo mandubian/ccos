@@ -40,12 +40,13 @@ pub fn clear_reevaluation_after_success(agent_dir: &Path, reason: &WakeReason) -
                 state.pending_scheduled_action = None;
             }
             WakeReason::RetryableFailure { .. }
-            | WakeReason::Timer { .. }
             | WakeReason::NewMessage { .. }
             | WakeReason::TaskCompletion { .. }
             | WakeReason::QueuedWork { .. } => {
                 state.pending_scheduled_action = None;
             }
+            // Keep timer actions armed so deterministic scheduled workers remain recurring.
+            WakeReason::Timer { .. } => {}
         }
     })?;
     Ok(())
