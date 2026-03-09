@@ -56,7 +56,11 @@ pub fn should_wake(
             .next_due_at
             .clone()
             .unwrap_or_else(|| now.to_rfc3339());
-        return Ok(Some(WakeReason::Timer { due_bucket }));
+
+        let due = parse_timestamp(&due_bucket)?;
+        if due <= now {
+            return Ok(Some(WakeReason::Timer { due_bucket }));
+        }
     }
 
     if background.wake_predicates.new_messages {
