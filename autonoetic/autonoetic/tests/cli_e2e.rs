@@ -173,6 +173,42 @@ Use memory tools when needed.
     std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
 }
 
+fn write_builder_agent(agent_dir: &Path, agent_id: &str) {
+        std::fs::create_dir_all(agent_dir).expect("agent dir should create");
+        let skill = [
+                "---".to_string(),
+                format!("name: \"{}\"", agent_id),
+                "description: \"Terminal chat builder agent\"".to_string(),
+                "metadata:".to_string(),
+                "  autonoetic:".to_string(),
+                "    version: \"1.0\"".to_string(),
+                "    runtime:".to_string(),
+                "      engine: \"autonoetic\"".to_string(),
+                "      gateway_version: \"0.1.0\"".to_string(),
+                "      sdk_version: \"0.1.0\"".to_string(),
+                "      type: \"stateful\"".to_string(),
+                "      sandbox: \"bubblewrap\"".to_string(),
+                "      runtime_lock: \"runtime.lock\"".to_string(),
+                "    agent:".to_string(),
+                format!("      id: \"{}\"", agent_id),
+                format!("      name: \"{}\"", agent_id),
+                "      description: \"Terminal chat builder agent\"".to_string(),
+                "    llm_config:".to_string(),
+                "      provider: \"openai\"".to_string(),
+                "      model: \"test-model\"".to_string(),
+                "      temperature: 0.0".to_string(),
+                "    capabilities:".to_string(),
+                "      - type: \"AgentSpawn\"".to_string(),
+                "        max_children: 8".to_string(),
+                "---".to_string(),
+                "# Terminal Builder Agent".to_string(),
+                "Use `agent.install` when the user asks for a durable worker.".to_string(),
+                String::new(),
+        ]
+        .join("\n");
+        std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
+}
+
 fn spawn_openai_stub(captured_bodies: Arc<Mutex<Vec<serde_json::Value>>>) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("stub listener should bind");
     let addr = listener
@@ -251,12 +287,116 @@ fn handle_stub_connection(
                 .any(|message| message.get("role").and_then(|value| value.as_str()) == Some("tool"))
         })
         .unwrap_or(false);
+    let tool_result_count = body_json
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| message.get("role").and_then(|value| value.as_str()) == Some("tool"))
+                .count()
+        })
+        .unwrap_or(0);
+    let has_validation_tool_result = body_json
+        .get("messages")
+        .and_then(|value| value.as_array())
+        .map(|messages| {
+            messages.iter().any(|message| {
+                message.get("role").and_then(|value| value.as_str()) == Some("tool")
+                    && message
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .map(|content| {
+                            content.contains("\"error_type\":\"validation\"")
+                                || content.contains("\"error_type\": \"validation\"")
+                        })
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
 
     if latest_user_message.contains("delay message") {
         thread::sleep(Duration::from_millis(300));
     }
 
-    let response_body = if latest_user_message.contains("please store this data")
+    let response_body = if latest_user_message.contains("repair invalid agent install")
+        && !has_tool_result
+    {
+        let invalid_install_args = serde_json::json!({
+            "agent_id": "",
+            "name": "repair_worker",
+            "description": "Broken worker payload",
+            "instructions": "# Broken Worker\nThis payload should fail validation.",
+            "files": [
+                {
+                    "path": "state/seed.txt",
+                    "content": "seed"
+                }
+            ],
+            "arm_immediately": false
+        });
+
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_install_invalid",
+                        "type": "function",
+                        "function": {
+                            "name": "agent.install",
+                            "arguments": invalid_install_args.to_string()
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8}
+        })
+    } else if latest_user_message.contains("repair invalid agent install")
+        && tool_result_count == 1
+        && has_validation_tool_result
+    {
+        let corrected_install_args = serde_json::json!({
+            "agent_id": "repair_worker",
+            "name": "repair_worker",
+            "description": "Worker installed after validation repair.",
+            "instructions": "# Repair Worker\nInstalled after a corrected agent.install retry.",
+            "files": [
+                {
+                    "path": "state/seed.txt",
+                    "content": "seed"
+                }
+            ],
+            "arm_immediately": false
+        });
+
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_install_corrected",
+                        "type": "function",
+                        "function": {
+                            "name": "agent.install",
+                            "arguments": corrected_install_args.to_string()
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8}
+        })
+    } else if latest_user_message.contains("repair invalid agent install") && tool_result_count >= 2 {
+        serde_json::json!({
+            "choices": [{
+                "message": { "content": "Installed repair_worker after retry." },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8}
+        })
+    } else if latest_user_message.contains("please store this data")
         && !has_tool_result
     {
         serde_json::json!({
@@ -607,5 +747,111 @@ fn test_terminal_chat_surfaces_gateway_backpressure_errors() {
         "slow chat should succeed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&slow_output.stdout),
         String::from_utf8_lossy(&slow_output.stderr)
+    );
+}
+
+#[test]
+fn test_terminal_chat_repairs_invalid_agent_install_in_session() {
+    let temp = tempfile::tempdir().expect("tempdir should create");
+    let config_path = temp.path().join("config.yaml");
+    let agents_dir = temp.path().join("agents");
+    let agent_id = "builder_chat_repair";
+    let jsonrpc_port = pick_unused_port();
+    let ofp_port = pick_unused_port();
+    write_config(&config_path, &agents_dir, jsonrpc_port, ofp_port, 4);
+    write_builder_agent(&agents_dir.join(agent_id), agent_id);
+
+    let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+    let stub_addr = spawn_openai_stub(captured_bodies.clone());
+    let config_arg = config_path.to_string_lossy().to_string();
+    let stub_url = format!("http://{}/v1/chat/completions", stub_addr);
+    let gateway_env = [
+        ("AUTONOETIC_NODE_ID", "test-gateway"),
+        ("AUTONOETIC_NODE_NAME", "Test Gateway"),
+        ("AUTONOETIC_SHARED_SECRET", "test-secret"),
+        ("AUTONOETIC_LLM_BASE_URL", stub_url.as_str()),
+        ("AUTONOETIC_LLM_API_KEY", "test-key"),
+    ];
+    let gateway_args = ["--config", config_arg.as_str(), "gateway", "start"];
+    let _gateway = spawn_autonoetic(&gateway_args, &gateway_env, false, false);
+    wait_for_port(
+        format!("127.0.0.1:{}", jsonrpc_port)
+            .parse()
+            .expect("gateway addr should parse"),
+        Duration::from_secs(5),
+    );
+
+    let chat = run_autonoetic(
+        &[
+            "--config",
+            config_arg.as_str(),
+            "chat",
+            agent_id,
+            "--session-id",
+            "terminal-session-repair",
+            "--test-mode",
+        ],
+        Some("repair invalid agent install\n/exit\n"),
+    );
+    assert!(
+        chat.status.success(),
+        "chat failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&chat.stdout),
+        String::from_utf8_lossy(&chat.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&chat.stdout);
+    assert!(
+        stdout.contains("Installed repair_worker after retry."),
+        "expected repair completion reply, got stdout:\n{}",
+        stdout
+    );
+
+    let installed_worker = agents_dir.join("repair_worker");
+    assert!(
+        installed_worker.join("SKILL.md").exists(),
+        "expected repaired install to create child worker SKILL.md"
+    );
+    assert!(
+        installed_worker.join("state").join("seed.txt").exists(),
+        "expected repaired install to create declared worker file"
+    );
+
+    let captured = captured_bodies.lock().unwrap();
+    let saw_validation_feedback = captured.iter().any(|body| {
+        body.get("messages")
+            .and_then(|value| value.as_array())
+            .map(|messages| {
+                messages.iter().any(|message| {
+                    message.get("role").and_then(|value| value.as_str()) == Some("tool")
+                        && message
+                            .get("content")
+                            .and_then(|value| value.as_str())
+                            .map(|content| {
+                                content.contains("\"error_type\":\"validation\"")
+                                    || content.contains("agent_id must not be empty")
+                            })
+                            .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    });
+    let request_dump = captured
+        .iter()
+        .map(|body| serde_json::to_string(body).expect("request body should encode"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        saw_validation_feedback,
+        "expected validation tool_result to be fed back to model, got requests:\n{}",
+        request_dump
+    );
+    assert!(
+        request_dump.contains("call_install_invalid"),
+        "expected first invalid install tool call"
+    );
+    assert!(
+        request_dump.contains("call_install_corrected"),
+        "expected corrected install tool call"
     );
 }

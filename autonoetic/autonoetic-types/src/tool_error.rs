@@ -23,6 +23,18 @@ pub enum ToolErrorType {
     Fatal,
 }
 
+impl std::fmt::Display for ToolErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolErrorType::Validation => write!(f, "validation"),
+            ToolErrorType::Permission => write!(f, "permission"),
+            ToolErrorType::Resource => write!(f, "resource"),
+            ToolErrorType::Execution => write!(f, "execution"),
+            ToolErrorType::Fatal => write!(f, "fatal"),
+        }
+    }
+}
+
 /// Structured tool error response for agent feedback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolError {
@@ -121,27 +133,156 @@ impl ToolError {
     }
 }
 
+/// Helper to create tagged errors with explicit error type classification.
+/// Use these functions instead of anyhow::anyhow! for tool errors to ensure
+/// proper classification without relying on string heuristics.
+pub mod tagged {
+    use super::*;
+    use std::error::Error;
+
+    /// A wrapper that attaches error type metadata to an anyhow::Error.
+    #[derive(Debug)]
+    pub struct Tagged {
+        error_type: ToolErrorType,
+        source: anyhow::Error,
+    }
+
+    // SAFETY: Tagged is safe to send across thread boundaries because:
+    // - The inner anyhow::Error is wrapped in a concrete owned type with no interior mutability
+    // - The error_type field is Clone + Send + Sync (ToolErrorType derives both)
+    // - No references are held that could become invalid across threads
+    unsafe impl Send for Tagged {}
+    unsafe impl Sync for Tagged {}
+
+    impl Tagged {
+        pub fn validation(err: impl Into<anyhow::Error>) -> Self {
+            Self {
+                error_type: ToolErrorType::Validation,
+                source: err.into(),
+            }
+        }
+
+        pub fn permission(err: impl Into<anyhow::Error>) -> Self {
+            Self {
+                error_type: ToolErrorType::Permission,
+                source: err.into(),
+            }
+        }
+
+        pub fn resource(err: impl Into<anyhow::Error>) -> Self {
+            Self {
+                error_type: ToolErrorType::Resource,
+                source: err.into(),
+            }
+        }
+
+        pub fn execution(err: impl Into<anyhow::Error>) -> Self {
+            Self {
+                error_type: ToolErrorType::Execution,
+                source: err.into(),
+            }
+        }
+
+        pub fn fatal(err: impl Into<anyhow::Error>) -> Self {
+            Self {
+                error_type: ToolErrorType::Fatal,
+                source: err.into(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for Tagged {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}: {}", self.error_type, self.source)
+        }
+    }
+
+    impl Error for Tagged {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(self.source.as_ref())
+        }
+    }
+
+    impl Tagged {
+        /// Extracts the error type and message from this tagged error.
+        pub fn into_parts(self) -> (ToolErrorType, String) {
+            (self.error_type.clone(), self.source.to_string())
+        }
+    }
+}
+
+impl From<tagged::Tagged> for ToolError {
+    fn from(tagged: tagged::Tagged) -> Self {
+        // Extract the error type and message from the tagged error
+        let (error_type, message) = tagged.into_parts();
+        match error_type {
+            ToolErrorType::Validation => Self::validation(message, None::<String>),
+            ToolErrorType::Permission => Self::permission(message),
+            ToolErrorType::Resource => Self::resource(message, None::<String>),
+            ToolErrorType::Execution => Self::execution(message, None::<String>),
+            ToolErrorType::Fatal => {
+                let msg2 = message.clone();
+                Self::fatal(message, Some(msg2))
+            }
+        }
+    }
+}
+
 impl From<anyhow::Error> for ToolError {
     fn from(err: anyhow::Error) -> Self {
-        let msg = err.to_string();
+        // Check if this is a tagged error by looking at the error chain
+        for cause in err.chain() {
+            let msg = cause.to_string();
+            let msg_trimmed = msg.trim();
+            if msg.starts_with("validation:") {
+                let inner = msg.strip_prefix("validation:").unwrap_or(&msg);
+                // Add repair hint for common validation patterns
+                let repair_hint = if msg_trimmed.contains("must not be empty") {
+                    Some("Ensure all required fields are provided and not empty.".to_string())
+                } else if msg_trimmed.contains("Invalid JSON") {
+                    Some("Check the tool schema and ensure JSON is valid.".to_string())
+                } else {
+                    None
+                };
+                return Self::validation(inner.to_string(), repair_hint);
+            } else if msg.starts_with("permission:") {
+                let inner = msg.strip_prefix("permission:").unwrap_or(&msg);
+                return Self::permission(inner.to_string());
+            } else if msg.starts_with("resource:") {
+                let inner = msg.strip_prefix("resource:").unwrap_or(&msg);
+                return Self::resource(inner.to_string(), None::<String>);
+            } else if msg.starts_with("execution:") {
+                let inner = msg.strip_prefix("execution:").unwrap_or(&msg);
+                return Self::execution(inner.to_string(), None::<String>);
+            } else if msg.starts_with("fatal:") {
+                let inner = msg.strip_prefix("fatal:").unwrap_or(&msg);
+                return Self::fatal(inner.to_string(), Some(err.to_string()));
+            }
+        }
 
-        // Classify the error based on its message/content
+        // Fall back to string-based classification for untagged errors
+        let msg = err.to_string();
+        let msg_trimmed = msg.trim();
         if msg.contains("policy") || msg.contains("Permission Denied") || msg.contains("denied") {
             Self::permission(msg)
-        } else if msg.contains("must not be empty")
-            || msg.contains("Invalid")
-            || msg.contains("must")
-            || msg.contains("required")
-            || msg.contains("denied by policy")
+        } else if msg_trimmed.contains("must not be empty")
+            || msg_trimmed.contains("Invalid")
+            || msg_trimmed.contains("must")
+            || msg_trimmed.contains("required")
+            || msg_trimmed.contains("denied by policy")
         {
             Self::validation(msg, Some("Check the tool schema and ensure all required fields are provided with valid values."))
-        } else if msg.contains("not found")
-            || msg.contains("File not found")
-            || msg.contains("connection")
-            || msg.contains("timeout")
+        } else if msg_trimmed.contains("not found")
+            || msg_trimmed.contains("File not found")
+            || msg_trimmed.contains("connection")
+            || msg_trimmed.contains("timeout")
         {
             Self::resource(msg, Some("Verify the resource exists or try again later."))
-        } else if msg.contains("corrupted") || msg.contains("invariant") || msg.contains("unsafe") {
+        } else if msg_trimmed.contains("corrupted")
+            || msg_trimmed.contains("invariant")
+            || msg_trimmed.contains("unsafe")
+            || msg_trimmed.contains("Unknown tool")
+        {
             Self::fatal(msg, Some(err.to_string()))
         } else {
             // Default to execution error for unknown types

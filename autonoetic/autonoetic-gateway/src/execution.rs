@@ -2,7 +2,7 @@
 
 use crate::causal_chain::CausalLogger;
 use crate::llm::{build_driver, Message};
-use crate::runtime::lifecycle::AgentExecutor;
+use crate::runtime::lifecycle::{compose_system_instructions, AgentExecutor};
 use crate::runtime::reevaluation_state::execute_scheduled_action;
 use crate::runtime::session_context::SessionContext;
 use crate::agent::AgentRepository;
@@ -324,7 +324,7 @@ fn build_initial_history(
     user_message: &str,
     session_id: &str,
 ) -> Vec<Message> {
-    let mut history = vec![Message::system(instructions.to_string())];
+    let mut history = vec![Message::system(compose_system_instructions(instructions))];
     match SessionContext::load(agent_dir, session_id).and_then(|context| {
         Ok(context
             .render_prompt()
@@ -424,6 +424,10 @@ mod tests {
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].role.as_str(), "system");
         assert_eq!(history[2].role.as_str(), "user");
+        assert!(history[0]
+            .content
+            .contains("Autonoetic Gateway Foundation Rules"));
+        assert!(history[0].content.contains("System prompt"));
         assert!(history[1]
             .content
             .contains("Last user message: remember Atlas"));
