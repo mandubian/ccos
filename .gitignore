@@ -22,6 +22,15 @@ Thumbs.db
 # JetBrains IDEs
 .idea/
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Byebug command history
 .byebug_history
 
