@@ -11,6 +11,7 @@ use autonoetic_gateway::router::{
 
 pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
+    let target_hint = args.agent_id.as_deref().unwrap_or("default-lead");
     let session_id = args
         .session_id
         .clone()
@@ -22,7 +23,7 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     let channel_id = args
         .channel_id
         .clone()
-        .unwrap_or_else(|| default_terminal_channel_id(&sender_id, &args.agent_id));
+        .unwrap_or_else(|| default_terminal_channel_id(&sender_id, target_hint));
     let gateway_addr = format!("127.0.0.1:{}", config.port);
     let stream = TcpStream::connect(&gateway_addr).await.map_err(|e| {
         anyhow::anyhow!(
@@ -42,8 +43,8 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
         stdout
             .write_all(
                 format!(
-                    "Gateway terminal chat enabled for '{}' via {}. Type /exit to quit.\n",
-                    args.agent_id, gateway_addr
+                    "Gateway terminal chat enabled via {} (target: {}). Type /exit to quit.\n",
+                    gateway_addr, target_hint
                 )
                 .as_bytes(),
             )
@@ -69,17 +70,20 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
         }
 
         request_counter += 1;
+        let mut params = serde_json::json!({
+            "event_type": "chat",
+            "message": trimmed,
+            "session_id": &session_id,
+            "metadata": envelope.clone(),
+        });
+        if let Some(agent_id) = args.agent_id.as_ref() {
+            params["target_agent_id"] = serde_json::Value::String(agent_id.clone());
+        }
         let request = GatewayJsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: format!("terminal-chat-{}", request_counter),
             method: "event.ingest".to_string(),
-            params: serde_json::json!({
-                "event_type": "chat",
-                "target_agent_id": &args.agent_id,
-                "message": trimmed,
-                "session_id": &session_id,
-                "metadata": envelope.clone(),
-            }),
+            params,
         };
         let encoded = serde_json::to_string(&request)?;
         write_half.write_all(encoded.as_bytes()).await?;

@@ -209,6 +209,59 @@ fn write_builder_agent(agent_dir: &Path, agent_id: &str) {
         std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
 }
 
+fn write_planner_agent(agent_dir: &Path, agent_id: &str) {
+    std::fs::create_dir_all(agent_dir).expect("agent dir should create");
+    let skill = format!(
+        r#"---
+name: "{agent_id}"
+description: "Planner E2E agent"
+metadata:
+  autonoetic:
+    version: "1.0"
+    agent:
+      id: "{agent_id}"
+      name: "{agent_id}"
+      description: "Planner E2E agent"
+    llm_config:
+      provider: "openai"
+      model: "test-model"
+      temperature: 0.0
+    capabilities:
+      - type: "AgentSpawn"
+        max_children: 8
+---
+# Planner E2E Agent
+Delegate using agent.spawn when specialist work is needed.
+"#
+    );
+    std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
+}
+
+fn write_researcher_agent(agent_dir: &Path, agent_id: &str) {
+    std::fs::create_dir_all(agent_dir).expect("agent dir should create");
+    let skill = format!(
+        r#"---
+name: "{agent_id}"
+description: "Researcher E2E agent"
+metadata:
+  autonoetic:
+    version: "1.0"
+    agent:
+      id: "{agent_id}"
+      name: "{agent_id}"
+      description: "Researcher E2E agent"
+    llm_config:
+      provider: "openai"
+      model: "test-model"
+      temperature: 0.0
+---
+# Researcher E2E Agent
+Return concise research findings.
+"#
+    );
+    std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
+}
+
 fn spawn_openai_stub(captured_bodies: Arc<Mutex<Vec<serde_json::Value>>>) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("stub listener should bind");
     let addr = listener
@@ -319,7 +372,40 @@ fn handle_stub_connection(
         thread::sleep(Duration::from_millis(300));
     }
 
-    let response_body = if latest_user_message.contains("repair invalid agent install")
+    let response_body = if latest_user_message.contains("delegate to specialist")
+        && !has_tool_result
+    {
+        let spawn_args = serde_json::json!({
+            "agent_id": "researcher.default",
+            "message": "Investigate the request and summarize key findings."
+        });
+
+        serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_spawn_researcher",
+                        "type": "function",
+                        "function": {
+                            "name": "agent.spawn",
+                            "arguments": spawn_args.to_string()
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8}
+        })
+    } else if latest_user_message.contains("delegate to specialist") && has_tool_result {
+        serde_json::json!({
+            "choices": [{
+                "message": { "content": "Delegated to researcher.default and received findings." },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 8}
+        })
+    } else if latest_user_message.contains("repair invalid agent install")
         && !has_tool_result
     {
         let invalid_install_args = serde_json::json!({
@@ -854,4 +940,100 @@ fn test_terminal_chat_repairs_invalid_agent_install_in_session() {
         request_dump.contains("call_install_corrected"),
         "expected corrected install tool call"
     );
+}
+
+#[test]
+fn test_terminal_chat_implicit_routing_to_planner_and_specialist_spawn() {
+    let temp = tempfile::tempdir().expect("tempdir should create");
+    let config_path = temp.path().join("config.yaml");
+    let agents_dir = temp.path().join("agents");
+    let jsonrpc_port = pick_unused_port();
+    let ofp_port = pick_unused_port();
+    write_config(&config_path, &agents_dir, jsonrpc_port, ofp_port, 4);
+
+    // Force explicit default lead to avoid ambiguity in this regression.
+    let config_body = std::fs::read_to_string(&config_path).expect("config should read");
+    std::fs::write(
+        &config_path,
+        format!("{config_body}default_lead_agent_id: \"planner.default\"\n"),
+    )
+    .expect("config should update");
+
+    write_planner_agent(&agents_dir.join("planner.default"), "planner.default");
+    write_researcher_agent(&agents_dir.join("researcher.default"), "researcher.default");
+
+    let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+    let stub_addr = spawn_openai_stub(captured_bodies.clone());
+    let config_arg = config_path.to_string_lossy().to_string();
+    let stub_url = format!("http://{}/v1/chat/completions", stub_addr);
+    let gateway_env = [
+        ("AUTONOETIC_NODE_ID", "test-gateway"),
+        ("AUTONOETIC_NODE_NAME", "Test Gateway"),
+        ("AUTONOETIC_SHARED_SECRET", "test-secret"),
+        ("AUTONOETIC_LLM_BASE_URL", stub_url.as_str()),
+        ("AUTONOETIC_LLM_API_KEY", "test-key"),
+    ];
+    let gateway_args = ["--config", config_arg.as_str(), "gateway", "start"];
+    let _gateway = spawn_autonoetic(&gateway_args, &gateway_env, false, false);
+    wait_for_port(
+        format!("127.0.0.1:{}", jsonrpc_port)
+            .parse()
+            .expect("gateway addr should parse"),
+        Duration::from_secs(5),
+    );
+
+    let session_id = "terminal-session-planner-spawn";
+    let chat = run_autonoetic(
+        &[
+            "--config",
+            config_arg.as_str(),
+            "chat",
+            "--sender-id",
+            "tester",
+            "--session-id",
+            session_id,
+            "--test-mode",
+        ],
+        Some("delegate to specialist\n/exit\n"),
+    );
+    assert!(
+        chat.status.success(),
+        "chat failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&chat.stdout),
+        String::from_utf8_lossy(&chat.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&chat.stdout);
+    assert!(
+        stdout.contains("Delegated to researcher.default"),
+        "expected planner delegation reply, got stdout:\n{}",
+        stdout
+    );
+
+    let planner_log = std::fs::read_to_string(
+        agents_dir
+            .join("planner.default")
+            .join("history")
+            .join("causal_chain.jsonl"),
+    )
+    .expect("planner causal log should exist");
+    assert!(planner_log.contains(session_id));
+    assert!(planner_log.contains("\"tool_name\":\"agent.spawn\""));
+
+    let researcher_log = std::fs::read_to_string(
+        agents_dir
+            .join("researcher.default")
+            .join("history")
+            .join("causal_chain.jsonl"),
+    )
+    .expect("researcher causal log should exist");
+    assert!(researcher_log.contains(session_id));
+
+    let request_dump = captured_bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|body| serde_json::to_string(body).expect("request body should encode"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(request_dump.contains("delegate to specialist"));
 }
