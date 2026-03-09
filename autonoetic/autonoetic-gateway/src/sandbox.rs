@@ -1,9 +1,39 @@
 //! Sandbox runner supporting bubblewrap, docker, and firecracker.
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use std::process::{Child, Command, Stdio};
+use std::{fs, io::{BufRead, BufReader, Write}};
+use std::os::unix::net::{UnixListener, UnixStream};
+use autonoetic_types::causal_chain::EntryStatus;
 
 const DOCKER_IMAGE_ENV: &str = "AUTONOETIC_DOCKER_IMAGE";
 const FIRECRACKER_CONFIG_ENV: &str = "AUTONOETIC_FIRECRACKER_CONFIG";
+const BWRAP_WORKSPACE_DIR: &str = "/tmp";
+const PYTHONPATH_ENV: &str = "PYTHONPATH";
+const PYTHON_SDK_PATH_ENV: &str = "AUTONOETIC_PYTHON_SDK_PATH";
+const CCOS_SOCKET_ENV: &str = "CCOS_SOCKET_PATH";
+const SDK_SOCKET_BASENAME: &str = ".autonoetic_sdk.sock";
+
+struct SdkBridgeGuard {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+    socket_path_host: PathBuf,
+}
+
+impl Drop for SdkBridgeGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = UnixStream::connect(&self.socket_path_host);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        let _ = fs::remove_file(&self.socket_path_host);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxDriverKind {
@@ -40,6 +70,7 @@ pub struct DependencyPlan {
 pub struct SandboxRunner {
     pub process: Child,
     pub driver: SandboxDriverKind,
+    _sdk_bridge: Option<SdkBridgeGuard>,
 }
 
 impl SandboxRunner {
@@ -96,16 +127,424 @@ impl SandboxRunner {
             SandboxDriverKind::MicroVm => microvm_command(&composed_entrypoint)?,
         };
 
-        let child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        let mut sdk_bridge = None;
+
+        // Expose local Python SDK to bubblewrap workers when available and provide
+        // a thin local JSON-RPC bridge for SDK memory/state/event calls.
+        if driver == SandboxDriverKind::Bubblewrap {
+            if let Some(sdk_path) = resolve_python_sdk_path() {
+                inject_pythonpath(&mut command, &sdk_path);
+            }
+            let bridge = start_sdk_bridge(agent_dir)?;
+            command.env(CCOS_SOCKET_ENV, bridge.socket_path_sandbox);
+            sdk_bridge = Some(bridge.guard);
+        }
+
+        let child = command.spawn()?;
         Ok(Self {
             process: child,
             driver,
+            _sdk_bridge: sdk_bridge,
         })
+    }
+}
+
+struct StartedSdkBridge {
+    socket_path_sandbox: String,
+    guard: SdkBridgeGuard,
+}
+
+fn start_sdk_bridge(agent_dir: &str) -> anyhow::Result<StartedSdkBridge> {
+    let host_socket_path = PathBuf::from(agent_dir).join(SDK_SOCKET_BASENAME);
+    if host_socket_path.exists() {
+        fs::remove_file(&host_socket_path)?;
+    }
+    let listener = UnixListener::bind(&host_socket_path)?;
+    listener.set_nonblocking(true)?;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let agent_dir_buf = PathBuf::from(agent_dir);
+    let gateway_dir_buf = gateway_dir_from_agent_dir(&agent_dir_buf)?;
+
+    let handle = thread::spawn(move || {
+        run_sdk_bridge_loop(listener, &agent_dir_buf, &gateway_dir_buf, stop_flag);
+    });
+
+    Ok(StartedSdkBridge {
+        socket_path_sandbox: format!("{}/{}", BWRAP_WORKSPACE_DIR, SDK_SOCKET_BASENAME),
+        guard: SdkBridgeGuard {
+            stop,
+            handle: Some(handle),
+            socket_path_host: host_socket_path,
+        },
+    })
+}
+
+fn run_sdk_bridge_loop(
+    listener: UnixListener,
+    agent_dir: &std::path::Path,
+    gateway_dir: &std::path::Path,
+    stop: Arc<AtomicBool>,
+) {
+    while !stop.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if let Err(_e) = handle_sdk_client(stream, agent_dir, gateway_dir) {
+                    // Ignore bridge client failures in thin compatibility mode.
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+fn handle_sdk_client(
+    mut stream: UnixStream,
+    agent_dir: &std::path::Path,
+    gateway_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    let mut line = String::new();
+    {
+        let mut reader = BufReader::new(&stream);
+        reader.read_line(&mut line)?;
+    }
+    if line.trim().is_empty() {
+        return Ok(());
+    }
+    let request: serde_json::Value = serde_json::from_str(&line)?;
+    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let method = request
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let params = request
+        .get("params")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    let response = match dispatch_sdk_method(method, &params, agent_dir, gateway_dir) {
+        Ok(result) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        }),
+        Err(err) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32000,
+                "message": err.to_string(),
+                "data": {
+                    "error_type": "policy_violation"
+                }
+            }
+        }),
+    };
+
+    let payload = serde_json::to_string(&response)? + "\n";
+    stream.write_all(payload.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn validate_sdk_relative_path(path: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!path.trim().is_empty(), "path must not be empty");
+    anyhow::ensure!(!path.starts_with('/'), "absolute paths are not allowed");
+    anyhow::ensure!(
+        !path.split('/').any(|part| part == ".." || part.is_empty() || part == "."),
+        "path traversal is not allowed"
+    );
+    Ok(())
+}
+
+fn gateway_dir_from_agent_dir(agent_dir: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let agents_root = agent_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("agent directory is missing agents-root parent"))?;
+    let gateway_dir = agents_root.join(".gateway");
+    fs::create_dir_all(&gateway_dir)?;
+    Ok(gateway_dir)
+}
+
+fn agent_id_from_agent_dir(agent_dir: &std::path::Path) -> anyhow::Result<String> {
+    let id = agent_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("unable to derive agent id from agent directory"))?;
+    Ok(id.to_string())
+}
+
+fn next_sdk_event_seq(log_path: &std::path::Path) -> anyhow::Result<u64> {
+    if !log_path.exists() {
+        return Ok(1);
+    }
+    let entries = crate::causal_chain::CausalLogger::read_entries(log_path)?;
+    Ok(entries.last().map(|e| e.event_seq + 1).unwrap_or(1))
+}
+
+fn log_sdk_memory_event(
+    agent_dir: &std::path::Path,
+    action: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<()> {
+    let actor_id = agent_id_from_agent_dir(agent_dir)?;
+    let log_path = agent_dir.join("history").join("causal_chain.jsonl");
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let logger = crate::causal_chain::CausalLogger::new(&log_path)?;
+    let event_seq = next_sdk_event_seq(&log_path)?;
+    logger.log(
+        &actor_id,
+        "sdk-bridge",
+        None,
+        event_seq,
+        "memory",
+        action,
+        EntryStatus::Success,
+        Some(payload),
+    )
+}
+
+fn load_json_file(path: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::Value::Object(Default::default()));
+    }
+    let body = fs::read_to_string(path)?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)?;
+    Ok(parsed)
+}
+
+fn write_json_file(path: &std::path::Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(value)?)?;
+    Ok(())
+}
+
+fn list_state_keys(state_dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    if !state_dir.exists() {
+        return Ok(out);
+    }
+    for entry in fs::read_dir(state_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            out.push(format!("state/{}", entry.file_name().to_string_lossy()));
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn dispatch_sdk_method(
+    method: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+    agent_dir: &std::path::Path,
+    gateway_dir: &std::path::Path,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "memory.read" => {
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.read requires path"))?;
+            validate_sdk_relative_path(path)?;
+            let content = fs::read_to_string(agent_dir.join(path))?;
+            Ok(serde_json::json!({ "content": content }))
+        }
+        "memory.write" => {
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.write requires path"))?;
+            validate_sdk_relative_path(path)?;
+            let content = params
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.write requires content"))?;
+            let target = agent_dir.join(path);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(target, content)?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        "memory.list_keys" => {
+            let keys = list_state_keys(&agent_dir.join("state"))?;
+            Ok(serde_json::json!({ "keys": keys }))
+        }
+        "memory.remember" => {
+            let key = params
+                .get("key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.remember requires key"))?;
+            let value = params
+                .get("value")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("memory.remember requires value"))?;
+            let scope = params
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("sdk");
+            let agent_id = agent_id_from_agent_dir(agent_dir)?;
+            let mem = crate::runtime::memory::Tier2Memory::new(gateway_dir, &agent_id)?;
+            let source_ref = format!("sdk_bridge:{}", agent_id);
+            let content = serde_json::to_string(&value)?;
+            let memory = mem.remember(key, scope, &agent_id, &source_ref, &content)?;
+            let _ = log_sdk_memory_event(
+                agent_dir,
+                "remember",
+                serde_json::json!({
+                    "memory_id": memory.memory_id,
+                    "scope": memory.scope,
+                    "source_ref": memory.source_ref,
+                }),
+            );
+            Ok(serde_json::json!({
+                "ok": true,
+                "memory_id": memory.memory_id,
+                "scope": memory.scope,
+                "source_ref": memory.source_ref,
+            }))
+        }
+        "memory.recall" => {
+            let key = params
+                .get("key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.recall requires key"))?;
+            let agent_id = agent_id_from_agent_dir(agent_dir)?;
+            let mem = crate::runtime::memory::Tier2Memory::new(gateway_dir, &agent_id)?;
+            match mem.recall(key) {
+                Ok(memory) => {
+                    let parsed = serde_json::from_str::<serde_json::Value>(&memory.content)
+                        .unwrap_or_else(|_| serde_json::Value::String(memory.content.clone()));
+                    let _ = log_sdk_memory_event(
+                        agent_dir,
+                        "recall",
+                        serde_json::json!({
+                            "memory_id": memory.memory_id,
+                            "scope": memory.scope,
+                            "source_ref": memory.source_ref,
+                        }),
+                    );
+                    Ok(serde_json::json!({
+                        "value": parsed,
+                        "scope": memory.scope,
+                        "source_ref": memory.source_ref,
+                    }))
+                }
+                Err(_) => Ok(serde_json::json!({ "value": serde_json::Value::Null })),
+            }
+        }
+        "memory.search" => {
+            let query = params
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("memory.search requires query"))?
+                .to_ascii_lowercase();
+            let scope = params
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("sdk");
+            let agent_id = agent_id_from_agent_dir(agent_dir)?;
+            let mem = crate::runtime::memory::Tier2Memory::new(gateway_dir, &agent_id)?;
+            let mut results = Vec::<String>::new();
+            for memory in mem.search(scope, None)? {
+                let hay = format!("{} {}", memory.memory_id, memory.content).to_ascii_lowercase();
+                if hay.contains(&query) {
+                    results.push(format!("{}: {}", memory.memory_id, memory.content));
+                }
+            }
+            let _ = log_sdk_memory_event(
+                agent_dir,
+                "search",
+                serde_json::json!({
+                    "scope": scope,
+                    "query": query,
+                    "count": results.len(),
+                }),
+            );
+            Ok(serde_json::json!({ "results": results }))
+        }
+        "state.checkpoint" => {
+            let data = params
+                .get("data")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("state.checkpoint requires data"))?;
+            let checkpoint = serde_json::json!({ "data": data });
+            write_json_file(&agent_dir.join("state").join("sdk_checkpoint.json"), &checkpoint)?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        "state.get_checkpoint" => {
+            let path = agent_dir.join("state").join("sdk_checkpoint.json");
+            let payload = load_json_file(&path)?;
+            Ok(serde_json::json!({ "data": payload.get("data").cloned().unwrap_or(serde_json::Value::Null) }))
+        }
+        "events.emit" => {
+            let event_type = params
+                .get("type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("events.emit requires type"))?;
+            let data = params
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let events_path = agent_dir.join("history").join("sdk_events.jsonl");
+            if let Some(parent) = events_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let event = serde_json::json!({ "type": event_type, "data": data });
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(events_path)?;
+            writeln!(file, "{}", serde_json::to_string(&event)?)?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        other => anyhow::bail!("unsupported SDK method '{}'", other),
+    }
+}
+
+fn resolve_python_sdk_path() -> Option<String> {
+    if let Ok(path) = std::env::var(PYTHON_SDK_PATH_ENV) {
+        if !path.trim().is_empty() {
+            return Some(path);
+        }
+    }
+
+    let local: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("autonoetic-sdk")
+        .join("python");
+    if local.exists() {
+        return Some(local.to_string_lossy().to_string());
+    }
+
+    None
+}
+
+fn inject_pythonpath(command: &mut Command, sdk_path: &str) {
+    match std::env::var(PYTHONPATH_ENV) {
+        Ok(existing) if !existing.trim().is_empty() => {
+            command.env(PYTHONPATH_ENV, format!("{}:{}", sdk_path, existing));
+        }
+        _ => {
+            command.env(PYTHONPATH_ENV, sdk_path);
+        }
     }
 }
 
@@ -125,7 +564,9 @@ fn bubblewrap_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(Stri
         "/".to_string(),
         "--bind".to_string(),
         agent_dir.to_string(),
-        "/workspace".to_string(),
+        BWRAP_WORKSPACE_DIR.to_string(),
+        "--chdir".to_string(),
+        BWRAP_WORKSPACE_DIR.to_string(),
         "--unshare-all".to_string(),
         "--".to_string(),
         program,
@@ -148,7 +589,9 @@ fn bubblewrap_shell_command(
         "/".to_string(),
         "--bind".to_string(),
         agent_dir.to_string(),
-        "/workspace".to_string(),
+        BWRAP_WORKSPACE_DIR.to_string(),
+        "--chdir".to_string(),
+        BWRAP_WORKSPACE_DIR.to_string(),
         "--unshare-all".to_string(),
         "--".to_string(),
         "sh".to_string(),
@@ -233,6 +676,7 @@ fn validate_dependency_package(pkg: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_parse_driver_kind() {
@@ -257,9 +701,12 @@ mod tests {
         assert_eq!(argv[0], "--ro-bind");
         assert_eq!(argv[3], "--bind");
         assert_eq!(argv[4], "/tmp/agent");
-        assert_eq!(argv[7], "--");
-        assert_eq!(argv[8], "python");
-        assert_eq!(argv[9], "main.py");
+        assert_eq!(argv[5], "/tmp");
+        assert_eq!(argv[6], "--chdir");
+        assert_eq!(argv[7], "/tmp");
+        assert_eq!(argv[9], "--");
+        assert_eq!(argv[10], "python");
+        assert_eq!(argv[11], "main.py");
     }
 
     #[test]
@@ -329,8 +776,52 @@ mod tests {
         let (_bin, argv) =
             bubblewrap_shell_command("/tmp/agent", "echo hi").expect("shell command should build");
         assert_eq!(argv[0], "--ro-bind");
-        assert_eq!(argv[8], "sh");
-        assert_eq!(argv[9], "-lc");
-        assert_eq!(argv[10], "echo hi");
+        assert_eq!(argv[3], "--bind");
+        assert_eq!(argv[4], "/tmp/agent");
+        assert_eq!(argv[5], "/tmp");
+        assert_eq!(argv[6], "--chdir");
+        assert_eq!(argv[7], "/tmp");
+        assert_eq!(argv[9], "--");
+        assert_eq!(argv[10], "sh");
+        assert_eq!(argv[11], "-lc");
+        assert_eq!(argv[12], "echo hi");
+    }
+
+    #[test]
+    fn test_sdk_dispatch_memory_roundtrip() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let gateway_dir = gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
+        let params = serde_json::Map::from_iter(vec![
+            ("key".to_string(), json!("skills.worker.latest")),
+            ("value".to_string(), json!({"n": 13})),
+        ]);
+        let remember = dispatch_sdk_method("memory.remember", &params, temp.path(), &gateway_dir)
+            .expect("remember should succeed");
+        assert_eq!(remember["ok"], json!(true));
+
+        let recall_params = serde_json::Map::from_iter(vec![("key".to_string(), json!("skills.worker.latest"))]);
+        let recall = dispatch_sdk_method("memory.recall", &recall_params, temp.path(), &gateway_dir)
+            .expect("recall should succeed");
+        assert_eq!(recall["value"]["n"], json!(13));
+    }
+
+    #[test]
+    fn test_sdk_dispatch_checkpoint_roundtrip() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let gateway_dir = gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
+        let checkpoint_params =
+            serde_json::Map::from_iter(vec![("data".to_string(), json!({"cursor": 42}))]);
+        let written = dispatch_sdk_method("state.checkpoint", &checkpoint_params, temp.path(), &gateway_dir)
+            .expect("checkpoint should succeed");
+        assert_eq!(written["ok"], json!(true));
+
+        let loaded = dispatch_sdk_method(
+            "state.get_checkpoint",
+            &serde_json::Map::new(),
+            temp.path(),
+            &gateway_dir,
+        )
+            .expect("load checkpoint should succeed");
+        assert_eq!(loaded["data"]["cursor"], json!(42));
     }
 }

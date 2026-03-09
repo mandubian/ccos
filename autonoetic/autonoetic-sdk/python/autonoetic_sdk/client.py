@@ -85,8 +85,10 @@ class _MemoryApi:
         result = self._rpc.request("memory.list_keys", {})
         return list(result["keys"])
 
-    def remember(self, key: str, value: Any) -> Any:
-        return self._rpc.request("memory.remember", {"key": key, "value": value})
+    def remember(self, key: str, value: Any, scope: str = "sdk") -> Any:
+        return self._rpc.request(
+            "memory.remember", {"key": key, "value": value, "scope": scope}
+        )
 
     def recall(self, key: str) -> Any:
         result = self._rpc.request("memory.recall", {"key": key})
@@ -188,8 +190,8 @@ class _TasksApi:
 class AutonoeticSdk:
     """Top-level SDK surface for sandbox scripts."""
 
-    def __init__(self, socket_path: str) -> None:
-        rpc = _RpcClient(socket_path)
+    def __init__(self, socket_path: str | None = None) -> None:
+        rpc = _RpcClient(_require_socket_path(socket_path))
         self.memory = _MemoryApi(rpc)
         self.state = _StateApi(rpc)
         self.secrets = _SecretsApi(rpc)
@@ -200,6 +202,11 @@ class AutonoeticSdk:
         self.tasks = _TasksApi(rpc)
 
 
+# Backward-compatible alias used by generated worker scripts.
+class Client(AutonoeticSdk):
+    pass
+
+
 def init(socket_path: str | None = None) -> AutonoeticSdk:
     """Initialize the SDK from an explicit path or CCOS_SOCKET_PATH."""
-    return AutonoeticSdk(_require_socket_path(socket_path))
+    return AutonoeticSdk(socket_path)
