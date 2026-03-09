@@ -136,8 +136,12 @@ verify_background_interval() {
   }
 
   local first_ts second_ts
-  first_ts="$(rg "\"action\":\"background.should_wake.completed\".*\"session_id\":\"background::${child_agent_id}\"|\"session_id\":\"background::${child_agent_id}\".*\"action\":\"background.should_wake.completed\"" "${gateway_log}" | sed -n '1s/.*\"timestamp\":\"\([^\"]*\)\".*/\1/p')"
-  second_ts="$(rg "\"action\":\"background.should_wake.completed\".*\"session_id\":\"background::${child_agent_id}\"|\"session_id\":\"background::${child_agent_id}\".*\"action\":\"background.should_wake.completed\"" "${gateway_log}" | sed -n '2s/.*\"timestamp\":\"\([^\"]*\)\".*/\1/p')"
+  # Use tail -n 2 to get the latest two matches if there are many over time
+  local latest_matches
+  latest_matches="$(rg "\"action\":\"background.should_wake.completed\".*\"session_id\":\"background::${child_agent_id}\"|\"session_id\":\"background::${child_agent_id}\".*\"action\":\"background.should_wake.completed\"" "${gateway_log}" | tail -n 2)"
+  
+  first_ts="$(echo "${latest_matches}" | sed -n '1s/.*\"timestamp\":\"\([^\"]*\)\".*/\1/p')"
+  second_ts="$(echo "${latest_matches}" | sed -n '2s/.*\"timestamp\":\"\([^\"]*\)\".*/\1/p')"
 
   if [[ -z "${first_ts}" || -z "${second_ts}" ]]; then
     echo "ERROR: could not extract two scheduler tick timestamps for ${child_agent_id}" >&2
@@ -211,10 +215,15 @@ EOF
 
 cd "${PROJECT_ROOT}"
 
-if [[ -d "${AGENT_DIR}" && "${AUTONOETIC_SPECIALIZED_BUILDER_RESET:-0}" == "1" ]]; then
-  echo "==> Resetting existing builder agent '${AGENT_ID}'"
-  rm -rf "${AGENT_DIR}"
+if [[ "${AUTONOETIC_SPECIALIZED_BUILDER_RESET:-0}" == "1" ]]; then
+  echo "==> Resetting existing workspace at ${WORKDIR}"
+  if [[ -d "${AGENT_DIR}" ]]; then
+    echo "  -- Removing builder agent '${AGENT_ID}'"
+    rm -rf "${AGENT_DIR}"
+  fi
   if [[ -d "${AGENTS_DIR}" ]]; then
+    echo "  -- Clearing child agents and gateway history"
+    rm -rf "${AGENTS_DIR}/.gateway"
     find "${AGENTS_DIR}" -mindepth 1 -maxdepth 1 -type d ! -name '.gateway' -exec rm -rf {} +
   fi
 fi
