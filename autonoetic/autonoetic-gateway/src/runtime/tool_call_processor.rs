@@ -18,6 +18,8 @@ pub struct ToolCallProcessor<'a> {
     manifest: &'a AgentManifest,
     disclosure_state: &'a mut DisclosureState,
     secret_store: Option<&'a mut SecretStoreRuntime>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
 }
 
 impl<'a> ToolCallProcessor<'a> {
@@ -34,13 +36,22 @@ impl<'a> ToolCallProcessor<'a> {
             manifest,
             disclosure_state,
             secret_store,
+            session_id: None,
+            turn_id: None,
         }
     }
 
-    pub async fn process_tool_calls(
+    pub fn with_session_context(mut self, session_id: Option<String>, turn_id: Option<String>) -> Self {
+        self.session_id = session_id;
+        self.turn_id = turn_id;
+        self
+    }
+
+     pub async fn process_tool_calls(
         &mut self,
         tool_calls: &[ToolCall],
         agent_dir: &Path,
+        gateway_dir: Option<&Path>,
         tracer: &mut SessionTracer,
     ) -> anyhow::Result<Vec<(String, String, String)>> {
         let mut results = Vec::with_capacity(tool_calls.len());
@@ -48,7 +59,7 @@ impl<'a> ToolCallProcessor<'a> {
         for tc in tool_calls {
             tracer.log_tool_requested(&tc.name, &tc.arguments)?;
 
-            let result = self.execute_tool_call(tc, agent_dir).await?;
+            let result = self.execute_tool_call(tc, agent_dir, gateway_dir).await?;
 
             tracer.log_tool_completed(&tc.name, &result)?;
 
@@ -62,6 +73,7 @@ impl<'a> ToolCallProcessor<'a> {
         &mut self,
         tc: &ToolCall,
         agent_dir: &Path,
+        gateway_dir: Option<&Path>,
     ) -> anyhow::Result<String> {
         let mut result = if self.mcp_runtime.has_tool(&tc.name) {
             self.mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
@@ -71,7 +83,10 @@ impl<'a> ToolCallProcessor<'a> {
                 self.manifest,
                 &crate::policy::PolicyEngine::new(self.manifest.clone()),
                 agent_dir,
+                gateway_dir,
                 &tc.arguments,
+                self.session_id.as_deref(),
+                self.turn_id.as_deref(),
             )?
         } else {
             anyhow::bail!("Unknown tool '{}'", tc.name)

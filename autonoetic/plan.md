@@ -219,6 +219,65 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - Added deterministic direct actions for approved `write_file` and existing `sandbox_exec`, and persisted `state/reevaluation.json` markers (`retry_not_before`, `stale_goal_at`, `last_outcome`, `pending_scheduled_action`, `open_approval_request_ids`).
 - Added scheduler coverage for idle timer cadence, wake-on-new-work, rapid-tick dedup, paused-on-approval, due-agent throttling, and approval-to-approved-artifact evolution flow.
 
+#### Gateway long-term memory provenance and secure sharing ✅
+
+Goal: keep Tier 1 local state simple and deterministic while making Tier 2 long-term memory gateway-managed, auditable, and selectively shareable across agents.
+
+Scope boundary:
+
+- Tier 1 (`state/*`) remains agent-local checkpoint memory for per-tick determinism and crash recovery.
+- Tier 2 becomes the gateway-owned source of truth for durable facts and cross-agent recall.
+- Sandbox SDK (`memory.remember`/`recall`/`search`) is the preferred write/read surface for long-term memory.
+
+Thin implementation plan:
+
+1. Provenance-aware memory record schema ✅
+
+- [x] Define a gateway Tier 2 memory record shape with required fields: `memory_id`, `scope`, `owner_agent_id`, `writer_agent_id`, `source_type`, `source_ref`, `created_at`, `updated_at`, `content`, `content_hash`.
+- [x] Add optional but recommended fields: `confidence`, `tags`, `lineage`.
+- [x] Persist records in gateway-managed Tier 2 storage (starting with existing SQLite substrate, preserving upgrade path).
+
+2. Policy and security model ✅
+
+- [x] Add policy checks for Tier 2 writes (namespace/scope restrictions per capability).
+- [x] Add policy checks for Tier 2 reads (visibility and ACL enforcement).
+- [x] Add controlled sharing transitions (`private` -> `shared`) with explicit authorization and optional approval hooks.
+
+3. SDK and runtime wiring ✅
+
+- [x] Route SDK memory RPC methods through the gateway Tier 2 service (not ad-hoc local file shims for long-term facts).
+- [x] Keep deterministic local fallback for checkpoints only; do not treat fallback files as canonical Tier 2 memory.
+- [x] Ensure scheduled worker examples publish durable facts via `sdk.memory.remember` and declare stable `memory_keys` in output contracts.
+
+4. Audit and observability ✅
+
+- [x] Emit causal-chain entries for Tier 2 memory writes/reads/shares with provenance references.
+- [x] Record `source_ref` links to session/turn/log IDs so facts can be traced back to origin.
+- [x] Add trace tooling support for memory lineage inspection (`who wrote this fact`, `what evidence produced it`).
+
+5. Integration tests ✅
+
+- [x] Add cross-agent memory-sharing tests: writer agent stores fact, reader agent recalls under allowed scope.
+- [x] Add negative-path tests: unauthorized reads/writes/shares are denied and auditable.
+- [x] Add provenance tests: all shared records include `writer_agent_id` and `source_ref`.
+
+Acceptance criteria:
+
+- [x] Tier 2 long-term memory can be shared across agents only under explicit policy control.
+- [x] Every shared/recalled durable fact can be traced to a source agent and causal reference.
+- [x] Scheduled workers retain deterministic local checkpoint behavior while publishing reusable durable facts through gateway-managed Tier 2 memory.
+
+Progress notes (2026-03-09):
+- Memory schema with full provenance tracking implemented in `autonoetic-types/src/memory.rs` (MemoryObject, MemoryVisibility, MemorySourceType, MemoryLineageEntry)
+- Tier 2 memory SQLite storage with ACL enforcement in `autonoetic-gateway/src/runtime/memory.rs` (remember, recall, search, share_with, make_global, list_scopes)
+- Native tools for memory operations: `memory.remember`, `memory.recall`, `memory.search`, `memory.share` in `autonoetic-gateway/src/runtime/tools.rs`
+- Policy checks added: `can_write_memory_scope()`, `can_read_memory_scope()`, `can_search_memory()` in `autonoetic-gateway/src/policy.rs`
+- Session/turn context wired into source_ref for traceability (format: `session:<sid>:turn:<tid>`)
+- Scope-level ACL filtering in `list_scopes()` prevents cross-agent scope name leakage
+- Confidence and tags fields applied and persisted in memory.remember
+- 7 integration tests in `autonoetic-gateway/tests/tier2_memory_integration.rs` covering cross-agent sharing, ACL enforcement, provenance tracking, global visibility, and scope listing
+- All 132 tests pass (92 unit + 40 integration)
+
 ### Integration test track
 
 - [ ] Add a dedicated Autonoetic integration-test harness for gateway + agent runtime + local stub LLM.
@@ -453,4 +512,114 @@ Progress notes (2026-03-08):
 - Reduced `tools.rs` from 687 to 675 lines (12 lines removed)
 - All 6 tool registry tests pass, no compiler warnings
 - Registry remains thin and static with 4 core tools (sandbox.exec, memory.read, memory.write, skill.draft)
-```
+
+## Current State Snapshot (2026-03-08)
+
+Autonoetic is past the "architecture sketch" stage. The runtime already has the key execution surfaces needed for real validation work:
+
+- Gateway-owned ingress via `event.ingest` and delegated `agent.spawn`
+- Background scheduler with wake predicates, deduplication, and backpressure controls
+- Deterministic scheduled actions plus approval-gated side effects
+- Agent runtime with real LLM loop, native tool registry, MCP tool dispatch, and sandbox execution
+- Durable Tier 1/Tier 2 memory paths, session-context continuity, and causal trace inspection
+- Generated-skill drafting, PoC execution, approval, and later approved reuse
+
+What is still missing is not core architecture viability but productization and proof under more realistic workloads:
+
+- richer end-to-end scenario coverage
+- example agents that feel like real operators rather than harness fixtures
+- stronger developer-facing docs for repeatable validation flows
+- release packaging and marketplace/distribution polish
+
+This means the next useful step is a validation track driven by concrete workloads, not Phase 7 release work.
+
+## Reality Validation Track
+
+These scenarios should be treated as architecture-validation milestones that run in parallel with Phase 7 polish.
+
+### Scenario A: Scheduled Fibonacci worker
+
+Goal: prove that Autonoetic can run a low-friction recurring job where continuity depends on prior state, while keeping the steady-state path deterministic and cheap.
+
+Target behavior:
+
+- Every 20 seconds, compute the next Fibonacci element from the last persisted pair.
+- Persist the sequence state in agent-owned durable state.
+- Record each wake reason, read, write, and result in causal traces.
+- Require no open-ended reasoning on each tick once the worker is configured.
+
+Why this matters:
+
+- validates the gateway-owned scheduler instead of agent self-respawn
+- validates durable state continuity across repeated wakes
+- validates deduplication and non-overlapping background execution
+- validates that deterministic work can bypass expensive LLM turns
+
+Implementation shape:
+
+- Add a minimal example agent dedicated to background deterministic jobs.
+- Store state as a small file such as `state/fib.json` with `{previous, current, index}`.
+- Use background mode `deterministic` with a direct approved action path.
+- First version can append outputs to `history/` or `artifacts/` for inspection.
+
+Acceptance criteria:
+
+- After $n$ ticks, the persisted state matches Fibonacci recurrence exactly.
+- Restarting the gateway does not reset the sequence.
+- Rapid scheduler ticks do not produce duplicate outputs for the same due interval.
+- Trace inspection shows one coherent background session with ordered per-tick events.
+
+Recommended constraint:
+
+- Keep this scenario fully local and deterministic. Do not involve MCP or external services.
+
+### Scenario B: Trading bot, safe-first
+
+Goal: prove that Autonoetic can coordinate research, code generation, sandboxed execution, approval gates, and iterative improvement for a realistic long-running agent task.
+
+Target behavior for the first validation slice:
+
+- Research public strategy material and market-data APIs.
+- Draft a paper-trading bot implementation in the sandbox.
+- Backtest or simulate on historical/public data.
+- Produce artifacts, metrics, and a candidate reusable skill.
+- Request approval before any promoted reusable capability is installed or reused.
+
+Why this matters:
+
+- exercises the full orchestration path rather than only deterministic scheduling
+- tests online research + codegen + sandbox execution as one loop
+- tests skill evolution and approval under a higher-value domain
+- tests whether memory and artifacts support multi-turn autonomous improvement
+
+Critical constraint:
+
+- Start with paper trading only. No exchange credentials, no live order placement, no money movement, and no autonomous real-market execution in the first validation track.
+
+Suggested staged rollout:
+
+1. Researcher agent gathers strategy notes, API candidates, and risk constraints.
+2. Coder agent builds a backtest-only or simulated-trading codebase in sandbox.
+3. Evaluator agent records results into artifacts and memory.
+4. Learner flow proposes a reusable skill or code artifact and routes it through approval.
+5. Only after this loop is stable should live-market integration even be considered.
+
+Acceptance criteria for the first slice:
+
+- The system can complete a full research -> build -> simulate -> evaluate -> approve/reuse loop.
+- All generated code runs only inside sandboxed execution.
+- Strategy outputs, metrics, and generated code are auditable through artifacts and causal traces.
+- Failed iterations produce reusable memory/state updates instead of silent resets.
+
+Recommended online boundary:
+
+- Permit outbound network only for public docs, public datasets, and market-data APIs needed for simulation.
+- Treat any future broker/exchange integration as a separate later milestone with explicit human approval and stronger governance.
+
+## Recommended Execution Order
+
+1. Build the Fibonacci scenario first as the minimal proof that background execution and persistent state are operational in a real workflow.
+2. Turn that into a polished example agent plus an end-to-end test harness so it becomes the canonical scheduler regression test.
+3. Then build the trading-bot validation as a paper-trading orchestration scenario with strict approval gates and sandbox-only execution.
+
+This sequencing gives Autonoetic one deterministic "cron-grade" proof and one open-ended "agent-grade" proof before Phase 7 shifts attention toward release packaging.

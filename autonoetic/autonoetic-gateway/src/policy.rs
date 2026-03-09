@@ -123,4 +123,78 @@ impl PolicyEngine {
             }
         })
     }
+
+    /// Check if the agent is allowed to share memory with specific targets.
+    pub fn can_share_memory(&self, target_agent: &str) -> bool {
+        for cap in &self.manifest.capabilities {
+            if let Capability::MemoryShare { allowed_targets } = cap {
+                for target in allowed_targets {
+                    let prefix = target.trim_end_matches('*');
+                    if target_agent.starts_with(prefix) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if the agent is allowed to search memory in specific scopes.
+    pub fn can_search_memory(&self, scope: &str) -> bool {
+        for cap in &self.manifest.capabilities {
+            if let Capability::MemorySearch { scopes } = cap {
+                for allowed_scope in scopes {
+                    let prefix = allowed_scope.trim_end_matches('*');
+                    if scope.starts_with(prefix) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if the agent can write to a Tier 2 memory scope.
+    pub fn can_write_memory_scope(&self, scope: &str) -> bool {
+        for cap in &self.manifest.capabilities {
+            if let Capability::MemoryWrite { scopes } = cap {
+                // Wildcard allows all scopes
+                if scopes
+                    .iter()
+                    .any(|s| s == "*" || s.trim_end_matches('*').is_empty())
+                {
+                    return true;
+                }
+                for allowed_scope in scopes {
+                    let prefix = allowed_scope.trim_end_matches('*');
+                    if scope.starts_with(prefix) || scope == allowed_scope {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if the agent can read from a Tier 2 memory scope.
+    pub fn can_read_memory_scope(&self, scope: &str) -> bool {
+        for cap in &self.manifest.capabilities {
+            if let Capability::MemoryRead { scopes } = cap {
+                // Wildcard allows all scopes
+                if scopes
+                    .iter()
+                    .any(|s| s == "*" || s.trim_end_matches('*').is_empty())
+                {
+                    return true;
+                }
+                for allowed_scope in scopes {
+                    let prefix = allowed_scope.trim_end_matches('*');
+                    if scope.starts_with(prefix) || scope == allowed_scope {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
