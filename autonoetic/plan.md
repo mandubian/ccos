@@ -153,7 +153,7 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 
 - [ ] End-to-end integration tests
 - [ ] Documentation site
-- [ ] Example agents (researcher, coder, auditor)
+- [ ] Example agents (lead/planner plus specialist hands such as researcher, architect, coder, debugger, evaluator, and auditor)
 - [ ] AgentSkills.io marketplace publishing
 - [ ] Open-source release (choose license)
 
@@ -169,6 +169,31 @@ Complete, modular LLM provider system — thin by design (≤250 LOC per driver)
 - Causal schema now promotes `session_id`, `turn_id`, and `event_seq` to top-level fields and adds explicit `entry_hash` / `payload_hash` fields for cryptographic integrity and low-cost payload introspection.
 - Hash-chain linkage now uses SHA-256 and reloads continuity across process restarts by hydrating `last_hash` from the last persisted causal entry.
 - Added CLI trace introspection commands: `autonoetic trace sessions`, `autonoetic trace show <session_id>`, and `autonoetic trace event <log_id>` with optional `--agent` and `--json`.
+
+#### Implicit routing and specialist role orchestration design ✅
+
+Goal: define how ambiguous user goals should route through a default lead agent instead of relying on hardcoded semantic gateway rules.
+
+Design decisions:
+
+- Ambiguous ingress routes to a configured default lead agent such as `planner.default`, or to the existing session lead when one is already bound.
+- The Gateway remains thin and never guesses between `researcher`, `coder`, `auditor`, and other specialist roles.
+- Role selection belongs to the lead agent, which uses a role registry plus observed run fitness to choose the best specialist implementation for each sub-goal.
+- The role model distinguishes `role`, `agent template`, `agent instance`, and `learned specialization`, which is necessary for Autonoetic's self-evolving behavior.
+- `specialized_builder` belongs to the evolution layer: it is invoked when the system decides to create or adapt a durable specialist, not as the front-door router for every user request.
+- Initial role catalog: `planner.default`, `researcher`, `architect`, `coder`, `debugger`, `evaluator`, `auditor`, plus evolution-native roles such as `memory-curator` and `evolution-steward`.
+- Reference design doc: `docs/agent_routing_and_roles.md`
+- Added grouped reference bundle layout under `agents/` (`lead/`, `specialists/`, `evolution/`) with initial `lead/planner.default/`.
+- Added `planner` scaffold support in CLI templates and dotted `agent_id` support for `agent.install` (for IDs like `planner.default`).
+- Implemented implicit ingress routing in gateway router: `event.ingest` can omit `target_agent_id`, resolves via session lead binding, then `default_lead_agent_id`.
+- Added gateway config field `default_lead_agent_id` (default `planner.default`) and persisted session lead affinity under `.gateway/sessions/lead_bindings/`.
+- Added router tests for default lead resolution and session-affinity reuse across follow-up ingress calls.
+- Added reference specialist bundles: `researcher.default`, `coder.default`, `evaluator.default`, and `auditor.default`.
+- Added reference evolution bundles: `specialized_builder.default`, `evolution-steward.default`, and `memory-curator.default`.
+- Added reference specialist bundles `architect.default` and `debugger.default` to complete the baseline hand role set used by `planner.default`.
+- Added `autonoetic agent bootstrap` to seed grouped reference bundles into runtime `agents_dir` with optional `--from` and `--overwrite`.
+- Added native `agent.spawn` tool for in-session lead->specialist delegation from agent runtime (distinct from external JSON-RPC `agent.spawn` ingress).
+- Added CLI E2E coverage proving implicit terminal chat routing can hit `planner.default` and delegate via `agent.spawn` to `researcher.default` in the same session.
 
 ---
 
