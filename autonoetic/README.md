@@ -37,11 +37,40 @@ Autonoetic now accepts AgentSkills-compliant top-level `SKILL.md` frontmatter (`
 
 - [`concepts.md`](concepts.md): philosophy, agent model, memory model, evolution model
 - [`architecture_modules.md`](architecture_modules.md): Gateway, sandbox, artifact store, capsule manager
+- [`docs/agent_routing_and_roles.md`](docs/agent_routing_and_roles.md): default lead-agent routing, specialist roles, delegation, and evolution-oriented role selection
+- [`docs/quickstart-planner-specialist-chat.md`](docs/quickstart-planner-specialist-chat.md): end-to-end CLI quickstart for implicit planner routing and specialist delegation
 - [`protocols.md`](protocols.md): JSON-RPC methods, artifact/capsule transport, OFP interoperability
 - [`data_models.md`](data_models.md): `SKILL.md`, `runtime.lock`, artifact handles, capsule manifest
 - [`sandbox_sdk.md`](sandbox_sdk.md): `autonoetic_sdk` API surface
 - [`cli_interface.md`](cli_interface.md): `autonoetic` CLI shape
 - [`plan.md`](plan.md): implementation roadmap and MVP boundary
+
+## Reference Agent Bundles
+
+Reference agent bundles are grouped under [`agents/`](agents/):
+
+- `agents/lead/` for front-door/orchestration agents
+- `agents/specialists/` for hand roles
+- `agents/evolution/` for builder and evolution flows
+
+Current bundles:
+
+- Lead: `agents/lead/planner.default/`
+- Specialists:
+  - `agents/specialists/researcher.default/`
+  - `agents/specialists/architect.default/`
+  - `agents/specialists/coder.default/`
+  - `agents/specialists/debugger.default/`
+  - `agents/specialists/evaluator.default/`
+  - `agents/specialists/auditor.default/`
+- Evolution:
+  - `agents/evolution/specialized_builder.default/`
+  - `agents/evolution/evolution-steward.default/`
+  - `agents/evolution/memory-curator.default/`
+
+To install these into your active runtime directory, run:
+
+`autonoetic agent bootstrap [--from <path>] [--overwrite]`
 
 ## Current Direction
 
@@ -78,6 +107,10 @@ Phases 1 through 6 are implemented, including OFP networking/federation, MCP int
 ## Quickstart Example
 
 A runnable smoke example now lives at [`examples/quickstart`](examples/quickstart/README.md).
+
+For planner/specialist implicit routing through CLI chat, see:
+
+- [`docs/quickstart-planner-specialist-chat.md`](docs/quickstart-planner-specialist-chat.md)
 
 From `autonoetic/`:
 

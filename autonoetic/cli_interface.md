@@ -42,7 +42,7 @@ Commands for scaffolding and orchestrating AI Agents.
 ### `autonoetic agent init <agent_id>`
 Scaffolds a new Autonoetic Agent directory.
 - **Flags:**
-  - `--template <name>`: E.g., `researcher`, `coder`, `auditor`.
+  - `--template <name>`: E.g., `planner`, `researcher`, `coder`, `auditor`.
 - **Operation:**
   Creates the necessary directory structure:
   ```text
@@ -63,6 +63,31 @@ Boots an Agent and connects it to the Gateway.
 
 ### `autonoetic agent list`
 Lists all local Agents registered with the Gateway, showing their status (Stopped, Running, Hibernating).
+
+### `autonoetic agent bootstrap`
+Copies reference bundles from `autonoetic/agents/` into the configured runtime `agents_dir`.
+- **Flags:**
+  - `--from <path>`: Optional explicit reference bundles root.
+  - `--overwrite`: Replace existing runtime agent directories with reference versions.
+- **Operation:**
+  - Requires an existing config file at `--config` path.
+  - Auto-detects reference bundles when `--from` is omitted.
+  - Installs grouped bundles (`lead/`, `specialists/`, `evolution/`) by agent ID.
+  - Skips existing agents by default unless `--overwrite` is set.
+
+---
+
+## 3.5 Terminal Chat (`autonoetic chat`)
+
+Gateway-native terminal chat entrypoint.
+
+### `autonoetic chat [agent_id]`
+
+- If `agent_id` is provided, chat targets that agent explicitly.
+- If `agent_id` is omitted, ingress routes through gateway implicit routing:
+  - existing session lead binding when present
+  - otherwise configured `default_lead_agent_id` (default `planner.default`)
+- Chat requests are sent via JSON-RPC `event.ingest` and receive the same policy, tracing, memory, and backpressure behavior as other ingress surfaces.
 
 ---
 
