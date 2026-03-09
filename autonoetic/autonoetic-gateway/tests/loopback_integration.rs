@@ -211,20 +211,24 @@ async fn test_loopback_memory_audit_and_negatives() {
         .contains("The data is secret_value_123"));
 
     // --- Turn 3: Negative Path - Missing memory key ---
+    // The tool returns a structured error (not a gateway failure), and the agent continues.
+    // This is the desired iterative repair behavior: tool errors are visible to the agent.
     let resp3 = client
         .event_ingest("3", agent_id, session_id, "chat", "read missing", None)
         .await
         .unwrap();
+    // Gateway succeeds - the tool error is returned as a tool_result to the agent, not as a JSON-RPC error
     assert!(
-        resp3.error.is_some(),
-        "Expected Request 3 to fail due to missing memory key"
+        resp3.error.is_none(),
+        "Gateway should succeed; tool error should be returned to agent for repair"
     );
-    let err3 = resp3.error.unwrap();
-    assert_eq!(err3.code, -32000, "Expected internal error code");
+    // The agent should report the file is missing based on the tool's structured error response
+    let result3 = resp3.result.unwrap();
+    let result_str = result3.to_string();
     assert!(
-        err3.message.contains("File not found in Tier 1 memory"),
-        "Unexpected error message: {}",
-        err3.message
+        result_str.contains("missing") || result_str.contains("not found") || result_str.contains("File"),
+        "Expected agent to report missing file, got: {}",
+        result_str
     );
 
     // --- Turn 3.5: Negative Path - Missing memory key with default_value ---
@@ -337,8 +341,8 @@ async fn test_loopback_memory_audit_and_negatives() {
         "Expected exactly 3 memory.read in agent history for session"
     );
     assert_eq!(
-        agent_session_ends, 3,
-        "Expected exactly 3 session ends in agent history for session"
+        agent_session_ends, 4,
+        "Expected exactly 4 session ends in agent history for session (write, read data, read missing, read default)"
     );
 
     // Gateway-owned log
@@ -372,12 +376,12 @@ async fn test_loopback_memory_audit_and_negatives() {
         "Expected exactly 4 gateway ingest requests for session"
     );
     assert_eq!(
-        gateway_completions, 3,
-        "Expected exactly 3 gateway ingest completions for session"
+        gateway_completions, 4,
+        "Expected exactly 4 gateway ingest completions for session (all succeed; tool errors returned to agent)"
     );
     assert_eq!(
-        gateway_failures, 1,
-        "Expected exactly 1 gateway ingest failure for session"
+        gateway_failures, 0,
+        "Expected 0 gateway failures (tool errors are returned to agent, not as gateway failures)"
     );
 
     server_task.abort();
