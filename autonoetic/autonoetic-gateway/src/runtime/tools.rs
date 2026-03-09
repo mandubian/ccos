@@ -1,6 +1,6 @@
 use crate::llm::ToolDefinition;
 use crate::policy::PolicyEngine;
-use crate::runtime::reevaluation_state::persist_reevaluation_state;
+use crate::runtime::reevaluation_state::{execute_scheduled_action, persist_reevaluation_state};
 use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, LlmConfig};
 use autonoetic_types::background::{
@@ -10,6 +10,7 @@ use autonoetic_types::capability::Capability;
 use autonoetic_types::runtime_lock::{
     LockedDependencySet, LockedGateway, LockedSandbox, LockedSdk, RuntimeLock,
 };
+use autonoetic_types::tool_error::tagged;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -519,12 +520,27 @@ impl NativeTool for MemoryRememberTool {
             #[serde(default)]
             tags: Vec<String>,
         }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+                "Invalid JSON arguments for '{}': {}",
+                self.name(),
+                e
+            )))
+        })?;
 
-        anyhow::ensure!(!args.id.trim().is_empty(), "id must not be empty");
-        anyhow::ensure!(!args.scope.trim().is_empty(), "scope must not be empty");
-        anyhow::ensure!(!args.content.trim().is_empty(), "content must not be empty");
+        if args.id.trim().is_empty() {
+            return Err(tagged::Tagged::validation(anyhow::anyhow!("id must not be empty")).into());
+        }
+        if args.scope.trim().is_empty() {
+            return Err(
+                tagged::Tagged::validation(anyhow::anyhow!("scope must not be empty")).into(),
+            );
+        }
+        if args.content.trim().is_empty() {
+            return Err(
+                tagged::Tagged::validation(anyhow::anyhow!("content must not be empty")).into(),
+            );
+        }
 
         // Enforce scope-level policy check
         anyhow::ensure!(
@@ -534,7 +550,10 @@ impl NativeTool for MemoryRememberTool {
         );
 
         let Some(gw_dir) = gateway_dir else {
-            anyhow::bail!("Tier 2 memory requires gateway directory to be configured");
+            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                "Tier 2 memory requires gateway directory to be configured"
+            ))
+            .into());
         };
 
         // Build source_ref from session/turn context for proper traceability
@@ -628,13 +647,23 @@ impl NativeTool for MemoryRecallTool {
         struct Args {
             id: String,
         }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+                "Invalid JSON arguments for '{}': {}",
+                self.name(),
+                e
+            )))
+        })?;
 
-        anyhow::ensure!(!args.id.trim().is_empty(), "id must not be empty");
+        if args.id.trim().is_empty() {
+            return Err(tagged::Tagged::validation(anyhow::anyhow!("id must not be empty")).into());
+        }
 
         let Some(gw_dir) = gateway_dir else {
-            anyhow::bail!("Tier 2 memory requires gateway directory to be configured");
+            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                "Tier 2 memory requires gateway directory to be configured"
+            ))
+            .into());
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
@@ -713,8 +742,13 @@ impl NativeTool for MemorySearchTool {
             #[serde(default)]
             query: Option<String>,
         }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+                "Invalid JSON arguments for '{}': {}",
+                self.name(),
+                e
+            )))
+        })?;
 
         anyhow::ensure!(!args.scope.trim().is_empty(), "scope must not be empty");
 
@@ -726,7 +760,10 @@ impl NativeTool for MemorySearchTool {
         );
 
         let Some(gw_dir) = gateway_dir else {
-            anyhow::bail!("Tier 2 memory requires gateway directory to be configured");
+            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                "Tier 2 memory requires gateway directory to be configured"
+            ))
+            .into());
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
@@ -1006,6 +1043,8 @@ struct InstallAgentArgs {
     runtime_lock_dependencies: Vec<LockedDependencySet>,
     #[serde(default = "default_true")]
     arm_immediately: bool,
+    #[serde(default = "default_true")]
+    validate_on_install: bool,
 }
 
 fn parse_install_scheduled_action(
@@ -1209,6 +1248,7 @@ fn normalize_install_background(
             interval_secs,
             mode: BackgroundMode::Deterministic,
             wake_predicates: Default::default(),
+            validate_on_install: true,
         })),
         (None, None) => Ok(None),
     }
@@ -1262,7 +1302,8 @@ impl NativeTool for AgentInstallTool {
                         "type": "array",
                         "items": { "type": "object" }
                     },
-                    "arm_immediately": { "type": "boolean" }
+                    "arm_immediately": { "type": "boolean" },
+                    "validate_on_install": { "type": "boolean" }
                 },
                 "required": ["agent_id", "instructions"],
                 "additionalProperties": false
@@ -1437,10 +1478,35 @@ impl NativeTool for AgentInstallTool {
 
         if let Some(action) = scheduled_action.clone() {
             persist_reevaluation_state(&child_dir, |state| {
-                state.pending_scheduled_action = Some(action);
+                state.pending_scheduled_action = Some(action.clone());
                 state.last_outcome = Some("installed".to_string());
                 state.retry_not_before = None;
             })?;
+
+            if args.validate_on_install {
+                let registry = default_registry();
+                match execute_scheduled_action(&child_manifest, &child_dir, &action, &registry) {
+                    Ok(_) => {
+                        persist_reevaluation_state(&child_dir, |state| {
+                            state.last_outcome = Some("install_validation_success".to_string());
+                        })?;
+                    }
+                    Err(e) => {
+                        persist_reevaluation_state(&child_dir, |state| {
+                            state.last_outcome = Some(format!("install_validation_failed:{}", e));
+                        })?;
+                        let tool_error: autonoetic_types::tool_error::ToolError = e.into();
+                        if !tool_error.is_recoverable() {
+                            return Err(anyhow::anyhow!(
+                                "Fatal install validation error in {}: {}",
+                                action.kind(),
+                                tool_error.message
+                            ));
+                        }
+                        return serde_json::to_string(&tool_error).map_err(Into::into);
+                    }
+                }
+            }
         }
 
         if let Some(background) = &child_manifest.background {
@@ -1993,5 +2059,180 @@ dependencies:
         assert!(err
             .to_string()
             .contains("sandbox command denied by ShellExec policy"));
+    }
+
+    #[test]
+    fn test_install_time_validation_successful_first_run() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+
+        let registry = default_registry();
+        let policy = PolicyEngine::new(manifest.clone());
+
+        let args = serde_json::json!({
+            "agent_id": "test_worker",
+            "instructions": "A test worker agent.",
+            "background": {
+                "enabled": true,
+                "interval_secs": 60
+            },
+            "scheduled_action": {
+                "type": "write_file",
+                "path": "state/init.json",
+                "content": "{\"initialized\": true}"
+            },
+            "validate_on_install": true
+        });
+
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+            )
+            .expect("install with validation should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").unwrap(), true);
+        assert_eq!(parsed.get("status").unwrap(), "agent_installed");
+
+        let reevaluation_path = agents_dir
+            .join("test_worker")
+            .join("state")
+            .join("reevaluation.json");
+        let reevaluation =
+            std::fs::read_to_string(&reevaluation_path).expect("reevaluation state should exist");
+        assert!(reevaluation.contains("install_validation_success"));
+
+        let init_file = agents_dir
+            .join("test_worker")
+            .join("state")
+            .join("init.json");
+        assert!(
+            init_file.exists(),
+            "init file should be created during validation"
+        );
+    }
+
+    #[test]
+    fn test_install_time_validation_structured_error_on_failure() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+
+        let registry = default_registry();
+        let policy = PolicyEngine::new(manifest.clone());
+
+        let args = serde_json::json!({
+            "agent_id": "failing_worker",
+            "instructions": "A worker that fails validation.",
+            "background": {
+                "enabled": true,
+                "interval_secs": 60
+            },
+            "scheduled_action": {
+                "type": "sandbox_exec",
+                "command": "exit 1"
+            },
+            "validate_on_install": true
+        });
+
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+            )
+            .expect("should return structured error, not panic");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").unwrap(), false);
+        assert_eq!(parsed.get("error_type").unwrap(), "execution");
+        assert!(parsed.get("message").is_some());
+        assert!(parsed.get("repair_hint").is_some() || parsed.get("message").is_some());
+
+        let reevaluation_path = agents_dir
+            .join("failing_worker")
+            .join("state")
+            .join("reevaluation.json");
+        let reevaluation =
+            std::fs::read_to_string(&reevaluation_path).expect("reevaluation state should exist");
+        assert!(reevaluation.contains("install_validation_failed"));
+    }
+
+    #[test]
+    fn test_install_validate_on_install_opt_out() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+
+        let registry = default_registry();
+        let policy = PolicyEngine::new(manifest.clone());
+
+        let args = serde_json::json!({
+            "agent_id": "deferred_worker",
+            "instructions": "A worker with deferred validation.",
+            "background": {
+                "enabled": true,
+                "interval_secs": 60
+            },
+            "scheduled_action": {
+                "type": "sandbox_exec",
+                "command": "exit 1"
+            },
+            "validate_on_install": false
+        });
+
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+            )
+            .expect("install with validate_on_install=false should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").unwrap(), true);
+        assert_eq!(parsed.get("status").unwrap(), "agent_installed");
+
+        let reevaluation_path = agents_dir
+            .join("deferred_worker")
+            .join("state")
+            .join("reevaluation.json");
+        let reevaluation =
+            std::fs::read_to_string(&reevaluation_path).expect("reevaluation state should exist");
+        assert!(reevaluation.contains("installed"));
+        assert!(
+            !reevaluation.contains("install_validation"),
+            "validation should not have run"
+        );
     }
 }

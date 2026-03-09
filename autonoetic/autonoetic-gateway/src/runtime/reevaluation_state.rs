@@ -78,7 +78,7 @@ pub fn execute_scheduled_action(
                 "command": command,
                 "dependencies": dependencies.as_ref().map(|deps| serde_json::json!({ "runtime": deps.runtime, "packages": deps.packages }))
             }))?;
-            registry.execute(
+            let result = registry.execute(
                 "sandbox.exec",
                 manifest,
                 &policy,
@@ -87,7 +87,26 @@ pub fn execute_scheduled_action(
                 &args,
                 None,
                 None,
-            )
+            )?;
+
+            let parsed: serde_json::Value = serde_json::from_str(&result).map_err(|error| {
+                anyhow::anyhow!("sandbox.exec returned non-JSON result: {error}")
+            })?;
+
+            let ok = parsed
+                .get("ok")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            anyhow::ensure!(
+                ok,
+                "scheduled sandbox_exec failed: {}",
+                parsed
+                    .get("stderr")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown error")
+            );
+
+            Ok(result)
         }
     }
 }

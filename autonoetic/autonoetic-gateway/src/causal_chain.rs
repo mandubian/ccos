@@ -21,6 +21,16 @@ impl CausalLogger {
         })
     }
 
+    #[cfg(test)]
+    pub fn test_logger(log_path: impl Into<PathBuf>) -> Self {
+        Self {
+            log_path: log_path.into(),
+            last_hash: Mutex::new(
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            ),
+        }
+    }
+
     /// Append a new action to the Causal Chain.
     pub fn log(
         &self,
