@@ -183,6 +183,73 @@ async fn test_background_scheduler_wake_on_new_work_through_public_api() -> anyh
 }
 
 #[tokio::test]
+async fn test_background_scheduler_timer_action_is_recurring() -> anyhow::Result<()> {
+    let temp = tempdir()?;
+    let agents_dir = temp.path().join("agents");
+    let config = GatewayConfig {
+        agents_dir: agents_dir.clone(),
+        background_scheduler_enabled: true,
+        ..GatewayConfig::default()
+    };
+    let agent_id = "timer-recurring-agent";
+    let agent_dir = write_background_agent(
+        &agents_dir,
+        agent_id,
+        "    timer: true\n    new_messages: false\n    task_completions: false\n    queued_work: false\n    stale_goals: false\n    retryable_failures: false\n    approval_resolved: false\n",
+    )?;
+    write_reevaluation_state(
+        &agent_dir,
+        &ReevaluationState {
+            pending_scheduled_action: Some(ScheduledAction::WriteFile {
+                path: "state/recurring_marker.txt".to_string(),
+                content: "tick".to_string(),
+                requires_approval: false,
+                evidence_ref: None,
+            }),
+            ..ReevaluationState::default()
+        },
+    )?;
+
+    let session_id = background_session(agent_id);
+    write_background_state(
+        &config,
+        agent_id,
+        &BackgroundState {
+            agent_id: agent_id.to_string(),
+            session_id: session_id.clone(),
+            next_due_at: Some((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339()),
+            ..BackgroundState::default()
+        },
+    )?;
+
+    let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    run_scheduler_tick(execution.clone()).await?;
+
+    let reevaluation_after_first: ReevaluationState = serde_json::from_str(&std::fs::read_to_string(
+        agent_dir.join("state").join("reevaluation.json"),
+    )?)?;
+    assert!(reevaluation_after_first.pending_scheduled_action.is_some());
+    assert!(agent_dir.join("state").join("recurring_marker.txt").exists());
+
+    // Force immediate due again to prove the same action remains armed for the next timer tick.
+    let mut state_after_first: BackgroundState = serde_json::from_str(&std::fs::read_to_string(
+        background_state_path(&config, agent_id),
+    )?)?;
+    state_after_first.next_due_at = Some((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    write_background_state(&config, agent_id, &state_after_first)?;
+
+    run_scheduler_tick(execution).await?;
+
+    let gateway_entries = read_jsonl_entries(&gateway_causal_path(&config))?;
+    assert_eq!(
+        count_action(&gateway_entries, &session_id, "background.wake.completed"),
+        2
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow::Result<()> {
     let temp = tempdir()?;
     let agents_dir = temp.path().join("agents");

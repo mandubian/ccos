@@ -57,6 +57,8 @@ pub struct BackgroundPolicy {
     pub mode: BackgroundMode,
     #[serde(default)]
     pub wake_predicates: WakePredicates,
+    #[serde(default = "default_true")]
+    pub validate_on_install: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
