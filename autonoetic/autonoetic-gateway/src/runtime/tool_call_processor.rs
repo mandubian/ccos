@@ -108,13 +108,22 @@ impl<'a> ToolCallProcessor<'a> {
         agent_dir: &Path,
         gateway_dir: Option<&Path>,
     ) -> anyhow::Result<String> {
+        let policy = crate::policy::PolicyEngine::new(self.manifest.clone());
         let mut result = if self.mcp_runtime.has_tool(&tc.name) {
+            if !policy.can_invoke_tool(&tc.name) {
+                return Err(anyhow::Error::from(
+                    autonoetic_types::tool_error::tagged::Tagged::permission(anyhow::anyhow!(
+                        "Tool '{}' is not allowed by ToolInvoke capability",
+                        tc.name
+                    )),
+                ));
+            }
             self.mcp_runtime.call_tool(&tc.name, &tc.arguments).await?
         } else if self.registry.has_tool(&tc.name) {
             self.registry.execute(
                 &tc.name,
                 self.manifest,
-                &crate::policy::PolicyEngine::new(self.manifest.clone()),
+                &policy,
                 agent_dir,
                 gateway_dir,
                 &tc.arguments,

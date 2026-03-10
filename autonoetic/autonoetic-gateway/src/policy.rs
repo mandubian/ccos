@@ -43,6 +43,21 @@ impl PolicyEngine {
         false
     }
 
+    /// Check if the agent is allowed to invoke a named tool (typically MCP tools).
+    pub fn can_invoke_tool(&self, tool_name: &str) -> bool {
+        for cap in &self.manifest.capabilities {
+            if let Capability::ToolInvoke { allowed } = cap {
+                for pattern in allowed {
+                    let prefix = pattern.trim_end_matches('*');
+                    if tool_name.starts_with(prefix) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Check if the agent is allowed to read from a relative file path.
     pub fn can_read_path(&self, path: &str) -> bool {
         for cap in &self.manifest.capabilities {
@@ -196,5 +211,56 @@ impl PolicyEngine {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::agent::{AgentIdentity, AgentManifest, RuntimeDeclaration};
+
+    fn manifest_with_caps(capabilities: Vec<Capability>) -> AgentManifest {
+        AgentManifest {
+            version: "1.0".to_string(),
+            runtime: RuntimeDeclaration {
+                engine: "autonoetic".to_string(),
+                gateway_version: "0.1.0".to_string(),
+                sdk_version: "0.1.0".to_string(),
+                runtime_type: "stateful".to_string(),
+                sandbox: "bubblewrap".to_string(),
+                runtime_lock: "runtime.lock".to_string(),
+            },
+            agent: AgentIdentity {
+                id: "policy-test".to_string(),
+                name: "policy-test".to_string(),
+                description: "test".to_string(),
+            },
+            capabilities,
+            llm_config: None,
+            limits: None,
+            background: None,
+            disclosure: None,
+        }
+    }
+
+    #[test]
+    fn test_can_invoke_tool_exact_and_wildcard() {
+        let manifest = manifest_with_caps(vec![Capability::ToolInvoke {
+            allowed: vec!["mcp_web_search".to_string(), "mcp_docs_*".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest);
+
+        assert!(policy.can_invoke_tool("mcp_web_search"));
+        assert!(policy.can_invoke_tool("mcp_docs_fetch"));
+        assert!(!policy.can_invoke_tool("mcp_web_fetch"));
+    }
+
+    #[test]
+    fn test_can_invoke_tool_denied_without_capability() {
+        let manifest = manifest_with_caps(vec![Capability::MemoryRead {
+            scopes: vec!["*".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest);
+        assert!(!policy.can_invoke_tool("mcp_web_search"));
     }
 }
