@@ -24,6 +24,7 @@ enum IngressType {
         agent_id: String,
         source_agent_id: Option<String>,
         message: String,
+        metadata: Option<serde_json::Value>,
     },
     Ingest {
         target_agent_id: String,
@@ -109,20 +110,35 @@ impl JsonRpcRouter {
         ingress: IngressType,
         session_id: String,
     ) -> Result<(SpawnResult, Option<TraceSession>), (String, Option<TraceSession>)> {
-        let (action_name, agent_id, source_agent_id, message, event_type_for_inbox, event_type_str, metadata_for_trace) = match &ingress {
+        let (
+            action_name,
+            agent_id,
+            source_agent_id,
+            message,
+            event_type_for_inbox,
+            event_type_str,
+            metadata_for_trace,
+        ) = match &ingress {
             IngressType::Spawn {
                 agent_id,
                 source_agent_id,
                 message,
-            } => (
-                "agent.spawn",
-                agent_id.clone(),
-                source_agent_id.clone(),
-                message.clone(),
-                None,
-                None,
-                None,
-            ),
+                metadata,
+            } => {
+                let kickoff = match metadata {
+                    Some(value) => format!("{}\n\nDelegation metadata: {}", message, value),
+                    None => message.clone(),
+                };
+                (
+                    "agent.spawn",
+                    agent_id.clone(),
+                    source_agent_id.clone(),
+                    kickoff,
+                    None,
+                    None,
+                    metadata.clone(),
+                )
+            }
             IngressType::Ingest {
                 target_agent_id,
                 source_agent_id,
@@ -167,12 +183,21 @@ impl JsonRpcRouter {
         );
 
         let requested_data = match (&ingress, &metadata_for_trace) {
-            (IngressType::Spawn { agent_id, source_agent_id, message }, _) => serde_json::json!({
+            (
+                IngressType::Spawn {
+                    agent_id,
+                    source_agent_id,
+                    message,
+                    metadata,
+                },
+                _,
+            ) => serde_json::json!({
                 "agent_id": agent_id,
                 "source_agent_id": source_agent_id,
                 "session_id": session_id,
                 "message_len": message.len(),
                 "message_sha256": sha256_hex(message),
+                "metadata_sha256": metadata.as_ref().map(|v| sha256_hex(&v.to_string())),
             }),
             (IngressType::Ingest { target_agent_id, source_agent_id, event_type, message, metadata }, _) => serde_json::json!({
                 "event_type": event_type,
@@ -200,11 +225,12 @@ impl JsonRpcRouter {
         // Background signal already sent in execution layer if needed (result.should_signal_background)
 
         let completed_data = match (&ingress, &event_type_str) {
-            (IngressType::Spawn { source_agent_id, .. }, _) => serde_json::json!({
+            (IngressType::Spawn { source_agent_id, metadata, .. }, _) => serde_json::json!({
                 "agent_id": result.agent_id,
                 "source_agent_id": source_agent_id,
                 "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
                 "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+                "metadata_sha256": metadata.as_ref().map(|v| sha256_hex(&v.to_string())),
             }),
             (IngressType::Ingest { target_agent_id, source_agent_id, event_type, .. }, _) => serde_json::json!({
                 "event_type": event_type,
@@ -245,6 +271,7 @@ impl JsonRpcRouter {
                     agent_id: params.agent_id.clone(),
                     source_agent_id: params.source_agent_id.clone(),
                     message: params.message.clone(),
+                    metadata: params.metadata.clone(),
                 };
                 
                 match self.execute_agent_request(ingress, session_id.clone()).await {
@@ -259,6 +286,7 @@ impl JsonRpcRouter {
                                 Some(serde_json::json!({
                                     "session_id": result.session_id.clone(),
                                     "assistant_reply": result.assistant_reply.clone(),
+                                    "delegation_metadata": params.metadata.clone(),
                                 })),
                             );
                         }
@@ -471,6 +499,8 @@ impl JsonRpcRouter {
 struct AgentSpawnParams {
     agent_id: String,
     message: String,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
@@ -808,6 +838,33 @@ mod tests {
             std::fs::read_to_string(gateway_log_path).expect("gateway causal chain should exist");
         assert!(body.contains("\"action\":\"agent.spawn.requested\""));
         assert!(body.contains("\"action\":\"agent.spawn.failed\""));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_agent_spawn_accepts_metadata_param() {
+        let (_temp, router) = test_router();
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: "3b".to_string(),
+            method: "agent.spawn".to_string(),
+            params: serde_json::json!({
+                "agent_id": "missing",
+                "message": "hello",
+                "metadata": {
+                    "delegated_role": "researcher",
+                    "delegation_reason": "need evidence",
+                    "expected_outputs": ["summary.md", "sources.json"]
+                }
+            }),
+        };
+        let resp = router.dispatch(req).await;
+        assert_eq!(resp.error.as_ref().map(|e| e.code), Some(-32000));
+        assert!(resp
+            .error
+            .as_ref()
+            .expect("error should exist")
+            .message
+            .contains("not found"));
     }
 
     #[tokio::test]
