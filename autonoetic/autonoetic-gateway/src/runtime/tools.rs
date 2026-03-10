@@ -14,7 +14,10 @@ use autonoetic_types::runtime_lock::{
 use autonoetic_types::tool_error::tagged;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration as StdDuration, Instant};
 
 /// Metadata extracted from a tool call for disclosure, audit, and logging.
 #[derive(Debug, Default)]
@@ -74,6 +77,41 @@ fn background_state_file_for_child(agent_dir: &Path, child_id: &str) -> anyhow::
 
 fn default_true() -> bool {
     true
+}
+
+fn requires_promotion_gate(agent_id: &str) -> bool {
+    matches!(
+        agent_id,
+        "specialized_builder.default" | "evolution-steward.default"
+    )
+}
+
+fn extract_host(url: &str) -> anyhow::Result<String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| {
+        anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+            "Invalid URL '{}': {}",
+            url,
+            e
+        )))
+    })?;
+    let host = parsed.host_str().ok_or_else(|| {
+        anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+            "URL '{}' does not contain a host",
+            url
+        )))
+    })?;
+    Ok(host.to_string())
+}
+
+fn block_on_http<F, T>(future: F) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = anyhow::Result<T>>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        tokio::runtime::Runtime::new()?.block_on(future)
+    }
 }
 
 fn capabilities_are_empty(capabilities: &&[Capability]) -> bool {
@@ -317,6 +355,916 @@ impl NativeTool for SandboxExecTool {
             "stderr": String::from_utf8_lossy(&output.stderr)
         });
         serde_json::to_string(&body).map_err(Into::into)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Web Search Tool
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct WebSearchArgs {
+    query: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    max_results: Option<usize>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    engine_url: Option<String>,
+    #[serde(default)]
+    duckduckgo_engine_url: Option<String>,
+    #[serde(default)]
+    google_engine_url: Option<String>,
+    #[serde(default)]
+    google_engine_id: Option<String>,
+    #[serde(default)]
+    google_api_key_env: Option<String>,
+    #[serde(default)]
+    google_engine_id_env: Option<String>,
+    #[serde(default)]
+    cache_ttl_secs: Option<u64>,
+}
+
+fn default_web_search_engine_url() -> String {
+    "https://duckduckgo.com/".to_string()
+}
+
+fn default_google_search_engine_url() -> String {
+    "https://www.googleapis.com/customsearch/v1".to_string()
+}
+
+const GOOGLE_API_KEY_ENV_DEFAULT: &str = "AUTONOETIC_GOOGLE_SEARCH_API_KEY";
+const GOOGLE_API_KEY_ENV_LEGACY: &str = "GOOGLE_SEARCH_API_KEY";
+const GOOGLE_ENGINE_ID_ENV_DEFAULT: &str = "AUTONOETIC_GOOGLE_SEARCH_ENGINE_ID";
+const GOOGLE_ENGINE_ID_ENV_LEGACY: &str = "GOOGLE_SEARCH_ENGINE_ID";
+const WEB_SEARCH_CACHE_TTL_DEFAULT_SECS: u64 = 120;
+const WEB_SEARCH_CACHE_TTL_MAX_SECS: u64 = 3_600;
+
+#[derive(Debug, Clone)]
+struct WebSearchCacheEntry {
+    expires_at: Instant,
+    payload: serde_json::Value,
+}
+
+static WEB_SEARCH_CACHE: LazyLock<Mutex<HashMap<String, WebSearchCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSearchProvider {
+    Auto,
+    DuckDuckGo,
+    Google,
+}
+
+impl WebSearchProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Google => "google",
+        }
+    }
+}
+
+fn parse_web_search_provider(raw: Option<&str>) -> anyhow::Result<WebSearchProvider> {
+    let normalized = raw
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "duckduckgo".to_string());
+    match normalized.as_str() {
+        "auto" => Ok(WebSearchProvider::Auto),
+        "duckduckgo" | "ddg" => Ok(WebSearchProvider::DuckDuckGo),
+        "google" => Ok(WebSearchProvider::Google),
+        other => Err(anyhow::Error::from(tagged::Tagged::validation(
+            anyhow::anyhow!(
+                "Unsupported web.search provider '{}'. Use 'auto', 'duckduckgo', or 'google'.",
+                other
+            ),
+        ))),
+    }
+}
+
+fn resolve_duckduckgo_engine_url(args: &WebSearchArgs) -> String {
+    args.duckduckgo_engine_url
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            args.engine_url
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(default_web_search_engine_url)
+}
+
+fn resolve_google_engine_url(args: &WebSearchArgs) -> String {
+    args.google_engine_url
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            args.engine_url
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(default_google_search_engine_url)
+}
+
+fn resolve_web_search_cache_ttl_secs(args: &WebSearchArgs) -> u64 {
+    args.cache_ttl_secs
+        .unwrap_or(WEB_SEARCH_CACHE_TTL_DEFAULT_SECS)
+        .min(WEB_SEARCH_CACHE_TTL_MAX_SECS)
+}
+
+fn web_search_cache_key(
+    args: &WebSearchArgs,
+    provider: WebSearchProvider,
+    requested_max_results: usize,
+    timeout_secs: u64,
+) -> String {
+    let query = args.query.trim();
+    let ddg_engine_url = resolve_duckduckgo_engine_url(args);
+    let google_engine_url = resolve_google_engine_url(args);
+    let google_engine_id = args
+        .google_engine_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    let google_api_key_env = args
+        .google_api_key_env
+        .as_deref()
+        .unwrap_or(GOOGLE_API_KEY_ENV_DEFAULT);
+    let google_engine_id_env = args
+        .google_engine_id_env
+        .as_deref()
+        .unwrap_or(GOOGLE_ENGINE_ID_ENV_DEFAULT);
+    format!(
+        "provider={}|query={}|max_results={}|timeout_secs={}|ddg_engine_url={}|google_engine_url={}|google_engine_id={}|google_api_key_env={}|google_engine_id_env={}",
+        provider.as_str(),
+        query,
+        requested_max_results,
+        timeout_secs,
+        ddg_engine_url,
+        google_engine_url,
+        google_engine_id,
+        google_api_key_env,
+        google_engine_id_env
+    )
+}
+
+fn web_search_cache_get(key: &str) -> Option<serde_json::Value> {
+    let now = Instant::now();
+    let mut cache = WEB_SEARCH_CACHE.lock().ok()?;
+    cache.retain(|_, entry| entry.expires_at > now);
+    cache.get(key).map(|entry| entry.payload.clone())
+}
+
+fn web_search_cache_put(key: String, payload: serde_json::Value, ttl_secs: u64) {
+    if ttl_secs == 0 {
+        return;
+    }
+    if let Ok(mut cache) = WEB_SEARCH_CACHE.lock() {
+        let now = Instant::now();
+        cache.retain(|_, entry| entry.expires_at > now);
+        cache.insert(
+            key,
+            WebSearchCacheEntry {
+                expires_at: now + StdDuration::from_secs(ttl_secs),
+                payload,
+            },
+        );
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn resolve_google_api_key(args: &WebSearchArgs) -> anyhow::Result<String> {
+    let key_env = args
+        .google_api_key_env
+        .as_deref()
+        .unwrap_or(GOOGLE_API_KEY_ENV_DEFAULT);
+    let key = non_empty_env(key_env).or_else(|| {
+        if args.google_api_key_env.is_none() {
+            non_empty_env(GOOGLE_API_KEY_ENV_LEGACY)
+        } else {
+            None
+        }
+    });
+    key.ok_or_else(|| {
+        anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+            "Google web.search requires API key env '{}'",
+            key_env
+        )))
+    })
+}
+
+fn resolve_google_engine_id(args: &WebSearchArgs) -> anyhow::Result<String> {
+    if let Some(explicit) = args
+        .google_engine_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(explicit.to_string());
+    }
+    let engine_id_env = args
+        .google_engine_id_env
+        .as_deref()
+        .unwrap_or(GOOGLE_ENGINE_ID_ENV_DEFAULT);
+    let engine_id = non_empty_env(engine_id_env).or_else(|| {
+        if args.google_engine_id_env.is_none() {
+            non_empty_env(GOOGLE_ENGINE_ID_ENV_LEGACY)
+        } else {
+            None
+        }
+    });
+    engine_id.ok_or_else(|| {
+        anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+            "Google web.search requires engine id via argument 'google_engine_id' or env '{}'",
+            engine_id_env
+        )))
+    })
+}
+
+fn normalize_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_duckduckgo_results(
+    payload: &serde_json::Value,
+    max_results: usize,
+) -> Vec<serde_json::Value> {
+    fn maybe_push(
+        out: &mut Vec<serde_json::Value>,
+        seen_urls: &mut HashSet<String>,
+        text: &str,
+        url: &str,
+        max_results: usize,
+    ) {
+        if out.len() >= max_results {
+            return;
+        }
+        if text.trim().is_empty() || url.trim().is_empty() {
+            return;
+        }
+        if !seen_urls.insert(url.to_string()) {
+            return;
+        }
+        out.push(serde_json::json!({
+            "title": normalize_text(text),
+            "url": url,
+            "snippet": normalize_text(text),
+        }));
+    }
+
+    fn walk(
+        node: &serde_json::Value,
+        out: &mut Vec<serde_json::Value>,
+        seen_urls: &mut HashSet<String>,
+        max_results: usize,
+    ) {
+        if out.len() >= max_results {
+            return;
+        }
+
+        if let Some(obj) = node.as_object() {
+            if let (Some(text), Some(url)) = (
+                obj.get("Text").and_then(|v| v.as_str()),
+                obj.get("FirstURL").and_then(|v| v.as_str()),
+            ) {
+                maybe_push(out, seen_urls, text, url, max_results);
+            }
+            if let Some(topics) = obj.get("Topics").and_then(|v| v.as_array()) {
+                for topic in topics {
+                    walk(topic, out, seen_urls, max_results);
+                    if out.len() >= max_results {
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+
+        if let Some(arr) = node.as_array() {
+            for item in arr {
+                walk(item, out, seen_urls, max_results);
+                if out.len() >= max_results {
+                    return;
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut seen_urls = HashSet::new();
+
+    if let Some(results) = payload.get("Results").and_then(|v| v.as_array()) {
+        for result in results {
+            walk(result, &mut out, &mut seen_urls, max_results);
+            if out.len() >= max_results {
+                return out;
+            }
+        }
+    }
+    if let Some(related) = payload.get("RelatedTopics").and_then(|v| v.as_array()) {
+        for topic in related {
+            walk(topic, &mut out, &mut seen_urls, max_results);
+            if out.len() >= max_results {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+fn collect_google_results(
+    payload: &serde_json::Value,
+    max_results: usize,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let mut seen_urls = HashSet::new();
+    if let Some(items) = payload.get("items").and_then(|v| v.as_array()) {
+        for item in items {
+            if out.len() >= max_results {
+                break;
+            }
+            let title = item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let url = item
+                .get("link")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let snippet = item
+                .get("snippet")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if title.trim().is_empty() || url.trim().is_empty() {
+                continue;
+            }
+            if !seen_urls.insert(url.to_string()) {
+                continue;
+            }
+            out.push(serde_json::json!({
+                "title": normalize_text(title),
+                "url": url,
+                "snippet": normalize_text(snippet),
+            }));
+        }
+    }
+    out
+}
+
+#[derive(Debug)]
+struct WebSearchResponse {
+    provider: WebSearchProvider,
+    engine_url: String,
+    status_code: u16,
+    results: Vec<serde_json::Value>,
+    abstract_text: Option<String>,
+    total_results: Option<u64>,
+}
+
+fn execute_duckduckgo_search(
+    policy: &PolicyEngine,
+    query: &str,
+    engine_url: String,
+    max_results: usize,
+    timeout_secs: u64,
+) -> anyhow::Result<WebSearchResponse> {
+    let engine_host = extract_host(&engine_url)?;
+    if !policy.can_connect_net(&engine_host) {
+        return Err(anyhow::Error::from(tagged::Tagged::permission(
+            anyhow::anyhow!(
+                "Permission Denied: NetConnect does not allow host '{}'",
+                engine_host
+            ),
+        )));
+    }
+
+    let request_engine_url = engine_url.clone();
+    let request_query = query.to_string();
+    let (status_code, payload) = block_on_http(async move {
+        let mut request_url = reqwest::Url::parse(&request_engine_url).map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+                "Invalid search engine URL '{}': {}",
+                request_engine_url,
+                e
+            )))
+        })?;
+        {
+            let mut pairs = request_url.query_pairs_mut();
+            pairs.append_pair("q", request_query.as_str());
+            pairs.append_pair("format", "json");
+            pairs.append_pair("no_html", "1");
+            pairs.append_pair("skip_disambig", "1");
+        }
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| anyhow::anyhow!("web.search client build failed: {}", e))?;
+        let response = client
+            .get(request_url)
+            .timeout(StdDuration::from_secs(timeout_secs))
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::Error::from(tagged::Tagged::resource(anyhow::anyhow!(
+                    "web.search request failed: {}",
+                    e
+                )))
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::Error::from(tagged::Tagged::resource(
+                anyhow::anyhow!("web.search request failed with status {}", status),
+            )));
+        }
+        let payload = response.json::<serde_json::Value>().await.map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::execution(anyhow::anyhow!(
+                "web.search could not decode JSON response: {}",
+                e
+            )))
+        })?;
+        Ok((status.as_u16(), payload))
+    })?;
+
+    let results = collect_duckduckgo_results(&payload, max_results);
+    let abstract_text = payload
+        .get("AbstractText")
+        .and_then(|v| v.as_str())
+        .map(normalize_text)
+        .filter(|text| !text.is_empty());
+
+    Ok(WebSearchResponse {
+        provider: WebSearchProvider::DuckDuckGo,
+        engine_url,
+        status_code,
+        results,
+        abstract_text,
+        total_results: None,
+    })
+}
+
+fn execute_google_search(
+    policy: &PolicyEngine,
+    query: &str,
+    engine_url: String,
+    api_key: String,
+    engine_id: String,
+    max_results: usize,
+    timeout_secs: u64,
+) -> anyhow::Result<WebSearchResponse> {
+    let engine_host = extract_host(&engine_url)?;
+    if !policy.can_connect_net(&engine_host) {
+        return Err(anyhow::Error::from(tagged::Tagged::permission(
+            anyhow::anyhow!(
+                "Permission Denied: NetConnect does not allow host '{}'",
+                engine_host
+            ),
+        )));
+    }
+
+    let request_engine_url = engine_url.clone();
+    let request_query = query.to_string();
+    let (status_code, payload) = block_on_http(async move {
+        let mut request_url = reqwest::Url::parse(&request_engine_url).map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
+                "Invalid search engine URL '{}': {}",
+                request_engine_url,
+                e
+            )))
+        })?;
+        {
+            let mut pairs = request_url.query_pairs_mut();
+            pairs.append_pair("q", request_query.as_str());
+            pairs.append_pair("key", api_key.as_str());
+            pairs.append_pair("cx", engine_id.as_str());
+            pairs.append_pair("num", &max_results.to_string());
+        }
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| anyhow::anyhow!("web.search client build failed: {}", e))?;
+        let response = client
+            .get(request_url)
+            .timeout(StdDuration::from_secs(timeout_secs))
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::Error::from(tagged::Tagged::resource(anyhow::anyhow!(
+                    "web.search request failed: {}",
+                    e
+                )))
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::Error::from(tagged::Tagged::resource(
+                anyhow::anyhow!("web.search request failed with status {}", status),
+            )));
+        }
+        let payload = response.json::<serde_json::Value>().await.map_err(|e| {
+            anyhow::Error::from(tagged::Tagged::execution(anyhow::anyhow!(
+                "web.search could not decode JSON response: {}",
+                e
+            )))
+        })?;
+        Ok((status.as_u16(), payload))
+    })?;
+
+    if let Some(error_payload) = payload.get("error") {
+        let message = error_payload
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown google search error");
+        return Err(anyhow::Error::from(tagged::Tagged::execution(
+            anyhow::anyhow!("web.search google provider returned error: {}", message),
+        )));
+    }
+
+    let results = collect_google_results(&payload, max_results);
+    let total_results = payload
+        .pointer("/searchInformation/totalResults")
+        .and_then(|v| v.as_str())
+        .and_then(|value| value.parse::<u64>().ok());
+
+    Ok(WebSearchResponse {
+        provider: WebSearchProvider::Google,
+        engine_url,
+        status_code,
+        results,
+        abstract_text: None,
+        total_results,
+    })
+}
+
+fn web_search_response_to_payload(query: &str, response: WebSearchResponse) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "ok": true,
+        "provider": response.provider.as_str(),
+        "query": query,
+        "engine_url": response.engine_url,
+        "status_code": response.status_code,
+        "result_count": response.results.len(),
+        "results": response.results
+    });
+    if let Some(abstract_text) = response.abstract_text {
+        payload["abstract"] = serde_json::json!(abstract_text);
+    }
+    if let Some(total_results) = response.total_results {
+        payload["total_results"] = serde_json::json!(total_results);
+    }
+    payload
+}
+
+pub struct WebSearchTool;
+
+impl NativeTool for WebSearchTool {
+    fn name(&self) -> &'static str {
+        "web.search"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::NetConnect { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description:
+                "Search the web via provider-backed JSON APIs (duckduckgo, google, or auto fallback)."
+                    .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "provider": { "type": "string", "enum": ["auto", "duckduckgo", "google"] },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 20 },
+                    "timeout_secs": { "type": "integer", "minimum": 5, "maximum": 120 },
+                    "engine_url": { "type": "string" },
+                    "duckduckgo_engine_url": { "type": "string" },
+                    "google_engine_url": { "type": "string" },
+                    "google_engine_id": { "type": "string" },
+                    "google_api_key_env": { "type": "string" },
+                    "google_engine_id_env": { "type": "string" },
+                    "cache_ttl_secs": { "type": "integer", "minimum": 0, "maximum": 3600 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        policy: &PolicyEngine,
+        _agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let args: WebSearchArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.query.trim().is_empty(), "query must not be empty");
+        let query = args.query.trim().to_string();
+        let requested_provider = parse_web_search_provider(args.provider.as_deref())?;
+        let timeout_secs = args.timeout_secs.unwrap_or(20).clamp(5, 120);
+        let requested_max_results = args.max_results.unwrap_or(5).clamp(1, 20);
+        let cache_ttl_secs = resolve_web_search_cache_ttl_secs(&args);
+        let cache_key = web_search_cache_key(
+            &args,
+            requested_provider,
+            requested_max_results,
+            timeout_secs,
+        );
+
+        if cache_ttl_secs > 0 {
+            if let Some(mut cached_payload) = web_search_cache_get(&cache_key) {
+                cached_payload["cache_hit"] = serde_json::json!(true);
+                cached_payload["cache_ttl_secs"] = serde_json::json!(cache_ttl_secs);
+                return serde_json::to_string(&cached_payload).map_err(Into::into);
+            }
+        }
+
+        let mut attempted_providers = Vec::new();
+        let mut fallback_reason: Option<String> = None;
+
+        let response = match requested_provider {
+            WebSearchProvider::DuckDuckGo => {
+                attempted_providers.push(WebSearchProvider::DuckDuckGo.as_str().to_string());
+                execute_duckduckgo_search(
+                    policy,
+                    &query,
+                    resolve_duckduckgo_engine_url(&args),
+                    requested_max_results.clamp(1, 20),
+                    timeout_secs,
+                )?
+            }
+            WebSearchProvider::Google => {
+                attempted_providers.push(WebSearchProvider::Google.as_str().to_string());
+                let api_key = resolve_google_api_key(&args)?;
+                let engine_id = resolve_google_engine_id(&args)?;
+                execute_google_search(
+                    policy,
+                    &query,
+                    resolve_google_engine_url(&args),
+                    api_key,
+                    engine_id,
+                    requested_max_results.clamp(1, 10),
+                    timeout_secs,
+                )?
+            }
+            WebSearchProvider::Auto => {
+                let ddg_engine_url = resolve_duckduckgo_engine_url(&args);
+                let google_engine_url = resolve_google_engine_url(&args);
+                let ddg_max_results = requested_max_results.clamp(1, 20);
+                let google_max_results = requested_max_results.clamp(1, 10);
+
+                let google_credentials = resolve_google_api_key(&args).and_then(|api_key| {
+                    resolve_google_engine_id(&args).map(|engine_id| (api_key, engine_id))
+                });
+
+                match google_credentials {
+                    Ok((api_key, engine_id)) => {
+                        attempted_providers.push(WebSearchProvider::Google.as_str().to_string());
+                        match execute_google_search(
+                            policy,
+                            &query,
+                            google_engine_url,
+                            api_key,
+                            engine_id,
+                            google_max_results,
+                            timeout_secs,
+                        ) {
+                            Ok(google_response) if !google_response.results.is_empty() => {
+                                google_response
+                            }
+                            Ok(_) => {
+                                fallback_reason = Some("google returned no results".to_string());
+                                attempted_providers
+                                    .push(WebSearchProvider::DuckDuckGo.as_str().to_string());
+                                execute_duckduckgo_search(
+                                    policy,
+                                    &query,
+                                    ddg_engine_url,
+                                    ddg_max_results,
+                                    timeout_secs,
+                                )?
+                            }
+                            Err(google_err) => {
+                                let google_error_text = google_err.to_string();
+                                fallback_reason =
+                                    Some(format!("google provider failed: {google_error_text}"));
+                                attempted_providers
+                                    .push(WebSearchProvider::DuckDuckGo.as_str().to_string());
+                                match execute_duckduckgo_search(
+                                    policy,
+                                    &query,
+                                    ddg_engine_url,
+                                    ddg_max_results,
+                                    timeout_secs,
+                                ) {
+                                    Ok(ddg_response) => ddg_response,
+                                    Err(ddg_err) => {
+                                        return Err(anyhow::Error::from(tagged::Tagged::resource(
+                                            anyhow::anyhow!(
+                                                "web.search auto provider failed: google error: {}; duckduckgo error: {}",
+                                                google_error_text,
+                                                ddg_err
+                                            ),
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        fallback_reason =
+                            Some("google credentials unavailable; used duckduckgo".to_string());
+                        attempted_providers
+                            .push(WebSearchProvider::DuckDuckGo.as_str().to_string());
+                        execute_duckduckgo_search(
+                            policy,
+                            &query,
+                            ddg_engine_url,
+                            ddg_max_results,
+                            timeout_secs,
+                        )?
+                    }
+                }
+            }
+        };
+
+        let mut payload = web_search_response_to_payload(&query, response);
+        payload["requested_provider"] = serde_json::json!(requested_provider.as_str());
+        payload["attempted_providers"] = serde_json::json!(attempted_providers);
+        if let Some(reason) = fallback_reason {
+            payload["fallback_reason"] = serde_json::json!(reason);
+        }
+        payload["cache_hit"] = serde_json::json!(false);
+        payload["cache_ttl_secs"] = serde_json::json!(cache_ttl_secs);
+
+        if cache_ttl_secs > 0 {
+            web_search_cache_put(cache_key, payload.clone(), cache_ttl_secs);
+        }
+
+        serde_json::to_string(&payload).map_err(Into::into)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Web Fetch Tool
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct WebFetchArgs {
+    url: String,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
+pub struct WebFetchTool;
+
+impl NativeTool for WebFetchTool {
+    fn name(&self) -> &'static str {
+        "web.fetch"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::NetConnect { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Fetch a web page by URL and return its textual payload.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string" },
+                    "timeout_secs": { "type": "integer", "minimum": 5, "maximum": 120 },
+                    "max_chars": { "type": "integer", "minimum": 512, "maximum": 200000 }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        policy: &PolicyEngine,
+        _agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let args: WebFetchArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.url.trim().is_empty(), "url must not be empty");
+        let host = extract_host(&args.url)?;
+        if !policy.can_connect_net(&host) {
+            return Err(anyhow::Error::from(tagged::Tagged::permission(
+                anyhow::anyhow!(
+                    "Permission Denied: NetConnect does not allow host '{}'",
+                    host
+                ),
+            )));
+        }
+
+        let timeout_secs = args.timeout_secs.unwrap_or(20).clamp(5, 120);
+        let max_chars = args.max_chars.unwrap_or(20_000).clamp(512, 200_000);
+        let fetch_url = args.url.clone();
+        let (status_code, content_type, body) = block_on_http(async move {
+            let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| anyhow::anyhow!("web.fetch client build failed: {}", e))?;
+            let response = client
+                .get(&fetch_url)
+                .timeout(StdDuration::from_secs(timeout_secs))
+                .send()
+                .await
+                .map_err(|e| {
+                    anyhow::Error::from(tagged::Tagged::resource(anyhow::anyhow!(
+                        "web.fetch request failed: {}",
+                        e
+                    )))
+                })?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow::Error::from(tagged::Tagged::resource(
+                    anyhow::anyhow!("web.fetch request failed with status {}", status),
+                )));
+            }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            let body = response.text().await.map_err(|e| {
+                anyhow::Error::from(tagged::Tagged::execution(anyhow::anyhow!(
+                    "web.fetch could not decode text response: {}",
+                    e
+                )))
+            })?;
+            Ok((status.as_u16(), content_type, body))
+        })?;
+
+        let total_chars = body.chars().count();
+        let truncated = total_chars > max_chars;
+        let content = if truncated {
+            body.chars().take(max_chars).collect::<String>()
+        } else {
+            body
+        };
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "url": args.url,
+            "status_code": status_code,
+            "content_type": content_type,
+            "truncated": truncated,
+            "total_chars": total_chars,
+            "content": content
+        }))
+        .map_err(Into::into)
     }
 }
 
@@ -1046,10 +1994,20 @@ struct InstallAgentArgs {
     files: Vec<InstallAgentFile>,
     #[serde(default)]
     runtime_lock_dependencies: Vec<LockedDependencySet>,
+    #[serde(default)]
+    promotion_gate: Option<InstallPromotionGate>,
     #[serde(default = "default_true")]
     arm_immediately: bool,
     #[serde(default = "default_true")]
     validate_on_install: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallPromotionGate {
+    evaluator_pass: bool,
+    auditor_pass: bool,
+    #[serde(default)]
+    override_approval_ref: Option<String>,
 }
 
 fn parse_install_scheduled_action(
@@ -1264,6 +2222,8 @@ struct SpawnAgentArgs {
     agent_id: String,
     message: String,
     #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    #[serde(default)]
     session_id: Option<String>,
 }
 
@@ -1290,6 +2250,7 @@ impl NativeTool for AgentSpawnTool {
                 "properties": {
                     "agent_id": { "type": "string" },
                     "message": { "type": "string" },
+                    "metadata": { "type": "object" },
                     "session_id": { "type": "string" }
                 },
                 "required": ["agent_id", "message"],
@@ -1311,10 +2272,7 @@ impl NativeTool for AgentSpawnTool {
         let args: SpawnAgentArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
         validate_agent_id(&args.agent_id)?;
-        anyhow::ensure!(
-            !args.message.trim().is_empty(),
-            "message must not be empty"
-        );
+        anyhow::ensure!(!args.message.trim().is_empty(), "message must not be empty");
 
         let resolved_session_id = args
             .session_id
@@ -1333,7 +2291,10 @@ impl NativeTool for AgentSpawnTool {
 
         let source_agent_id = manifest.agent.id.clone();
         let target_agent_id = args.agent_id.clone();
-        let kickoff_message = args.message.clone();
+        let kickoff_message = match &args.metadata {
+            Some(value) => format!("{}\n\nDelegation metadata: {}", args.message, value),
+            None => args.message.clone(),
+        };
         let spawn_future = async move {
             execution
                 .spawn_agent_once(
@@ -1353,16 +2314,14 @@ impl NativeTool for AgentSpawnTool {
             tokio::runtime::Runtime::new()?.block_on(spawn_future)?
         };
 
-        Ok(
-            serde_json::json!({
-                "ok": true,
-                "status": "agent_spawned",
-                "agent_id": result.agent_id,
-                "session_id": result.session_id,
-                "assistant_reply": result.assistant_reply,
-            })
-            .to_string(),
-        )
+        Ok(serde_json::json!({
+            "ok": true,
+            "status": "agent_spawned",
+            "agent_id": result.agent_id,
+            "session_id": result.session_id,
+            "assistant_reply": result.assistant_reply,
+        })
+        .to_string())
     }
 }
 
@@ -1414,6 +2373,16 @@ impl NativeTool for AgentInstallTool {
                         "type": "array",
                         "items": { "type": "object" }
                     },
+                    "promotion_gate": {
+                        "type": "object",
+                        "properties": {
+                            "evaluator_pass": { "type": "boolean" },
+                            "auditor_pass": { "type": "boolean" },
+                            "override_approval_ref": { "type": "string" }
+                        },
+                        "required": ["evaluator_pass", "auditor_pass"],
+                        "additionalProperties": false
+                    },
                     "arm_immediately": { "type": "boolean" },
                     "validate_on_install": { "type": "boolean" }
                 },
@@ -1444,6 +2413,23 @@ impl NativeTool for AgentInstallTool {
             !args.instructions.trim().is_empty(),
             "instructions must not be empty"
         );
+        if requires_promotion_gate(&manifest.agent.id) {
+            let gate = args.promotion_gate.as_ref().ok_or_else(|| {
+                tagged::Tagged::validation(anyhow::anyhow!(
+                    "agent.install from '{}' requires promotion_gate evidence",
+                    manifest.agent.id
+                ))
+            })?;
+            let has_override = gate
+                .override_approval_ref
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+            anyhow::ensure!(
+                has_override || (gate.evaluator_pass && gate.auditor_pass),
+                "promotion gate failed: set evaluator_pass=true and auditor_pass=true, or provide override_approval_ref"
+            );
+        }
 
         let agents_dir = agent_dir
             .parent()
@@ -1713,6 +2699,8 @@ fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result
 pub fn default_registry() -> NativeToolRegistry {
     let mut registry = NativeToolRegistry::new();
     registry.register(Box::new(SandboxExecTool));
+    registry.register(Box::new(WebSearchTool));
+    registry.register(Box::new(WebFetchTool));
     registry.register(Box::new(MemoryReadTool));
     registry.register(Box::new(MemoryWriteTool));
     registry.register(Box::new(MemoryRememberTool));
@@ -1730,9 +2718,20 @@ mod tests {
     use super::*;
     use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
     use autonoetic_types::capability::Capability;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::thread;
     use tempfile::tempdir;
 
     fn test_manifest(capabilities: Vec<Capability>) -> AgentManifest {
+        test_manifest_with_id("test-agent", capabilities)
+    }
+
+    fn test_manifest_with_id(agent_id: &str, capabilities: Vec<Capability>) -> AgentManifest {
         AgentManifest {
             version: "1.0".to_string(),
             runtime: RuntimeDeclaration {
@@ -1744,8 +2743,8 @@ mod tests {
                 runtime_lock: "runtime.lock".to_string(),
             },
             agent: AgentIdentity {
-                id: "test-agent".to_string(),
-                name: "test-agent".to_string(),
+                id: agent_id.to_string(),
+                name: agent_id.to_string(),
                 description: "test".to_string(),
             },
             capabilities,
@@ -1754,6 +2753,66 @@ mod tests {
             background: None,
             disclosure: None,
         }
+    }
+
+    fn spawn_one_shot_http_server(
+        status: &str,
+        content_type: &str,
+        body: String,
+    ) -> (String, thread::JoinHandle<()>) {
+        let status = status.to_string();
+        let content_type = content_type.to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should expose local addr");
+        let handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request_buf = [0_u8; 2048];
+                let _ = stream.read(&mut request_buf);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    fn spawn_counting_http_server(
+        status: &str,
+        content_type: &str,
+        body: String,
+        expected_requests: usize,
+    ) -> (String, Arc<AtomicUsize>, thread::JoinHandle<()>) {
+        let status = status.to_string();
+        let content_type = content_type.to_string();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = Arc::clone(&hits);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should expose local addr");
+        let handle = thread::spawn(move || {
+            for _ in 0..expected_requests {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    hits_clone.fetch_add(1, Ordering::SeqCst);
+                    let mut request_buf = [0_u8; 2048];
+                    let _ = stream.read(&mut request_buf);
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            }
+        });
+        (format!("http://{}", addr), hits, handle)
     }
 
     #[test]
@@ -1783,6 +2842,462 @@ mod tests {
         assert_eq!(defs_spawn.len(), 2);
         assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
         assert!(defs_spawn.iter().any(|d| d.name == "agent.install"));
+
+        let manifest_net = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["*".to_string()],
+        }]);
+        let defs_net = registry.available_definitions(&manifest_net);
+        assert_eq!(defs_net.len(), 2);
+        assert!(defs_net.iter().any(|d| d.name == "web.search"));
+        assert!(defs_net.iter().any(|d| d.name == "web.fetch"));
+    }
+
+    #[test]
+    fn test_web_fetch_tool_roundtrip_local_server() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let (base_url, handle) = spawn_one_shot_http_server(
+            "200 OK",
+            "text/plain; charset=utf-8",
+            "hello web fetch".to_string(),
+        );
+
+        let args = serde_json::json!({
+            "url": format!("{}/doc", base_url),
+            "timeout_secs": 10,
+            "max_chars": 4096
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "web.fetch",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("web.fetch should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("web.fetch result should decode");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::json!(true)));
+        assert!(parsed
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("hello web fetch"));
+
+        handle.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn test_web_fetch_tool_denied_by_netconnect_policy() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["example.com".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let args = serde_json::json!({
+            "url": "http://127.0.0.1:65535/forbidden"
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "web.fetch",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect_err("web.fetch should be denied");
+        assert!(err.to_string().contains("NetConnect"));
+    }
+
+    #[test]
+    fn test_web_search_tool_denied_by_netconnect_policy() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["example.com".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let args = serde_json::json!({
+            "query": "rust",
+            "engine_url": "http://127.0.0.1:65535/search"
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect_err("web.search should be denied");
+        assert!(err.to_string().contains("NetConnect"));
+    }
+
+    #[test]
+    fn test_web_search_tool_roundtrip_local_engine() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let body = serde_json::json!({
+            "Results": [],
+            "RelatedTopics": [
+                {
+                    "Text": "Rust language homepage",
+                    "FirstURL": "https://www.rust-lang.org/"
+                },
+                {
+                    "Name": "Docs",
+                    "Topics": [
+                        {
+                            "Text": "The Rust book",
+                            "FirstURL": "https://doc.rust-lang.org/book/"
+                        }
+                    ]
+                }
+            ]
+        })
+        .to_string();
+        let (engine_url, handle) = spawn_one_shot_http_server("200 OK", "application/json", body);
+
+        let args = serde_json::json!({
+            "query": "rust language",
+            "engine_url": engine_url,
+            "max_results": 5
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("web.search should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("web.search result should decode");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::json!(true)));
+        assert!(
+            parsed
+                .get("result_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                >= 2
+        );
+
+        handle.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn test_web_search_google_requires_api_key_env() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let args = serde_json::json!({
+            "query": "rust",
+            "provider": "google",
+            "engine_url": "http://127.0.0.1:65535/search",
+            "google_engine_id": "cx-test",
+            "google_api_key_env": "AUTONOETIC_TEST_GOOGLE_KEY_MISSING"
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect_err("google search without key should fail");
+        assert!(err.to_string().contains("requires API key env"));
+    }
+
+    #[test]
+    fn test_web_search_google_roundtrip_local_engine() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let body = serde_json::json!({
+            "searchInformation": {
+                "totalResults": "123"
+            },
+            "items": [
+                {
+                    "title": "Rust language",
+                    "link": "https://www.rust-lang.org/",
+                    "snippet": "Rust empowers everyone."
+                },
+                {
+                    "title": "The Rust Book",
+                    "link": "https://doc.rust-lang.org/book/",
+                    "snippet": "Learn Rust."
+                }
+            ]
+        })
+        .to_string();
+        let (engine_url, handle) = spawn_one_shot_http_server("200 OK", "application/json", body);
+
+        let key_env = "AUTONOETIC_TEST_GOOGLE_KEY_OK";
+        let cx_env = "AUTONOETIC_TEST_GOOGLE_CX_OK";
+        let prior_key = std::env::var(key_env).ok();
+        let prior_cx = std::env::var(cx_env).ok();
+        std::env::set_var(key_env, "test-api-key");
+        std::env::set_var(cx_env, "test-cx-id");
+
+        let args = serde_json::json!({
+            "query": "rust language",
+            "provider": "google",
+            "engine_url": engine_url,
+            "google_api_key_env": key_env,
+            "google_engine_id_env": cx_env
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("google web.search should succeed");
+
+        match prior_key {
+            Some(value) => std::env::set_var(key_env, value),
+            None => std::env::remove_var(key_env),
+        }
+        match prior_cx {
+            Some(value) => std::env::set_var(cx_env, value),
+            None => std::env::remove_var(cx_env),
+        }
+        handle.join().expect("server thread should join");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("web.search result should decode");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::json!(true)));
+        assert_eq!(parsed.get("provider"), Some(&serde_json::json!("google")));
+        assert_eq!(parsed.get("total_results"), Some(&serde_json::json!(123)));
+        assert_eq!(parsed.get("result_count"), Some(&serde_json::json!(2)));
+    }
+
+    #[test]
+    fn test_web_search_auto_falls_back_to_duckduckgo_when_google_fails() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let google_body = serde_json::json!({
+            "error": { "message": "quota exceeded" }
+        })
+        .to_string();
+        let (google_engine_url, google_handle) = spawn_one_shot_http_server(
+            "500 Internal Server Error",
+            "application/json",
+            google_body,
+        );
+
+        let ddg_body = serde_json::json!({
+            "Results": [],
+            "RelatedTopics": [
+                {
+                    "Text": "Rust official site",
+                    "FirstURL": "https://www.rust-lang.org/"
+                }
+            ]
+        })
+        .to_string();
+        let (duckduckgo_engine_url, ddg_handle) =
+            spawn_one_shot_http_server("200 OK", "application/json", ddg_body);
+
+        let key_env = "AUTONOETIC_TEST_GOOGLE_KEY_AUTO";
+        let cx_env = "AUTONOETIC_TEST_GOOGLE_CX_AUTO";
+        let prior_key = std::env::var(key_env).ok();
+        let prior_cx = std::env::var(cx_env).ok();
+        std::env::set_var(key_env, "test-api-key");
+        std::env::set_var(cx_env, "test-cx-id");
+
+        let args = serde_json::json!({
+            "query": "rust language",
+            "provider": "auto",
+            "google_engine_url": google_engine_url,
+            "duckduckgo_engine_url": duckduckgo_engine_url,
+            "google_api_key_env": key_env,
+            "google_engine_id_env": cx_env
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("auto provider should fall back to duckduckgo");
+
+        match prior_key {
+            Some(value) => std::env::set_var(key_env, value),
+            None => std::env::remove_var(key_env),
+        }
+        match prior_cx {
+            Some(value) => std::env::set_var(cx_env, value),
+            None => std::env::remove_var(cx_env),
+        }
+
+        google_handle
+            .join()
+            .expect("google server thread should join");
+        ddg_handle.join().expect("ddg server thread should join");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("web.search result should decode");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            parsed.get("requested_provider"),
+            Some(&serde_json::json!("auto"))
+        );
+        assert_eq!(
+            parsed.get("provider"),
+            Some(&serde_json::json!("duckduckgo"))
+        );
+        let attempted = parsed
+            .get("attempted_providers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(attempted.contains(&serde_json::json!("google")));
+        assert!(attempted.contains(&serde_json::json!("duckduckgo")));
+        assert!(parsed
+            .get("fallback_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("google provider failed"));
+    }
+
+    #[test]
+    fn test_web_search_cache_hits_without_second_network_call() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let body = serde_json::json!({
+            "Results": [],
+            "RelatedTopics": [
+                {
+                    "Text": "Rust language homepage",
+                    "FirstURL": "https://www.rust-lang.org/"
+                }
+            ]
+        })
+        .to_string();
+        let (engine_url, hits, handle) =
+            spawn_counting_http_server("200 OK", "application/json", body, 1);
+
+        let unique_query = format!(
+            "rust cache {}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after unix epoch")
+                .as_nanos()
+        );
+        let args = serde_json::json!({
+            "query": unique_query,
+            "provider": "duckduckgo",
+            "duckduckgo_engine_url": engine_url,
+            "cache_ttl_secs": 300
+        });
+
+        let registry = default_registry();
+        let first = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("first web.search call should succeed");
+        let second = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("second web.search call should succeed");
+
+        let first_parsed: serde_json::Value =
+            serde_json::from_str(&first).expect("first response should decode");
+        let second_parsed: serde_json::Value =
+            serde_json::from_str(&second).expect("second response should decode");
+        assert_eq!(
+            first_parsed.get("cache_hit"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            second_parsed.get("cache_hit"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        handle.join().expect("server thread should join");
     }
 
     #[test]
@@ -1813,6 +3328,111 @@ mod tests {
             )
             .expect_err("empty message should be rejected");
         assert!(err.to_string().contains("message must not be empty"));
+    }
+
+    #[test]
+    fn test_agent_spawn_tool_accepts_metadata_argument() {
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 2 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "researcher.default",
+            "message": "",
+            "metadata": {
+                "delegated_role": "researcher",
+                "expected_outputs": ["summary.md", "sources.json"]
+            }
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "agent.spawn",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                Some("session-1"),
+                None,
+            )
+            .expect_err("empty message should still be rejected");
+        assert!(err.to_string().contains("message must not be empty"));
+    }
+
+    #[test]
+    fn test_agent_install_requires_promotion_gate_for_evolution_roles() {
+        let manifest = test_manifest_with_id(
+            "specialized_builder.default",
+            vec![Capability::AgentSpawn { max_children: 4 }],
+        );
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("specialized_builder.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "child.worker",
+            "instructions": "# Child Worker\nDo one job."
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect_err("install should require promotion gate");
+        assert!(err.to_string().contains("promotion_gate"));
+    }
+
+    #[test]
+    fn test_agent_install_allows_promotion_gate_for_evolution_roles() {
+        let manifest = test_manifest_with_id(
+            "specialized_builder.default",
+            vec![Capability::AgentSpawn { max_children: 4 }],
+        );
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("specialized_builder.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "child.worker",
+            "instructions": "# Child Worker\nDo one job.",
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("install should pass with promotion gate");
+        assert!(result.contains("\"ok\":true"));
+        assert!(agents_dir.join("child.worker").join("SKILL.md").exists());
     }
 
     #[test]
@@ -1847,6 +3467,7 @@ mod tests {
                 "type": "sandbox_exec",
                 "command": "python3 scripts/fibonacci_worker.py"
             },
+            "validate_on_install": false,
             "files": [
                 {
                     "path": "scripts/fibonacci_worker.py",
