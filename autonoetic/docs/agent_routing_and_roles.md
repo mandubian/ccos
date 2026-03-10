@@ -121,6 +121,17 @@ The role set can take inspiration from OpenFang's manager-and-hands shape withou
 
 Not every deployment needs every role as a long-lived installed agent. Some roles can exist as templates only and be instantiated on demand.
 
+### Capability baselines (must-have runtime contracts)
+
+Role prompts are not enough by themselves; runtime capability policy must enforce boundaries:
+
+- `researcher` should have explicit external-tool capability (for example native `web.search`/`web.fetch` via `NetConnect`, plus `ToolInvoke` permissions for approved `mcp_*` tools).
+- `researcher` should not depend on ad-hoc shell networking as its primary evidence path.
+- `planner.default` should include structured metadata on each `agent.spawn` delegation.
+- roles without `NetConnect` should not be able to use native web tools; roles without `ToolInvoke` should not be able to see or invoke MCP tools.
+
+This keeps specialization enforceable at runtime, not only suggested in prompts.
+
 ## 5. Where `specialized_builder` Fits
 
 `specialized_builder` should not be treated as the front-door router.
@@ -309,6 +320,10 @@ The exact payload can evolve, but the principle should hold:
 - every delegation records why that role was chosen
 - every result carries explicit outputs, not only free-form prose
 
+Implementation note:
+
+- `agent.spawn.metadata` should be first-class and preserved through traces and specialist handoff.
+
 ## 10. Practical Selection Heuristics for the Lead Agent
 
 These are planner instructions, not gateway rules:
@@ -395,6 +410,7 @@ To turn this design into implementation work, the thin next steps are:
    - multi-role delegation chains
    - session affinity across follow-up messages
    - promotion of a reusable worker through evaluator and auditor gates
+   - MCP `ToolInvoke` enforcement (authorized vs unauthorized tool exposure/invocation)
 
 ## 13. Bottom Line
 
@@ -405,3 +421,88 @@ The lead agent chooses the specialist role.
 The chosen role resolves to the best current specialist implementation.
 
 `specialized_builder` is not the router. It is the mechanism the system uses when it decides it should create or evolve a specialist for future work.
+
+## 14. Promotion Workflow (Auditor + Evolution Roles)
+
+This section explains the durable-promotion path without requiring code reading.
+
+### Role responsibilities
+
+- `auditor` performs risk/governance review before durable promotion.
+- `evolution-steward` decides whether a candidate should be promoted to durable form.
+- `specialized_builder` executes the durable install using `agent.install`.
+- `planner` orchestrates the sequence and decides when to invoke the above roles.
+
+### When promotion is required
+
+Treat the result as a promotion candidate when one or more apply:
+
+- a reusable specialist/worker will be installed durably
+- new long-lived capability authority is introduced
+- background autonomous behavior is added
+- the output is intended to be reused across sessions or tasks
+
+### Required evidence gate for evolution installs
+
+Runtime enforcement requires a promotion gate when `agent.install` is called by:
+
+- `specialized_builder.default`
+- `evolution-steward.default`
+
+The install payload must include `promotion_gate` with either:
+
+1. `evaluator_pass: true` and `auditor_pass: true`, or
+2. a non-empty `override_approval_ref` (explicit human override reference)
+
+If neither condition is met, install is rejected.
+
+### Canonical flow
+
+1. `planner` identifies durable-promotion intent.
+2. `evaluator` validates behavior and quality.
+3. `auditor` reports governance/risk outcome.
+4. `evolution-steward` decides promote/defer/rework.
+5. `specialized_builder` (or `evolution-steward`) calls `agent.install` with `promotion_gate` evidence.
+6. gateway accepts install only if the gate conditions above are satisfied.
+
+### Example `agent.install` gate payloads
+
+Standard evidence-based gate:
+
+```json
+{
+  "agent_id": "sec-filings.default",
+  "instructions": "# SEC Filings Worker\n...",
+  "promotion_gate": {
+    "evaluator_pass": true,
+    "auditor_pass": true
+  }
+}
+```
+
+Explicit human override path:
+
+```json
+{
+  "agent_id": "sec-filings.default",
+  "instructions": "# SEC Filings Worker\n...",
+  "promotion_gate": {
+    "evaluator_pass": false,
+    "auditor_pass": false,
+    "override_approval_ref": "approval://governance/2026-03-10/42"
+  }
+}
+```
+
+## 15. Hardening Iteration Backlog
+
+Current iteration status:
+
+- [x] enforce MCP tool exposure/invocation through `ToolInvoke` capability checks
+- [x] add native `web.search` and `web.fetch` tools gated by `NetConnect`
+- [x] add `web.search` provider auto-mode (`google` then `duckduckgo`) with bounded TTL response caching
+- [x] support structured `agent.spawn.metadata` delegation contracts in gateway/native spawn paths
+- [x] update `researcher.default` to prefer authorized MCP research tools over ad-hoc shell networking
+- [x] enforce evaluator+auditor evidence gates (or explicit override) before durable `agent.install` promotion in evolution roles
+- [ ] validate role-specific output schemas (research/evaluation/audit contracts)
+- [ ] close the loop on learned routing fitness with persisted success/cost/latency signals
