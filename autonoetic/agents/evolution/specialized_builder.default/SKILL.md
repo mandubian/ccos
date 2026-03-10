@@ -45,7 +45,11 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
 4. Use stable naming (`<role>.default` or `<role>.<variant>`) unless the caller requests a custom id.
 5. Include runtime lock and required files so the child is immediately runnable.
 6. If a role already exists and only needs small updates, prefer minimal change over replacement.
-7. Never claim install success if `agent.install` did not succeed.
+7. Include `promotion_gate` evidence in `agent.install` payloads:
+   - `evaluator_pass`
+   - `auditor_pass`
+   - or `override_approval_ref` when human override is explicitly granted
+8. Never claim install success if `agent.install` did not succeed.
 
 ## Reliability
 
