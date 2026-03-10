@@ -3,6 +3,7 @@
 //! Manages Wake -> Context Assembly -> Reasoning -> Act -> Hibernate.
 
 use crate::llm::{CompletionRequest, LlmDriver, Message, StopReason, ToolDefinition};
+use crate::policy::PolicyEngine;
 use crate::runtime::disclosure::DisclosureState;
 use crate::runtime::guard::LoopGuard;
 use crate::runtime::mcp::McpToolRuntime;
@@ -185,11 +186,17 @@ impl AgentExecutor {
             .as_ref()
             .map(|c| c.temperature as f32);
         let mut latest_assistant_text: Option<String> = None;
+        let policy = PolicyEngine::new(self.manifest.clone());
 
         loop {
             self.guard.check_loop()?;
 
-            let mut tools: Vec<ToolDefinition> = mcp_runtime.tool_definitions()?;
+            // MCP tool exposure is capability-gated by ToolInvoke allow-lists.
+            let mut tools: Vec<ToolDefinition> = mcp_runtime
+                .tool_definitions()?
+                .into_iter()
+                .filter(|def| policy.can_invoke_tool(&def.name))
+                .collect();
             tools.extend(self.registry.available_definitions(&self.manifest));
 
             let req = CompletionRequest {
