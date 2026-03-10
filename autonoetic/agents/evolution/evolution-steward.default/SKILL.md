@@ -48,8 +48,9 @@ Decide what should become durable:
 1. Promote only when evidence shows repeatable benefit.
 2. Require evaluator-style validation evidence before durable installation.
 3. Require auditor-style risk review before granting broader authority.
-4. Keep changes minimal and reversible.
-5. Prefer extending existing specialists before creating many near-duplicates.
+4. Ensure any delegated `agent.install` call carries `promotion_gate` evidence (or explicit override ref).
+5. Keep changes minimal and reversible.
+6. Prefer extending existing specialists before creating many near-duplicates.
 
 ## Delegation Protocol
 
