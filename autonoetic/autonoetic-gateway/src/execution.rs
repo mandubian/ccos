@@ -69,8 +69,9 @@ impl GatewayExecutionService {
         anyhow::ensure!(!agent_id.trim().is_empty(), "agent_id must not be empty");
         anyhow::ensure!(!message.trim().is_empty(), "message must not be empty");
 
-        self.execute_with_reliability_controls(agent_id, || async move {
-            let repo = AgentRepository::from_config(&self.config);
+        let result = self
+            .execute_with_reliability_controls(agent_id, || async move {
+                let repo = AgentRepository::from_config(&self.config);
 
             if let Some(source_id) = source_agent_id {
                 if source_id != agent_id {
@@ -180,7 +181,18 @@ impl GatewayExecutionService {
                 should_signal_background,
             })
         })
-        .await
+        .await?;
+        if source_agent_id.is_some() {
+            log_nested_spawn_to_gateway(
+                self.config.as_ref(),
+                session_id,
+                source_agent_id,
+                agent_id,
+                message,
+                &result,
+            );
+        }
+        Ok(result)
     }
 
     pub async fn execute_background_action(
@@ -267,6 +279,61 @@ impl GatewayExecutionService {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
+}
+
+/// Logs agent.spawn.requested and agent.spawn.completed to the gateway causal chain for nested
+/// delegations (when source_agent_id is set), so the gateway log shows the full delegation tree.
+fn log_nested_spawn_to_gateway(
+    config: &GatewayConfig,
+    session_id: &str,
+    source_agent_id: Option<&str>,
+    agent_id: &str,
+    message: &str,
+    result: &SpawnResult,
+) {
+    let logger = match init_gateway_causal_logger(config) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let path = logger.path().to_path_buf();
+    let entries = match CausalLogger::read_entries(&path) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut seq = entries.last().map(|e| e.event_seq + 1).unwrap_or(1);
+    let requested_data = serde_json::json!({
+        "agent_id": agent_id,
+        "source_agent_id": source_agent_id,
+        "session_id": session_id,
+        "message_len": message.len(),
+        "message_sha256": sha256_hex(message),
+    });
+    log_gateway_causal_event(
+        &logger,
+        &gateway_actor_id(),
+        session_id,
+        seq,
+        "agent.spawn.requested",
+        EntryStatus::Success,
+        Some(requested_data),
+    );
+    seq += 1;
+    let completed_data = serde_json::json!({
+        "agent_id": result.agent_id,
+        "source_agent_id": source_agent_id,
+        "session_id": result.session_id,
+        "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
+        "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+    });
+    log_gateway_causal_event(
+        &logger,
+        &gateway_actor_id(),
+        session_id,
+        seq,
+        "agent.spawn.completed",
+        EntryStatus::Success,
+        Some(completed_data),
+    );
 }
 
 pub fn gateway_actor_id() -> String {
