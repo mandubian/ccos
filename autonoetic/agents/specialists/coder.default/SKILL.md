@@ -25,7 +25,7 @@ metadata:
       - type: "MemoryRead"
         scopes: ["*"]
       - type: "MemoryWrite"
-        scopes: ["self.*"]
+        scopes: ["self.*", "skills/*"]
       - type: "AgentMessage"
         patterns: ["*"]
 ---
