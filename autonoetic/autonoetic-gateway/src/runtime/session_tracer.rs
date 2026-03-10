@@ -10,6 +10,10 @@ use std::path::Path;
 
 const EVIDENCE_MODE_ENV: &str = "AUTONOETIC_EVIDENCE_MODE";
 
+/// Max characters for `result_preview` in causal_chain.jsonl tool_invoke entries.
+/// Full tool results are stored in the evidence store when evidence mode is Full (see evidence_ref).
+const TOOL_RESULT_PREVIEW_MAX_CHARS: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceMode {
     Off,
@@ -285,7 +289,7 @@ impl SessionTracer {
             "tool_name": tool_name,
             "result_len": result.len(),
             "result_sha256": sha256_hex(result),
-            "result_preview": redact_text_for_logs(&truncate_for_log(result, 256))
+            "result_preview": redact_text_for_logs(&truncate_for_log(result, TOOL_RESULT_PREVIEW_MAX_CHARS))
         });
         let completed_evidence = serde_json::json!({
             "tool_name": tool_name,
