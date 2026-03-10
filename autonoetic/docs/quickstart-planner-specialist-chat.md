@@ -49,6 +49,89 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent boots
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap --from /path/to/autonoetic/agents
 ```
 
+## 2b) Researcher and web search (required for "search today's weather" etc.)
+
+The researcher can use native `web.search` and `web.fetch` only if its runtime SKILL has a **NetConnect** capability that allows the target hosts (e.g. DuckDuckGo, or `*` for all).
+
+- If you see errors when the researcher runs goals like "search today's weather", the runtime researcher may have been created from an older bundle without NetConnect. Re-bootstrap so it gets the current researcher (with `NetConnect` and `hosts: ["*"]`):
+
+  ```bash
+  cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap --overwrite
+  ```
+
+- To confirm the runtime researcher can use web search, check that its SKILL includes NetConnect:
+
+  ```bash
+  grep -A1 "NetConnect" /tmp/autonoetic-demo/agents/researcher.default/SKILL.md
+  ```
+
+  You should see `hosts: ["*"]` (or at least hosts that include `duckduckgo.com` and any other search/fetch targets).
+
+- **If NetConnect is present but the researcher still doesn't use web search** (e.g. for "search today's weather"): the model may be answering from training data instead of calling the tool. Re-bootstrap so the researcher gets the latest instructions (which tell it to always call `web.search` first for current/live info), then restart the gateway and try again. You can also inspect the planner/researcher trace to see whether `web.search` was in the tool list and whether the model requested it:
+
+  ```bash
+  cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace show demo-session --agent researcher.default
+  ```
+
+## 2c) Optional: add MCP web tools (native web tools already available)
+
+You can still add MCP web tools for richer provider-specific search/fetch behavior.
+
+To enable Google provider in native `web.search`, export:
+
+```bash
+export AUTONOETIC_GOOGLE_SEARCH_API_KEY="..."
+export AUTONOETIC_GOOGLE_SEARCH_ENGINE_ID="..."
+```
+
+Then the researcher can call `web.search` with either explicit Google or auto fallback:
+
+```json
+{ "query": "rust async runtime", "provider": "google" }
+```
+
+```json
+{
+  "query": "rust async runtime",
+  "provider": "auto",
+  "cache_ttl_secs": 120
+}
+```
+
+`provider: "auto"` tries Google first when credentials are available, then falls back to DuckDuckGo on missing credentials, errors, or empty Google results.
+`cache_ttl_secs` controls in-memory response caching (0 disables cache, max 3600 seconds).
+
+**If `web.search` returns `result_count: 0`** (e.g. for "weather in Paris"): DuckDuckGo's API often returns no results for weather and similar instant-answer queries. The tool call still succeeds (`ok: true`); the researcher just gets an empty result set. For better coverage on live/weather queries, set up the Google provider (see above) and use `provider: "auto"` or `"google"` so the researcher can use Google Custom Search when available.
+
+Additional `web.search` options for advanced setups:
+
+- `duckduckgo_engine_url`: override DuckDuckGo endpoint for local/mock engines.
+- `google_engine_url`: override Google endpoint for local/mock engines.
+- `google_api_key_env`: env var name for API key (default `AUTONOETIC_GOOGLE_SEARCH_API_KEY`).
+- `google_engine_id_env`: env var name for Custom Search Engine ID (default `AUTONOETIC_GOOGLE_SEARCH_ENGINE_ID`).
+
+Response metadata now includes:
+
+- `requested_provider`: provider asked by caller (`auto`, `google`, or `duckduckgo`).
+- `attempted_providers`: providers tried in execution order.
+- `fallback_reason`: why fallback occurred (present when fallback is used).
+- `cache_hit`: whether response came from cache.
+
+Example registration:
+
+```bash
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml \
+  mcp add web --command /path/to/your-web-mcp-server -- --stdio
+```
+
+Then verify MCP availability:
+
+```bash
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway status
+```
+
+If you want stricter network policy, narrow `researcher.default` `NetConnect.hosts` in your runtime agent bundle instead of using `["*"]`.
+
 ## 3) Configure agents for OpenRouter + Gemini Flash Lite
 
 After bootstrap, patch the runtime bundles in `/tmp/autonoetic-demo/agents`:
@@ -106,7 +189,16 @@ Expected behavior:
 
 ## 7) Verify traces
 
+**Where to look:**
+
+- **Gateway causal chain** — `agents/.gateway/history/causal_chain.jsonl` — records every ingress (top-level `event.ingest` when you chat) and every **delegation** (each `agent.spawn` from planner → researcher, coder, etc.). One place to see the full delegation tree for a session.
+- **Per-agent causal chains** — `agents/<agent_id>/history/causal_chain.jsonl` — record that agent’s lifecycle, LLM calls, and tool invocations (including `agent.spawn` requests and results as seen by that agent).
+
 ```bash
+# Gateway log (all delegations for the session)
+cat /tmp/autonoetic-demo/agents/.gateway/history/causal_chain.jsonl
+
+# Per-agent traces
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace sessions --agent planner.default
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace show demo-session --agent planner.default
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace sessions --agent researcher.default
@@ -114,9 +206,13 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace sessi
 
 You should see:
 
-- planner session activity for `demo-session`
-- tool usage including `agent.spawn` in planner trace
-- specialist session activity tied to the same request lineage
+- gateway log: `event.ingest.requested` / `event.ingest.completed` for the chat, then `agent.spawn.requested` / `agent.spawn.completed` for each delegation (researcher, architect, coder, etc.);
+- planner session activity for `demo-session`;
+- tool usage including `agent.spawn` in planner trace;
+- specialist session activity tied to the same request lineage.
+
+**Why is `result_preview` truncated in causal_chain.jsonl?**  
+Tool results in the causal chain are intentionally limited to 256 characters so log lines stay readable and bounded. The payload still has `result_len` and `result_sha256`. To get full tool output in logs, set `AUTONOETIC_EVIDENCE_MODE=full` when starting the gateway; then each tool_invoke completed entry gets an `evidence_ref` pointing to a file under the agent's `history/evidence/<session_id>/` with the full result.
 
 ## Common Pitfall
 
