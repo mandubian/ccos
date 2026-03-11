@@ -4,6 +4,7 @@
 
 use crate::llm::{CompletionRequest, LlmDriver, Message, StopReason, ToolDefinition};
 use crate::policy::PolicyEngine;
+use crate::runtime::artifact::extract_artifacts_from_text;
 use crate::runtime::disclosure::DisclosureState;
 use crate::runtime::guard::LoopGuard;
 use crate::runtime::mcp::McpToolRuntime;
@@ -14,6 +15,10 @@ use crate::runtime::tool_call_processor::ToolCallProcessor;
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::disclosure::DisclosurePolicy;
 use std::path::PathBuf;
+
+// ---------------------------------------------------------------------------
+// Foundation Instructions
+// ---------------------------------------------------------------------------
 
 const FOUNDATION_INSTRUCTIONS: &str = include_str!("foundation_instructions.md");
 
@@ -45,7 +50,7 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
-     pub fn new(
+    pub fn new(
         manifest: AgentManifest,
         instructions: String,
         llm: std::sync::Arc<dyn LlmDriver>,
@@ -104,11 +109,7 @@ impl AgentExecutor {
         persist_reevaluation_state(&self.agent_dir, |state| {
             state.last_outcome = Some(reason.to_string());
         })?;
-        let mut tracer = SessionTracer::new(
-            &self.agent_dir,
-            &self.manifest.agent.id,
-            &session_id,
-        )?;
+        let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?;
         tracer.log_session_end(reason);
         self.session_started = false;
         self.session_id = None;
@@ -149,7 +150,7 @@ impl AgentExecutor {
             &std::env::var("AUTONOETIC_EVIDENCE_MODE").unwrap_or_else(|_| "off".to_string()),
         )?;
 
-         let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
+        let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
             .with_turn_id(&turn_id);
 
         if !self.session_started {
@@ -166,7 +167,8 @@ impl AgentExecutor {
         tracer.log_wake(history.len(), evidence_mode);
 
         let mut mcp_runtime = McpToolRuntime::from_env().await?;
-        let mut secret_store: Option<SecretStoreRuntime> = SecretStoreRuntime::from_instructions(&self.instructions)?;
+        let mut secret_store: Option<SecretStoreRuntime> =
+            SecretStoreRuntime::from_instructions(&self.instructions)?;
         let mut disclosure_state = DisclosureState::new(
             self.manifest
                 .disclosure
@@ -191,6 +193,21 @@ impl AgentExecutor {
         loop {
             self.guard.check_loop()?;
 
+            // Update system message
+            let system_instructions = compose_system_instructions(&self.instructions);
+
+            if let Some(first) = history.get_mut(0) {
+                if matches!(first.role, crate::llm::Role::System) {
+                    first.content = system_instructions;
+                } else {
+                    history.insert(0, Message::system(system_instructions));
+                }
+            } else {
+                history.push(Message::system(system_instructions));
+            }
+
+            // MCP tool exposure ... (skipped for brevity, but I must match exactly)
+
             // MCP tool exposure is capability-gated by ToolInvoke allow-lists.
             let mut tools: Vec<ToolDefinition> = mcp_runtime
                 .tool_definitions()?
@@ -210,13 +227,23 @@ impl AgentExecutor {
             tracing::debug!("Calling LLM");
             let response = self.llm.complete(&req).await?;
 
-            let tool_call_details: Vec<serde_json::Value> = response.tool_calls.iter().map(|tc| {
-                serde_json::json!({
-                    "id": tc.id,
-                    "name": tc.name,
-                    "arguments": crate::log_redaction::redact_text_for_logs(&tc.arguments)
+            // Extract new artifacts from response for logging
+            let new_artifacts = extract_artifacts_from_text(&response.text);
+            for artifact in &new_artifacts {
+                tracer.log_artifact_detected(artifact)?;
+            }
+
+            let tool_call_details: Vec<serde_json::Value> = response
+                .tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "name": tc.name,
+                        "arguments": crate::log_redaction::redact_text_for_logs(&tc.arguments)
+                    })
                 })
-            }).collect();
+                .collect();
 
             tracer.log_llm_completion(
                 &model,
@@ -247,13 +274,33 @@ impl AgentExecutor {
                     )
                     .with_session_context(self.session_id.clone(), Some(turn_id.clone()));
 
-                    let results = processor.process_tool_calls(&response.tool_calls, &self.agent_dir, self.gateway_dir.as_deref(), &mut tracer).await?;
+                    let (had_any_success, results) = processor
+                        .process_tool_calls(
+                            &response.tool_calls,
+                            &self.agent_dir,
+                            self.gateway_dir.as_deref(),
+                            &mut tracer,
+                        )
+                        .await?;
 
                     for (id, name, result) in results {
-                        history.push(Message::tool_result(id, name, result));
+                        history.push(Message::tool_result(id.clone(), name, result.clone()));
+
+                        // Check if result is an error to register in guard
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&result) {
+                            if parsed.get("ok") == Some(&serde_json::Value::Bool(false)) {
+                                // Find matching tool call for arguments
+                                if let Some(tc) = response.tool_calls.iter().find(|tc| tc.id == id)
+                                {
+                                    self.guard.register_failure(&tc.name, &tc.arguments);
+                                }
+                            }
+                        }
                     }
 
-                    self.guard.register_progress();
+                    if had_any_success {
+                        self.guard.register_progress();
+                    }
                 }
                 StopReason::EndTurn | StopReason::StopSequence => {
                     if !response.text.trim().is_empty() {
@@ -275,8 +322,6 @@ impl AgentExecutor {
         Ok(latest_assistant_text.map(|t| disclosure_state.filter_reply(&t)))
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -414,7 +459,10 @@ mod tests {
             crate::runtime::tools::default_registry(),
         );
 
-        runtime.execute_loop().await.expect("execution should succeed");
+        runtime
+            .execute_loop()
+            .await
+            .expect("execution should succeed");
 
         let system = captured
             .lock()
