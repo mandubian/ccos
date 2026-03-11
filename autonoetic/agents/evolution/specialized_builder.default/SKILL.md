@@ -50,7 +50,54 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
    - `auditor_pass`
    - or `override_approval_ref` when human override is explicitly granted
 8. Never claim install success if `agent.install` did not succeed.
+9. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required for that type (see Capability shapes below). Do not use `capability` or other keys; use `type` and the documented fields only.
+10. Prefer the smallest safe capability set. If no extra capabilities are required, send an empty `capabilities` array instead of guessing.
+11. Treat install-time validation/permission errors as repair signals. Inspect the tool error's `repair_hint`; fix the payload shape (e.g. add missing `type`, fix field names like `hosts`/`scopes`/`allowed`) and retry in-session before escalating.
+12. In `agent.install` `files`, use paths that match the child's intended `MemoryWrite` scopes. Prefer `skills/<name>.<ext>` for scripts and docs (e.g. `skills/helper.md`, `skills/script.py`). Do not use bare root filenames (e.g. `script.py`) or ambiguous paths; they often fall outside allowed scopes and cause "memory write denied by policy".
 
 ## Reliability
 
 Use iterative repair on structured tool errors (`ok: false`), then retry with corrected payloads.
+
+## Capability shapes (required for agent.install)
+
+Every `capabilities` entry must be a JSON object with `type` plus the fields listed for that type. No other field names are valid.
+
+| type | required fields | example |
+|------|------------------|---------|
+| ToolInvoke | `allowed`: array of strings | `{ "type": "ToolInvoke", "allowed": ["web.fetch"] }` |
+| MemoryRead | `scopes`: array of strings | `{ "type": "MemoryRead", "scopes": ["*"] }` |
+| MemoryWrite | `scopes`: array of strings | `{ "type": "MemoryWrite", "scopes": ["skills/*", "state/*"] }` |
+| MemoryShare | `allowed_targets`: array of strings | `{ "type": "MemoryShare", "allowed_targets": ["planner.default"] }` |
+| MemorySearch | `scopes`: array of strings | `{ "type": "MemorySearch", "scopes": ["*"] }` |
+| NetConnect | `hosts`: array of strings | `{ "type": "NetConnect", "hosts": ["api.open-meteo.com"] }` |
+| AgentSpawn | `max_children`: number | `{ "type": "AgentSpawn", "max_children": 5 }` |
+| AgentMessage | `patterns`: array of strings | `{ "type": "AgentMessage", "patterns": ["*"] }` |
+| BackgroundReevaluation | `min_interval_secs`: number, `allow_reasoning`: boolean | `{ "type": "BackgroundReevaluation", "min_interval_secs": 60, "allow_reasoning": false }` |
+| ShellExec | `patterns`: array of strings | `{ "type": "ShellExec", "patterns": ["python3", "*.py"] }` |
+
+Do not send `capability`, `capabilities` nested inside an entry, or missing `type`. If validation fails, use the tool error's `repair_hint` to correct the payload and retry.
+
+## Minimal payload pattern
+
+Use this structure as the default baseline and extend only when required. Replace placeholders with the actual agent id, instructions, and capability/file content for the requested specialist.
+
+```json
+{
+  "agent_id": "<role>.<variant>",
+  "instructions": "<one-line role description>",
+  "capabilities": [
+    { "type": "NetConnect", "hosts": ["<allowed-host.example.com>"] }
+  ],
+  "files": [
+    {
+      "path": "skills/<role>.md",
+      "content": "<markdown instructions for the specialist>"
+    }
+  ],
+  "promotion_gate": {
+    "evaluator_pass": true,
+    "auditor_pass": true
+  }
+}
+```

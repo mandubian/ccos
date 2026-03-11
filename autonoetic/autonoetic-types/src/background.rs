@@ -67,6 +67,19 @@ pub struct ScheduledActionDependencies {
     pub packages: Vec<String>,
 }
 
+/// Actions that can be stored in reevaluation state and executed by the background scheduler,
+/// or used as the *subject* of an approval request (ApprovalRequest/ApprovalDecision).
+///
+/// **Schedulable vs approval-only:**
+/// - `WriteFile` and `SandboxExec` are real runnable actions: the scheduler can execute them
+///   (after approval when `requires_approval` is true). They may also appear in
+///   `pending_scheduled_action` and in approval requests.
+/// - `AgentInstall` is **not** something the scheduler runs. We cannot "schedule" the
+///   installation of an agent. It exists only as the subject of an approval request: when
+///   `agent.install` requires human approval, we create an approval with action=AgentInstall;
+///   after the operator approves, the *caller* retries `agent.install` with
+///   `install_approval_ref` and the install runs synchronously. The scheduler never executes
+///   an AgentInstall; it is only a label for "this approval was for an install."
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScheduledAction {
@@ -87,9 +100,22 @@ pub enum ScheduledAction {
         #[serde(default)]
         evidence_ref: Option<String>,
     },
+    /// Approval subject only: "this approval request is for an agent install." Not executed by the scheduler; install is performed by the caller retrying `agent.install` with `install_approval_ref`.
+    AgentInstall {
+        agent_id: String,
+        summary: String,
+        requested_by_agent_id: String,
+        install_fingerprint: String,
+    },
 }
 
 impl ScheduledAction {
+    /// True if this action is something the scheduler can execute (WriteFile, SandboxExec).
+    /// False for AgentInstall, which is only an approval subject.
+    pub fn is_executable_by_scheduler(&self) -> bool {
+        !matches!(self, Self::AgentInstall { .. })
+    }
+
     pub fn requires_approval(&self) -> bool {
         match self {
             Self::WriteFile {
@@ -98,6 +124,7 @@ impl ScheduledAction {
             | Self::SandboxExec {
                 requires_approval, ..
             } => *requires_approval,
+            Self::AgentInstall { .. } => true,
         }
     }
 
@@ -105,6 +132,7 @@ impl ScheduledAction {
         match self {
             Self::WriteFile { .. } => "write_file",
             Self::SandboxExec { .. } => "sandbox_exec",
+            Self::AgentInstall { .. } => "agent_install",
         }
     }
 
@@ -112,6 +140,7 @@ impl ScheduledAction {
         match self {
             Self::WriteFile { evidence_ref, .. } => evidence_ref.clone(),
             Self::SandboxExec { evidence_ref, .. } => evidence_ref.clone(),
+            Self::AgentInstall { .. } => None,
         }
     }
 
@@ -123,6 +152,7 @@ impl ScheduledAction {
             Self::SandboxExec {
                 evidence_ref: r, ..
             } => *r = evidence_ref,
+            Self::AgentInstall { .. } => {}
         }
         self
     }
@@ -186,6 +216,10 @@ pub struct BackgroundState {
     pub processed_approval_request_ids: Vec<String>,
 }
 
+/// A request for human approval. The `action` describes what is being approved: either a
+/// schedulable action (WriteFile, SandboxExec) that the scheduler will run after approval, or
+/// an approval-only subject (AgentInstall) where the actual install is done by the caller
+/// retrying with install_approval_ref.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalRequest {
     pub request_id: String,

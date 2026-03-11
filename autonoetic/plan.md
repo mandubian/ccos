@@ -730,3 +730,83 @@ Recommended online boundary:
 3. Then build the trading-bot validation as a paper-trading orchestration scenario with strict approval gates and sandbox-only execution.
 
 This sequencing gives Autonoetic one deterministic "cron-grade" proof and one open-ended "agent-grade" proof before Phase 7 shifts attention toward release packaging.
+
+## Active Evolution Tasks (2026-03-11)
+
+Follow-up evolution items from the planner/specialist workflow and install reliability work. Each subsection lists concrete tasks; implementation order is suggested where dependencies matter.
+
+### Approval and promotion hardening
+
+**Current state:** Promotion gate (`evaluator_pass` + `auditor_pass` or `override_approval_ref`) is enforced in `runtime/tools.rs` for evolution-role agents calling `agent.install`. Human approval for installs is implemented: `GatewayConfig.agent_install_approval_policy` (always / risk_based / never) controls when approval is required; when required, a pending request is created and the caller retries with `promotion_gate.install_approval_ref` after the operator approves. `ScheduledAction::AgentInstall` is used only as the approval subject (not executed by the scheduler); a regression test in `reevaluation_state::tests` asserts that the background path resolves it as approval metadata only.
+
+**Implementation pointers:** Config: `autonoetic-types/src/config.rs` (`GatewayConfig`, `AgentInstallApprovalPolicy`). Install flow: `autonoetic-gateway/src/runtime/tools.rs` (promotion gate, staging, rename, approval gate, `install_approval_ref` validation). Approval: `scheduler/approval.rs`, `scheduler/store.rs` (pending/approved dirs); `ScheduledAction::AgentInstall` in `autonoetic-types/src/background.rs`.
+
+**Suggested order:** (1) Policy + config, (2) Risk classification and approval trigger in install path, (3) Wire to approval queue and block install until resolved, (4) Integration tests, (5) Operator docs.
+
+- [x] Add an explicit policy for when `agent.install` requires human approval (default strict in prod, configurable in dev). E.g. add `agent_install_approval_policy` (tri-state: always / risk_based / never) to `GatewayConfig` and document in config schema.
+- [x] Implement risk-based approval triggers for `agent.install` (for example: broad `MemoryWrite`, `ShellExec`, wildcard `NetConnect`, background-enabled installs). Classify install payload in tools.rs; when policy is risk-based and classification is high-risk, require approval before proceeding.
+- [x] Wire `agent.install` approval requests into the existing scheduler approval queue path (same pending/approved/rejected mechanics used by approved scheduled actions). Install requests stored under `approvals/pending`; caller retries with `install_approval_ref` after approve.
+- [x] Keep promotion evidence (`evaluator_pass` + `auditor_pass` or `override_approval_ref`) and human approval (`install_approval_ref`) as distinct checks; both may be required depending on policy.
+- [x] Add integration tests proving: low-risk install path (no approval when policy is risk_based and payload is low-risk), approval-required install path (request created, install blocked until approve), rejection path, and post-approval install success path. Regression test: `reevaluation_state::tests::test_agent_install_in_background_path_resolves_as_approval_metadata_only` asserts `AgentInstall` is non-executable in the background path and only resolves as approval metadata.
+- [x] Document operator workflow for reviewing and resolving `agent.install` approvals (e.g. in quickstart or a dedicated approvals doc: list pending, approve/reject, effect on install). Added "Approvals (agent.install and scheduled actions)" and "Troubleshooting: agent.install and memory writes" to `docs/quickstart-planner-specialist-chat.md`.
+
+### Specialized builder rights/write reliability
+
+- [x] Fix `specialized_builder.default` install payload guidance so generated `capabilities` entries are always valid `Capability` enum objects (with required `type`). Added "Capability shapes" table and explicit rule in SKILL.
+- [x] Add validation-repair instructions to `specialized_builder.default` to inspect structured tool errors and repair `agent.install` payloads in-session. Rule 11 now references `repair_hint` and retry.
+- [x] Prevent planner fallback to unauthorized root file writes when install is the intended durable path. Planner guardrail #10 already enforces: continue repair with specialized_builder; do not fallback to coder for root-path file creation.
+- [x] Align writer scopes with intended file targets (`skills/*`, `self.*`, or explicit allowed prefixes) and avoid ambiguous relative root paths like `paris_weather.py`. Specialized builder rule 12 and quickstart troubleshooting added.
+- [x] Add regression tests for the observed failure pattern: malformed `agent.install` -> structured error -> corrected payload -> successful install without LoopGuard failure. Test: `test_agent_install_malformed_capabilities_then_repaired_payload_succeeds` in `tools.rs`.
+- [x] Update quickstart troubleshooting docs with concrete diagnostics for `memory write denied by policy` and `Invalid JSON arguments for 'agent.install'`. Added "Troubleshooting: agent.install and memory writes" in quickstart.
+
+### Pre-install discovery via AgentRepository
+
+- [ ] Keep fixed role-map routing as the primary planner path; run discovery only before durable install decisions.
+- [ ] Add native `agent.exists` tool backed by `AgentRepository` for deterministic ID collision checks before `agent.install`.
+- [ ] Add native `agent.discover` tool backed by `AgentRepository` returning ranked reusable-agent candidates by intent/capability match.
+- [ ] Update planner policy: before delegating install to `specialized_builder.default`, call `agent.discover`; if a strong match exists, spawn/reuse it instead of creating a new agent.
+- [ ] Update specialized builder policy: call `agent.exists` first; if target exists, return reusable result (`already_exists`) instead of retrying installation.
+- [ ] Add deterministic ranking and audit fields for discovery results (`score`, `match_reasons`, matched capabilities) to keep decisions explainable.
+- [ ] Add integration tests for: reuse path (no install attempted), no-match path (install delegated), and existing-ID path (clean `already_exists` outcome).
+
+### Reuse-first adaptation and deterministic execution
+
+- [ ] Add planner decision ladder: reuse existing agent as-is -> adapt existing agent for small scoped gaps -> install new agent only when adaptation is not suitable.
+- [ ] Add an adaptation workflow contract (`agent.adapt` or equivalent) with composition-first semantics (`behavior_overlay`) and bounded `asset_changes` for runtime materialization.
+- [ ] Define composition metadata for adaptation (`compose_mode`, base manifest hash, capability delta, evidence refs) so adaptations remain auditable and reversible.
+- [ ] Store adaptation artifacts in gateway-managed metadata (with optional materialized agent snapshots) so reuse/discovery can rank both base agents and approved overlays.
+- [ ] Enforce adaptation limits (allowed paths/sections, change budget), validation requirements, and rollback on failure.
+- [ ] Require evaluator/auditor evidence when adaptation changes capability surface or background behavior.
+- [ ] Add policy to prefer adapting an existing specialist when the gap is small and intent remains within the same role boundary.
+- [ ] Add integration tests for adaptation: successful small overlay, rejected over-budget overlay, failed validation with rollback, and post-adaptation reuse.
+- [ ] Push deterministic-runtime patterns for operational API agents (weather-like): LLM for setup/planning, deterministic execution path for routine runs.
+- [ ] Add explicit planner/builder guardrail: for procedural data retrieval tasks, prefer no-LLM execution loops (scheduled action or direct deterministic tool path) and only escalate to LLM reasoning on error/ambiguity.
+- [ ] Add evaluator checks proving steady-state operation succeeds without LLM calls for deterministic agents.
+
+### Session log observability and reconstruction
+
+- [ ] Keep physical logs distributed by ownership (`.gateway` and per-agent histories), but add a gateway-owned per-session index manifest for unified timeline reconstruction.
+- [ ] Record cross-agent event references in the session index (agent_id, log_id, timestamp, category/action, causal hash refs) as events are emitted.
+- [ ] Add trace tooling to reconstruct a single ordered session view from gateway + agent logs without manual stitching (`trace session.show` / `trace session.rebuild` semantics).
+- [ ] Add integrity checks in reconstruction mode (missing ref, hash mismatch, orphan entries) and surface explicit diagnostics.
+- [ ] Add integration tests for multi-agent delegated sessions proving full timeline reconstruction and deterministic ordering.
+
+### Causal chain rotation and retention
+
+- [ ] Add causal log segmentation by date and size (for example `causal_chain-YYYY-MM-DD-0001.jsonl`) to prevent unbounded single-file growth.
+- [ ] Preserve hash-chain continuity across rotated segments (`prev_hash` of first entry in a new segment points to the last entry hash of the prior segment).
+- [ ] Add per-history segment index metadata so trace readers can discover all segments without full directory scans.
+- [ ] Keep backward compatibility for existing `causal_chain.jsonl` paths during migration and update trace tooling to read both legacy and segmented layouts.
+- [ ] Add retention/compression policy for cold segments (optional gzip) with explicit operator controls.
+- [ ] Add tests for rotation boundaries, continuity validation, and cross-segment trace reconstruction.
+
+### Textual state-machine conventions and concepts alignment
+
+- [ ] Align `concepts.md` with runtime reality by marking what is implemented now versus planned evolution (without deleting original conceptual text).
+- [ ] Define a minimal textual state-machine convention for agents:
+  - `state/task.md` for active checklist and next action
+  - `state/scratchpad.md` for ephemeral reasoning notes
+  - `state/handoff.md` for compact transfer status and blockers
+- [ ] Add guidance on when to persist to textual state versus Tier2 memory (`memory.db`) to avoid overlap and drift.
+- [ ] Update foundation/planner/builder guidance to prefer these state files for long multi-step tasks that benefit from explicit checklists.
+- [ ] Evaluate stronger lazy loading as an optional optimization track (not mandatory): keep current behavior as default until profiling justifies added complexity.

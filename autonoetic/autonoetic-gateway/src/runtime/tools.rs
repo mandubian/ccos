@@ -4,16 +4,17 @@ use crate::runtime::reevaluation_state::{execute_scheduled_action, persist_reeva
 use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, LlmConfig};
 use autonoetic_types::background::{
-    BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
+    ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
 use autonoetic_types::capability::Capability;
-use autonoetic_types::config::GatewayConfig;
+use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig};
 use autonoetic_types::runtime_lock::{
     LockedDependencySet, LockedGateway, LockedSandbox, LockedSdk, RuntimeLock,
 };
 use autonoetic_types::tool_error::tagged;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -84,6 +85,57 @@ fn requires_promotion_gate(agent_id: &str) -> bool {
         agent_id,
         "specialized_builder.default" | "evolution-steward.default"
     )
+}
+
+/// Classifies an install as high-risk for approval policy. When true, risk_based policy requires human approval.
+fn is_install_high_risk(
+    args: &InstallAgentArgs,
+    scheduled_action: &Option<ScheduledAction>,
+    background: &Option<BackgroundPolicy>,
+) -> bool {
+    // Broad or powerful capabilities
+    for cap in &args.capabilities {
+        match cap {
+            Capability::ShellExec { .. } => return true,
+            Capability::MemoryWrite { scopes } if scopes.len() > 2 || scopes.iter().any(|s| s == "*" || s.ends_with("/*")) => return true,
+            Capability::NetConnect { hosts } if hosts.is_empty() || hosts.iter().any(|h| h == "*" || h.ends_with(".*")) => return true,
+            _ => {}
+        }
+    }
+    // Background-enabled installs are higher risk
+    if background.as_ref().map(|b| b.enabled).unwrap_or(false) {
+        return true;
+    }
+    // Scheduled action that runs shell or writes files
+    if matches!(scheduled_action, Some(ScheduledAction::SandboxExec { .. }) | Some(ScheduledAction::WriteFile { .. })) {
+        return true;
+    }
+    false
+}
+
+fn install_request_fingerprint(
+    args: &InstallAgentArgs,
+    scheduled_action: &Option<ScheduledAction>,
+    background: &Option<BackgroundPolicy>,
+) -> anyhow::Result<String> {
+    let payload = serde_json::json!({
+        "agent_id": args.agent_id,
+        "name": args.name,
+        "description": args.description,
+        "instructions": args.instructions,
+        "llm_config": args.llm_config,
+        "capabilities": args.capabilities,
+        "background": background,
+        "scheduled_action": scheduled_action,
+        "files": args.files,
+        "runtime_lock_dependencies": args.runtime_lock_dependencies,
+        "arm_immediately": args.arm_immediately,
+        "validate_on_install": args.validate_on_install
+    });
+    let canonical = serde_json::to_string(&payload)?;
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn extract_host(url: &str) -> anyhow::Result<String> {
@@ -178,7 +230,7 @@ pub trait NativeTool: Send + Sync {
     /// Checks if the manifest/policy allows this tool to be exposed or called.
     fn is_available(&self, manifest: &AgentManifest) -> bool;
 
-    /// Executes the tool call.
+    /// Executes the tool call. `config` is provided when the gateway runs with config (e.g. for agent.install approval policy); tests may pass `None`.
     fn execute(
         &self,
         manifest: &AgentManifest,
@@ -188,6 +240,7 @@ pub trait NativeTool: Send + Sync {
         arguments_json: &str,
         session_id: Option<&str>,
         turn_id: Option<&str>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String>;
 
     /// Optionally extracts metadata from the tool's JSON arguments for disclosure policy tracking and audit.
@@ -235,6 +288,7 @@ impl NativeToolRegistry {
         arguments_json: &str,
         session_id: Option<&str>,
         turn_id: Option<&str>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let tool = self
             .tools
@@ -254,6 +308,7 @@ impl NativeToolRegistry {
             arguments_json,
             session_id,
             turn_id,
+            config,
         )
     }
 
@@ -322,6 +377,7 @@ impl NativeTool for SandboxExecTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: SandboxExecArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -990,6 +1046,7 @@ impl NativeTool for WebSearchTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: WebSearchArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -1194,6 +1251,7 @@ impl NativeTool for WebFetchTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: WebFetchArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -1313,6 +1371,7 @@ impl NativeTool for MemoryReadTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1389,6 +1448,7 @@ impl NativeTool for MemoryWriteTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1464,6 +1524,7 @@ impl NativeTool for MemoryRememberTool {
         arguments_json: &str,
         session_id: Option<&str>,
         turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1597,6 +1658,7 @@ impl NativeTool for MemoryRecallTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1690,6 +1752,7 @@ impl NativeTool for MemorySearchTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1782,6 +1845,7 @@ impl NativeTool for MemoryShareTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1868,6 +1932,7 @@ impl NativeTool for SkillDraftTool {
         arguments_json: &str,
         _session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -1916,7 +1981,7 @@ impl NativeTool for SkillDraftTool {
 // Agent Install Tool
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct InstallAgentFile {
     path: String,
     content: String,
@@ -2010,6 +2075,8 @@ struct InstallPromotionGate {
     auditor_pass: bool,
     #[serde(default)]
     override_approval_ref: Option<String>,
+    #[serde(default)]
+    install_approval_ref: Option<String>,
 }
 
 fn parse_install_scheduled_action(
@@ -2270,6 +2337,7 @@ impl NativeTool for AgentSpawnTool {
         arguments_json: &str,
         session_id: Option<&str>,
         _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: SpawnAgentArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -2380,7 +2448,8 @@ impl NativeTool for AgentInstallTool {
                         "properties": {
                             "evaluator_pass": { "type": "boolean" },
                             "auditor_pass": { "type": "boolean" },
-                            "override_approval_ref": { "type": "string" }
+                            "override_approval_ref": { "type": "string" },
+                            "install_approval_ref": { "type": "string" }
                         },
                         "required": ["evaluator_pass", "auditor_pass"],
                         "additionalProperties": false
@@ -2401,8 +2470,9 @@ impl NativeTool for AgentInstallTool {
         agent_dir: &Path,
         _gateway_dir: Option<&Path>,
         arguments_json: &str,
-        _session_id: Option<&str>,
+        session_id: Option<&str>, // used when creating approval request
         _turn_id: Option<&str>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: InstallAgentArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -2433,6 +2503,90 @@ impl NativeTool for AgentInstallTool {
             );
         }
 
+        // Human approval gate: when policy requires it, create pending request or validate install_approval_ref.
+        if let Some(cfg) = config {
+            let policy = cfg.agent_install_approval_policy;
+            let high_risk = is_install_high_risk(&args, &scheduled_action, &background);
+            let need_approval = matches!(policy, AgentInstallApprovalPolicy::Always)
+                || (matches!(policy, AgentInstallApprovalPolicy::RiskBased) && high_risk);
+            let install_fingerprint =
+                install_request_fingerprint(&args, &scheduled_action, &background)?;
+
+            if need_approval {
+                let install_approval_ref = args
+                    .promotion_gate
+                    .as_ref()
+                    .and_then(|g| g.install_approval_ref.as_ref())
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty());
+
+                if let Some(request_id) = install_approval_ref {
+                    // Validate that this request was approved and is for this install.
+                    let approved_path = crate::scheduler::store::approved_approvals_dir(cfg).join(format!("{request_id}.json"));
+                    if !approved_path.exists() {
+                        return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                            "install_approval_ref '{}' not found in approved approvals; install must be approved first",
+                            request_id
+                        ))
+                        .into());
+                    }
+                    let decision: autonoetic_types::background::ApprovalDecision =
+                        crate::scheduler::store::read_json_file(&approved_path)?;
+                    match &decision.action {
+                        ScheduledAction::AgentInstall {
+                            agent_id: approved_agent_id,
+                            requested_by_agent_id,
+                            install_fingerprint: approved_fingerprint,
+                            ..
+                        } if approved_agent_id == &args.agent_id
+                            && requested_by_agent_id == &manifest.agent.id
+                            && approved_fingerprint == &install_fingerprint => {}
+                        _ => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match this install request (agent/requester/fingerprint mismatch)",
+                                request_id,
+                            ))
+                            .into());
+                        }
+                    }
+                    // Proceed with install.
+                } else {
+                    // Create pending approval request and return structured response.
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    let summary = args
+                        .instructions
+                        .lines()
+                        .next()
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| args.agent_id.clone());
+                    let request = ApprovalRequest {
+                        request_id: request_id.clone(),
+                        agent_id: manifest.agent.id.clone(),
+                        session_id: session_id.unwrap_or("").to_string(),
+                        action: ScheduledAction::AgentInstall {
+                            agent_id: args.agent_id.clone(),
+                            summary,
+                            requested_by_agent_id: manifest.agent.id.clone(),
+                            install_fingerprint: install_fingerprint.clone(),
+                        },
+                        created_at: Utc::now().to_rfc3339(),
+                        reason: Some("agent.install requires human approval".to_string()),
+                        evidence_ref: None,
+                    };
+                    let pending_path = crate::scheduler::store::pending_approvals_dir(cfg).join(format!("{request_id}.json"));
+                    std::fs::create_dir_all(pending_path.parent().unwrap())?;
+                    crate::scheduler::store::write_json_file(&pending_path, &request)?;
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "approval_required": true,
+                        "request_id": request_id,
+                        "message": "Install requires human approval. After operator approves, retry agent.install with the same payload and promotion_gate.install_approval_ref set to this request_id."
+                    })
+                    .to_string());
+                }
+            }
+        }
+
         let agents_dir = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
@@ -2441,6 +2595,16 @@ impl NativeTool for AgentInstallTool {
             !child_dir.exists(),
             "child agent '{}' already exists",
             args.agent_id
+        );
+        let install_tmp_dir = agents_dir.join(format!(
+            ".installing-{}-{}",
+            args.agent_id,
+            uuid::Uuid::new_v4()
+        ));
+        anyhow::ensure!(
+            !install_tmp_dir.exists(),
+            "temporary install directory '{}' already exists",
+            install_tmp_dir.display()
         );
 
         if scheduled_action.is_some() {
@@ -2493,6 +2657,7 @@ impl NativeTool for AgentInstallTool {
                         });
                     }
                 }
+                ScheduledAction::AgentInstall { .. } => {}
             }
         }
 
@@ -2528,85 +2693,113 @@ impl NativeTool for AgentInstallTool {
             disclosure: None,
         };
 
-        std::fs::create_dir_all(child_dir.join("state"))?;
-        std::fs::create_dir_all(child_dir.join("history"))?;
-        std::fs::create_dir_all(child_dir.join("skills"))?;
-        std::fs::create_dir_all(child_dir.join("scripts"))?;
+        let mut install_validation_error: Option<String> = None;
+        let staged_result = (|| -> anyhow::Result<()> {
+            std::fs::create_dir_all(install_tmp_dir.join("state"))?;
+            std::fs::create_dir_all(install_tmp_dir.join("history"))?;
+            std::fs::create_dir_all(install_tmp_dir.join("skills"))?;
+            std::fs::create_dir_all(install_tmp_dir.join("scripts"))?;
 
-        let instruction_body = ensure_output_contract_section(
-            &args.instructions,
-            &args.files,
-            scheduled_action.is_some(),
-        );
-        let skill_yaml = render_skill_frontmatter(&child_manifest)?;
-        let skill_body = format!("---\n{}---\n{}\n", skill_yaml, instruction_body);
-        std::fs::write(child_dir.join("SKILL.md"), skill_body)?;
-
-        let runtime_lock = RuntimeLock {
-            gateway: LockedGateway {
-                artifact: "autonoetic-gateway".to_string(),
-                version: manifest.runtime.gateway_version.clone(),
-                sha256: "unmanaged".to_string(),
-                signature: None,
-            },
-            sdk: LockedSdk {
-                version: manifest.runtime.sdk_version.clone(),
-            },
-            sandbox: LockedSandbox {
-                backend: manifest.runtime.sandbox.clone(),
-            },
-            dependencies: args.runtime_lock_dependencies.clone(),
-            artifacts: Vec::new(),
-        };
-        std::fs::write(
-            child_dir.join(&child_manifest.runtime.runtime_lock),
-            serde_yaml::to_string(&runtime_lock)?,
-        )?;
-
-        for file in &args.files {
-            validate_relative_agent_path(&file.path)?;
-            anyhow::ensure!(
-                file.path != "SKILL.md" && file.path != child_manifest.runtime.runtime_lock,
-                "files may not overwrite generated SKILL.md or runtime.lock"
+            let instruction_body = ensure_output_contract_section(
+                &args.instructions,
+                &args.files,
+                scheduled_action.is_some(),
             );
-            let target = child_dir.join(&file.path);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
+            let skill_yaml = render_skill_frontmatter(&child_manifest)?;
+            let skill_body = format!("---\n{}---\n{}\n", skill_yaml, instruction_body);
+            std::fs::write(install_tmp_dir.join("SKILL.md"), skill_body)?;
+
+            let runtime_lock = RuntimeLock {
+                gateway: LockedGateway {
+                    artifact: "autonoetic-gateway".to_string(),
+                    version: manifest.runtime.gateway_version.clone(),
+                    sha256: "unmanaged".to_string(),
+                    signature: None,
+                },
+                sdk: LockedSdk {
+                    version: manifest.runtime.sdk_version.clone(),
+                },
+                sandbox: LockedSandbox {
+                    backend: manifest.runtime.sandbox.clone(),
+                },
+                dependencies: args.runtime_lock_dependencies.clone(),
+                artifacts: Vec::new(),
+            };
+            std::fs::write(
+                install_tmp_dir.join(&child_manifest.runtime.runtime_lock),
+                serde_yaml::to_string(&runtime_lock)?,
+            )?;
+
+            for file in &args.files {
+                validate_relative_agent_path(&file.path)?;
+                anyhow::ensure!(
+                    file.path != "SKILL.md" && file.path != child_manifest.runtime.runtime_lock,
+                    "files may not overwrite generated SKILL.md or runtime.lock"
+                );
+                let target = install_tmp_dir.join(&file.path);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(target, &file.content)?;
             }
-            std::fs::write(target, &file.content)?;
-        }
 
-        if let Some(action) = scheduled_action.clone() {
-            persist_reevaluation_state(&child_dir, |state| {
-                state.pending_scheduled_action = Some(action.clone());
-                state.last_outcome = Some("installed".to_string());
-                state.retry_not_before = None;
-            })?;
+            if let Some(action) = scheduled_action.clone() {
+                persist_reevaluation_state(&install_tmp_dir, |state| {
+                    state.pending_scheduled_action = Some(action.clone());
+                    state.last_outcome = Some("installed".to_string());
+                    state.retry_not_before = None;
+                })?;
 
-            if args.validate_on_install {
-                let registry = default_registry();
-                match execute_scheduled_action(&child_manifest, &child_dir, &action, &registry) {
-                    Ok(_) => {
-                        persist_reevaluation_state(&child_dir, |state| {
-                            state.last_outcome = Some("install_validation_success".to_string());
-                        })?;
-                    }
-                    Err(e) => {
-                        persist_reevaluation_state(&child_dir, |state| {
-                            state.last_outcome = Some(format!("install_validation_failed:{}", e));
-                        })?;
-                        let tool_error: autonoetic_types::tool_error::ToolError = e.into();
-                        if !tool_error.is_recoverable() {
-                            return Err(anyhow::anyhow!(
-                                "Fatal install validation error in {}: {}",
-                                action.kind(),
-                                tool_error.message
-                            ));
+                if args.validate_on_install {
+                    let registry = default_registry();
+                    match execute_scheduled_action(
+                        &child_manifest,
+                        &install_tmp_dir,
+                        &action,
+                        &registry,
+                        config,
+                    ) {
+                        Ok(_) => {
+                            persist_reevaluation_state(&install_tmp_dir, |state| {
+                                state.last_outcome = Some("install_validation_success".to_string());
+                            })?;
                         }
-                        return serde_json::to_string(&tool_error).map_err(Into::into);
+                        Err(e) => {
+                            persist_reevaluation_state(&install_tmp_dir, |state| {
+                                state.last_outcome = Some(format!("install_validation_failed:{}", e));
+                            })?;
+                            let tool_error: autonoetic_types::tool_error::ToolError = e.into();
+                            if !tool_error.is_recoverable() {
+                                return Err(anyhow::anyhow!(
+                                    "Fatal install validation error in {}: {}",
+                                    action.kind(),
+                                    tool_error.message
+                                ));
+                            }
+                            install_validation_error =
+                                Some(serde_json::to_string(&tool_error).map_err(anyhow::Error::from)?);
+                        }
                     }
                 }
             }
+
+            Ok(())
+        })();
+
+        if let Err(e) = staged_result {
+            let _ = std::fs::remove_dir_all(&install_tmp_dir);
+            return Err(e);
+        }
+        if let Some(error_json) = install_validation_error {
+            let _ = std::fs::remove_dir_all(&install_tmp_dir);
+            return Ok(error_json);
+        }
+        if let Err(e) = std::fs::rename(&install_tmp_dir, &child_dir) {
+            let _ = std::fs::remove_dir_all(&install_tmp_dir);
+            if child_dir.exists() {
+                anyhow::bail!("child agent '{}' already exists", args.agent_id);
+            }
+            return Err(e.into());
         }
 
         if let Some(background) = &child_manifest.background {
@@ -2884,6 +3077,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect("web.fetch should succeed");
 
@@ -2922,6 +3116,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect_err("web.fetch should be denied");
         assert!(err.to_string().contains("NetConnect"));
@@ -2949,6 +3144,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3002,6 +3198,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect("web.search should succeed");
 
@@ -3044,6 +3241,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3102,6 +3300,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3170,6 +3369,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3248,6 +3448,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3338,6 +3539,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect("first web.search call should succeed");
         let second = registry
@@ -3348,6 +3550,7 @@ mod tests {
                 temp.path(),
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3395,6 +3598,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 Some("session-1"),
                 None,
+                None,
             )
             .expect_err("empty message should be rejected");
         assert!(err.to_string().contains("message must not be empty"));
@@ -3429,6 +3633,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 Some("session-1"),
                 None,
+                None,
             )
             .expect_err("empty message should still be rejected");
         assert!(err.to_string().contains("message must not be empty"));
@@ -3460,6 +3665,7 @@ mod tests {
                 &parent_dir,
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3497,6 +3703,7 @@ mod tests {
                 &parent_dir,
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3561,6 +3768,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect("agent install should succeed");
 
@@ -3620,6 +3828,7 @@ mod tests {
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect("agent install should accept dotted IDs");
 
@@ -3659,7 +3868,8 @@ mod tests {
             },
             "scheduled_action": {
                 "command": "python3 scripts/fibonacci_worker.py"
-            }
+            },
+            "validate_on_install": false
         });
 
         let registry = default_registry();
@@ -3671,6 +3881,7 @@ mod tests {
                 &parent_dir,
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3706,7 +3917,8 @@ mod tests {
             "scheduled_action": {
                 "interval_secs": 20,
                 "script": "python3 scripts/fibonacci_worker.py"
-            }
+            },
+            "validate_on_install": false
         });
 
         let registry = default_registry();
@@ -3718,6 +3930,7 @@ mod tests {
                 &parent_dir,
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3765,7 +3978,8 @@ mod tests {
                         "cmd": "python3 scripts/compute.py"
                     }
                 }
-            }
+            },
+            "validate_on_install": false
         });
 
         let registry = default_registry();
@@ -3777,6 +3991,7 @@ mod tests {
                 &parent_dir,
                 None,
                 &serde_json::to_string(&args).expect("json should encode"),
+                None,
                 None,
                 None,
             )
@@ -3927,6 +4142,7 @@ dependencies:
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
+                None,
             )
             .expect_err("policy should deny command");
         assert!(err
@@ -3969,6 +4185,7 @@ dependencies:
                 &parent_dir,
                 None,
                 &args.to_string(),
+                None,
                 None,
                 None,
             )
@@ -4033,6 +4250,7 @@ dependencies:
                 &args.to_string(),
                 None,
                 None,
+                None,
             )
             .expect("should return structured error, not panic");
 
@@ -4043,13 +4261,137 @@ dependencies:
         assert!(parsed.get("message").is_some());
         assert!(parsed.get("repair_hint").is_some() || parsed.get("message").is_some());
 
-        let reevaluation_path = agents_dir
-            .join("failing_worker")
-            .join("state")
-            .join("reevaluation.json");
-        let reevaluation =
-            std::fs::read_to_string(&reevaluation_path).expect("reevaluation state should exist");
-        assert!(reevaluation.contains("install_validation_failed"));
+        let child_dir = agents_dir.join("failing_worker");
+        assert!(
+            !child_dir.exists(),
+            "failed install validation should not leave a partial agent directory"
+        );
+    }
+
+    #[test]
+    fn test_agent_install_does_not_leave_partial_child_on_file_overwrite_error() {
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "broken_worker",
+            "instructions": "# Broken Worker\nThis install should fail.",
+            "files": [
+                {
+                    "path": "SKILL.md",
+                    "content": "should fail because SKILL.md is generated"
+                }
+            ]
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                None,
+            )
+            .expect_err("install should fail when files overwrite generated SKILL.md");
+        assert!(
+            err.to_string()
+                .contains("files may not overwrite generated SKILL.md or runtime.lock")
+        );
+        assert!(
+            !agents_dir.join("broken_worker").exists(),
+            "failed install should not leave partial child directory"
+        );
+    }
+
+    /// Regression: malformed agent.install capabilities (e.g. missing required fields) yield a
+    /// validation error; correcting the payload and retrying leads to successful install without
+    /// leaving a partial directory or requiring LoopGuard.
+    #[test]
+    fn test_agent_install_malformed_capabilities_then_repaired_payload_succeeds() {
+        let manifest = test_manifest_with_id(
+            "specialized_builder.default",
+            vec![Capability::AgentSpawn { max_children: 4 }],
+        );
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("specialized_builder.default");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Malformed: NetConnect without required "hosts" field
+        let malformed_args = serde_json::json!({
+            "agent_id": "repaired.worker",
+            "instructions": "# Repaired Worker\nMinimal specialist.",
+            "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
+            "capabilities": [
+                { "type": "NetConnect" }
+            ]
+        });
+
+        let registry = default_registry();
+        let err = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&malformed_args).expect("json"),
+                None,
+                None,
+                None,
+            )
+            .expect_err("malformed capabilities should yield validation/parse error");
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("agent.install") || err_str.contains("Invalid JSON") || err_str.contains("capabilities"),
+            "error should mention agent.install or invalid JSON or capabilities: {}",
+            err_str
+        );
+        assert!(
+            !agents_dir.join("repaired.worker").exists(),
+            "failed install must not leave partial child directory"
+        );
+
+        // Repaired payload: add required "hosts" for NetConnect
+        let repaired_args = serde_json::json!({
+            "agent_id": "repaired.worker",
+            "instructions": "# Repaired Worker\nMinimal specialist.",
+            "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["example.com"] }
+            ]
+        });
+
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&repaired_args).expect("json"),
+                None,
+                None,
+                None,
+            )
+            .expect("repaired payload should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert!(
+            agents_dir.join("repaired.worker").join("SKILL.md").exists(),
+            "successful install must create child agent with SKILL.md"
+        );
     }
 
     #[test]
@@ -4086,6 +4428,7 @@ dependencies:
                 &parent_dir,
                 None,
                 &args.to_string(),
+                None,
                 None,
                 None,
             )

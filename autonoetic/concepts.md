@@ -81,6 +81,19 @@ CCOS was highly ambitious but grew too large and interleaved. Its reliance on th
   - *Working Memory*: The live text files (like `task.md` or `scratchpad.md`) that the agent reads and writes during a run.
   - *Long-term / Semantic*: Extracted knowledge and refined skills ready for retrieval by the Agent at the start of a new conversational thread.
 
+#### Evolution Note (2026-03)
+The original textual-memory direction remains valid, but the current implementation is a hybrid:
+- Implemented now: per-agent Tier1 state files under `state/`, gateway-managed Tier2 durable memory in `memory.db`, and session-context injection for same-session continuity.
+- Not yet fully implemented as described above: automatic `state/summary.md` rollups and a strict universal `task.md`-style state-machine convention across all agents.
+- Current evolution path: keep the textual state-machine model, but make conventions explicit and lightweight rather than implicit.
+
+**Proposed textual state-machine conventions (sample):**
+- `state/task.md`: authoritative checklist of goals/subgoals with status markers (`todo`, `doing`, `done`, `blocked`).
+- `state/scratchpad.md`: short-lived working notes and intermediate decisions.
+- `state/handoff.md`: compact progress snapshot, blockers, and next recommended action.
+
+Lazy-loading of skills/memory remains a possible optimization track, but should be introduced only when profiling shows clear context-window pressure or latency benefits.
+
 ### 5. EXECUTION & SANDBOXING (The Runtime)
 - **Security-First Sandboxing**: Every agent and dynamically generated code piece runs in strict isolation.
 - **Available Runtimes**: Bubblewrap (bwrap), MicroVMs, WebAssembly (Wasm), or Docker.

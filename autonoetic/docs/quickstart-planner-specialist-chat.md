@@ -193,7 +193,21 @@ Expected behavior:
 - planner uses `agent.spawn` to call an appropriate specialist (for example `researcher.default`)
 - planner synthesizes and returns response
 
-## 7) Verify traces
+## 7) Memory and state model (current)
+
+Current runtime behavior is a hybrid:
+
+- Tier 1 local state lives under each agent directory (`state/`) and is suitable for deterministic, near-term continuity.
+- Tier 2 durable memory is gateway-managed (`memory.db`) and should be used for reusable/cross-session facts.
+- Gateway injects compact session context for same-session continuity; this is not yet a full automatic `state/summary.md` pipeline.
+
+For multi-step tasks that benefit from explicit textual state, prefer these conventions:
+
+- `state/task.md` -> active checklist and next action.
+- `state/scratchpad.md` -> short-lived notes/intermediate reasoning.
+- `state/handoff.md` -> concise progress/blockers/next-step handoff.
+
+## 8) Verify traces
 
 **Where to look:**
 
@@ -219,6 +233,9 @@ You should see:
 
 **Why is `result_preview` truncated in causal_chain.jsonl?**  
 Tool results in the causal chain are intentionally limited to 256 characters so log lines stay readable and bounded. The payload still has `result_len` and `result_sha256`. To get full tool output in logs, set `AUTONOETIC_EVIDENCE_MODE=full` when starting the gateway; then each tool_invoke completed entry gets an `evidence_ref` pointing to a file under the agent's `history/evidence/<session_id>/` with the full result.
+
+**Does `causal_chain.jsonl` rotate?**  
+Not yet. Current logs append to a single file per history location (`agents/.gateway/history/causal_chain.jsonl` and `agents/<agent_id>/history/causal_chain.jsonl`). Rotation/segmentation is planned.
 
 ## Common Pitfall
 
@@ -247,3 +264,43 @@ Then verify only canonical specialist IDs are present before testing:
 ```bash
 ls -1 /tmp/autonoetic-demo/agents
 ```
+
+## Approvals (agent.install and scheduled actions)
+
+When `agent_install_approval_policy` is `always` or `risk_based` and an install is high-risk, `agent.install` returns `approval_required: true` and a `request_id`. The install does not proceed until an operator approves.
+
+**List pending approval requests:**
+
+```bash
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals list
+```
+
+**Approve or reject a request:**
+
+```bash
+# Approve (then the caller can retry agent.install with the same payload and promotion_gate.install_approval_ref set to this request_id)
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals approve <request_id> --reason "Reviewed; OK to install"
+
+# Reject
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals reject <request_id> --reason "Out of scope"
+```
+
+**Effect on install:** For `agent_install`-type requests, the gateway does not run the install when you approve. The **caller** (e.g. specialized_builder) must retry `agent.install` with the **same payload** and `promotion_gate.install_approval_ref` set to the approved `request_id`. After that, the install proceeds. Rejected requests are not retried; the caller sees the rejection and should report to the user.
+
+**Machine-readable list:** Use `--json` for JSON output:
+
+```bash
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals list --json
+```
+
+## Troubleshooting: agent.install and memory writes
+
+**"memory write denied by policy" / "scheduled file write denied by MemoryWrite policy"**
+
+- The agent (or the child being installed) has a `MemoryWrite` capability with `scopes` that do not include the path you are writing to.
+- **Fix:** In the agent’s SKILL (or in `agent.install` `capabilities` for the child), add a `MemoryWrite` with `scopes` that cover the path, e.g. `["skills/*", "state/*"]`. Paths must be under the agent (or child) directory; do not use absolute or `..` paths. For installed agents, prefer putting files under `skills/*` (e.g. `skills/helper.md`, `skills/script.py`) so they are clearly in scope.
+
+**"Invalid JSON arguments for 'agent.install'" / capabilities validation errors**
+
+- The `agent.install` payload has invalid or missing fields. Common causes: `capabilities` entries without a `type` field, or with wrong field names (e.g. `capability` instead of `type`, or missing `hosts` for `NetConnect`, `scopes` for `MemoryWrite`).
+- **Fix:** The tool error includes a `repair_hint`. Use it to correct the payload: each capability must have `type` and the required fields for that type (see specialized_builder SKILL “Capability shapes”). Then retry `agent.install` with the corrected payload. Do not switch to writing files at the planner/coder root as a workaround; keep using specialized_builder and fix the payload.

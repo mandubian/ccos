@@ -10,6 +10,7 @@ use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tools::NativeToolRegistry;
 use crate::llm::ToolCall;
 use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosureClass;
 use autonoetic_types::tool_error::ToolError;
 use std::path::Path;
@@ -22,6 +23,8 @@ pub struct ToolCallProcessor<'a> {
     secret_store: Option<&'a mut SecretStoreRuntime>,
     session_id: Option<String>,
     turn_id: Option<String>,
+    /// When set, passed to native tools (e.g. agent.install for approval policy).
+    config: Option<&'a GatewayConfig>,
 }
 
 impl<'a> ToolCallProcessor<'a> {
@@ -42,6 +45,7 @@ impl<'a> ToolCallProcessor<'a> {
         manifest: &'a AgentManifest,
         disclosure_state: &'a mut DisclosureState,
         secret_store: Option<&'a mut SecretStoreRuntime>,
+        config: Option<&'a GatewayConfig>,
     ) -> Self {
         Self {
             mcp_runtime,
@@ -51,6 +55,7 @@ impl<'a> ToolCallProcessor<'a> {
             secret_store,
             session_id: None,
             turn_id: None,
+            config,
         }
     }
 
@@ -145,6 +150,7 @@ impl<'a> ToolCallProcessor<'a> {
                 &tc.arguments,
                 self.session_id.as_deref(),
                 self.turn_id.as_deref(),
+                self.config,
             )?
          } else {
              return Err(anyhow::Error::from(
@@ -281,6 +287,7 @@ mod tests {
             &manifest,
             &mut disclosure_state,
             None,
+            None,
         );
 
         let tool_calls = vec![ToolCall {
@@ -318,6 +325,7 @@ mod tests {
             &manifest,
             &mut disclosure_state,
             None,
+            None,
         );
 
          // Unknown tool is now recoverable so the agent can self-repair by
@@ -353,6 +361,7 @@ mod tests {
             &registry,
             &manifest,
             &mut disclosure_state,
+            None,
             None,
         );
 
@@ -405,6 +414,7 @@ mod tests {
             &registry,
             &manifest,
             &mut disclosure_state,
+            None,
             None,
         );
 

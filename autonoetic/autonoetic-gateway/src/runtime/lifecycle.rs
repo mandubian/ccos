@@ -13,8 +13,10 @@ use crate::runtime::session_tracer::{EvidenceMode, SessionTracer};
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tool_call_processor::ToolCallProcessor;
 use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosurePolicy;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Foundation Instructions
@@ -47,6 +49,8 @@ pub struct AgentExecutor {
     pub session_id: Option<String>,
     pub session_started: bool,
     pub turn_counter: u64,
+    /// When set, passed to tool execution (e.g. agent.install approval policy).
+    pub config: Option<Arc<GatewayConfig>>,
 }
 
 impl AgentExecutor {
@@ -69,11 +73,17 @@ impl AgentExecutor {
             session_id: None,
             session_started: false,
             turn_counter: 0,
+            config: None,
         }
     }
 
     pub fn with_gateway_dir(mut self, gateway_dir: PathBuf) -> Self {
         self.gateway_dir = Some(gateway_dir);
+        self
+    }
+
+    pub fn with_config(mut self, config: Arc<GatewayConfig>) -> Self {
+        self.config = Some(config);
         self
     }
 
@@ -271,6 +281,7 @@ impl AgentExecutor {
                         &self.manifest,
                         &mut disclosure_state,
                         secret_store.as_mut(),
+                        self.config.as_deref(),
                     )
                     .with_session_context(self.session_id.clone(), Some(turn_id.clone()));
 
@@ -378,6 +389,7 @@ mod tests {
                 evidence_ref: None,
             },
             &crate::runtime::tools::default_registry(),
+            None,
         )
         .expect("scheduled write should succeed");
         assert!(result.contains("\"ok\":true"));
@@ -514,7 +526,12 @@ mod tests {
         let mut history = vec![Message::user("go")];
         let res = runtime.execute_with_history(&mut history).await;
         assert!(res.is_err());
-        assert!(res.unwrap_err().to_string().contains("Unknown tool"));
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("LoopGuard tripped"),
+            "expected loop-guard failure for repeated unknown tool calls, got: {}",
+            err
+        );
     }
 
     #[tokio::test]

@@ -3,6 +3,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// When `agent.install` requires human approval before proceeding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentInstallApprovalPolicy {
+    /// Always require approval for every install (strictest).
+    Always,
+    /// Require approval only when the install is classified as high-risk (e.g. broad capabilities, ShellExec, background).
+    #[default]
+    RiskBased,
+    /// Never require approval for install; promotion gate only (dev/convenience).
+    Never,
+}
+
 /// Top-level Gateway daemon configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -50,6 +63,10 @@ pub struct GatewayConfig {
     /// Max number of due background agents admitted per scheduler tick.
     #[serde(default = "default_max_background_due_per_tick")]
     pub max_background_due_per_tick: usize,
+
+    /// When `agent.install` requires human approval. `risk_based` (default) requires approval only for high-risk installs; `always` for every install; `never` to rely on promotion gate only.
+    #[serde(default)]
+    pub agent_install_approval_policy: AgentInstallApprovalPolicy,
 }
 
 fn default_agents_dir() -> PathBuf {
@@ -102,6 +119,7 @@ impl Default for GatewayConfig {
             background_tick_secs: default_background_tick_secs(),
             background_min_interval_secs: default_background_min_interval_secs(),
             max_background_due_per_tick: default_max_background_due_per_tick(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::default(),
         }
     }
 }
