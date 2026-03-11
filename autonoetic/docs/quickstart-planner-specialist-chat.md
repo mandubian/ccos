@@ -84,6 +84,13 @@ export AUTONOETIC_GOOGLE_SEARCH_API_KEY="..."
 export AUTONOETIC_GOOGLE_SEARCH_ENGINE_ID="..."
 ```
 
+Legacy aliases are also accepted for compatibility:
+
+```bash
+export GOOGLE_SEARCH_API_KEY="..."
+export GOOGLE_SEARCH_ENGINE_ID="..."  # or GOOGLE_SEARCH_CX
+```
+
 Then the researcher can call `web.search` with either explicit Google or auto fallback:
 
 ```json
@@ -139,7 +146,7 @@ After bootstrap, patch the runtime bundles in `/tmp/autonoetic-demo/agents`:
 ```bash
 for f in /tmp/autonoetic-demo/agents/*/SKILL.md; do
   sed -i 's/provider: ".*"/provider: "openrouter"/' "$f"
-  sed -i 's/model: ".*"/model: "google\/gemini-2.0-flash-lite-001"/' "$f"
+  sed -i 's/model: ".*"/model: "google\/gemini-2.5-flash-lite"/' "$f"
 done
 ```
 
@@ -151,7 +158,6 @@ From `autonoetic/`:
 AUTONOETIC_NODE_ID=demo \
 AUTONOETIC_NODE_NAME=demo \
 AUTONOETIC_SHARED_SECRET=demo-secret \
-OPENROUTER_API_KEY=... \
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway start
 ```
 
@@ -222,3 +228,22 @@ Fix:
 
 1. create the config file first (step 1)
 2. rerun bootstrap
+
+If planner installs ad-hoc agents like `researcher` or returns unvalidated code (instead of routing to `*.default` specialists with evaluator checks), your runtime state likely drifted.
+
+Fix:
+
+1. stop gateway/chat processes for this config
+2. remove drifted runtime agents (for example `/tmp/autonoetic-demo/agents/researcher` and generated throwaway agents)
+3. re-bootstrap with overwrite
+4. restart gateway and use a new session id
+
+```bash
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap --overwrite
+```
+
+Then verify only canonical specialist IDs are present before testing:
+
+```bash
+ls -1 /tmp/autonoetic-demo/agents
+```

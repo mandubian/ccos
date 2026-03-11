@@ -228,7 +228,7 @@ fn provider_defaults(name: &str) -> Option<ProviderDefaults> {
             capabilities: ProviderCapabilities::openai_compatible,
         }),
         "lmstudio" => Some(ProviderDefaults {
-            base_url: "http://localhost:1234/v1/chat/completions",
+            base_url: "http://192.168.1.20:1234/v1/chat/completions",
             api_key_env: "",
             kind: DriverKind::OpenAi,
             capabilities: ProviderCapabilities::openai_compatible,

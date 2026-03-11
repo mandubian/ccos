@@ -399,6 +399,7 @@ const GOOGLE_API_KEY_ENV_DEFAULT: &str = "AUTONOETIC_GOOGLE_SEARCH_API_KEY";
 const GOOGLE_API_KEY_ENV_LEGACY: &str = "GOOGLE_SEARCH_API_KEY";
 const GOOGLE_ENGINE_ID_ENV_DEFAULT: &str = "AUTONOETIC_GOOGLE_SEARCH_ENGINE_ID";
 const GOOGLE_ENGINE_ID_ENV_LEGACY: &str = "GOOGLE_SEARCH_ENGINE_ID";
+const GOOGLE_ENGINE_ID_ENV_LEGACY_ALT: &str = "GOOGLE_SEARCH_CX";
 const WEB_SEARCH_CACHE_TTL_DEFAULT_SECS: u64 = 120;
 const WEB_SEARCH_CACHE_TTL_MAX_SECS: u64 = 3_600;
 
@@ -431,7 +432,7 @@ impl WebSearchProvider {
 fn parse_web_search_provider(raw: Option<&str>) -> anyhow::Result<WebSearchProvider> {
     let normalized = raw
         .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_else(|| "duckduckgo".to_string());
+        .unwrap_or_else(|| "auto".to_string());
     match normalized.as_str() {
         "auto" => Ok(WebSearchProvider::Auto),
         "duckduckgo" | "ddg" => Ok(WebSearchProvider::DuckDuckGo),
@@ -591,6 +592,7 @@ fn resolve_google_engine_id(args: &WebSearchArgs) -> anyhow::Result<String> {
     let engine_id = non_empty_env(engine_id_env).or_else(|| {
         if args.google_engine_id_env.is_none() {
             non_empty_env(GOOGLE_ENGINE_ID_ENV_LEGACY)
+                .or_else(|| non_empty_env(GOOGLE_ENGINE_ID_ENV_LEGACY_ALT))
         } else {
             None
         }
@@ -2984,6 +2986,7 @@ mod tests {
 
         let args = serde_json::json!({
             "query": "rust language",
+            "provider": "duckduckgo",
             "engine_url": engine_url,
             "max_results": 5
         });
@@ -3120,6 +3123,73 @@ mod tests {
         assert_eq!(parsed.get("provider"), Some(&serde_json::json!("google")));
         assert_eq!(parsed.get("total_results"), Some(&serde_json::json!(123)));
         assert_eq!(parsed.get("result_count"), Some(&serde_json::json!(2)));
+    }
+
+    #[test]
+    fn test_web_search_google_legacy_cx_env_alias_roundtrip() {
+        let manifest = test_manifest(vec![Capability::NetConnect {
+            hosts: vec!["127.0.0.1".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+
+        let body = serde_json::json!({
+            "searchInformation": {
+                "totalResults": "7"
+            },
+            "items": [
+                {
+                    "title": "Example result",
+                    "link": "https://example.com/",
+                    "snippet": "example"
+                }
+            ]
+        })
+        .to_string();
+        let (engine_url, handle) = spawn_one_shot_http_server("200 OK", "application/json", body);
+
+        let key_env = "GOOGLE_SEARCH_API_KEY";
+        let cx_env = "GOOGLE_SEARCH_CX";
+        let prior_key = std::env::var(key_env).ok();
+        let prior_cx = std::env::var(cx_env).ok();
+        std::env::set_var(key_env, "legacy-test-api-key");
+        std::env::set_var(cx_env, "legacy-test-cx");
+
+        let args = serde_json::json!({
+            "query": "legacy cx alias",
+            "provider": "google",
+            "engine_url": engine_url
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "web.search",
+                &manifest,
+                &policy,
+                temp.path(),
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+            )
+            .expect("google web.search should accept GOOGLE_SEARCH_CX legacy alias");
+
+        match prior_key {
+            Some(value) => std::env::set_var(key_env, value),
+            None => std::env::remove_var(key_env),
+        }
+        match prior_cx {
+            Some(value) => std::env::set_var(cx_env, value),
+            None => std::env::remove_var(cx_env),
+        }
+        handle.join().expect("server thread should join");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("web.search result should decode");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::json!(true)));
+        assert_eq!(parsed.get("provider"), Some(&serde_json::json!("google")));
+        assert_eq!(parsed.get("result_count"), Some(&serde_json::json!(1)));
     }
 
     #[test]
