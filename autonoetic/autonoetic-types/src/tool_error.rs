@@ -230,20 +230,48 @@ impl From<tagged::Tagged> for ToolError {
 
 impl From<anyhow::Error> for ToolError {
     fn from(err: anyhow::Error) -> Self {
+        fn derive_validation_hint(msg: &str) -> Option<String> {
+            let lower = msg.to_ascii_lowercase();
+
+            if lower.contains("invalid json arguments for 'agent.install'")
+                && lower.contains("missing field `type`")
+            {
+                return Some("agent.install.capabilities items must include a valid `type` field (for example `NetConnect`, `MemoryRead`, `MemoryWrite`, `ShellExec`, `AgentSpawn`).".to_string());
+            }
+
+            if lower.contains("invalid json arguments for 'agent.install'")
+                && lower.contains("unknown variant")
+                && lower.contains("expected one of")
+            {
+                return Some("agent.install.capabilities[].type must match one allowed enum exactly. Use one of the values listed in the error and retry.".to_string());
+            }
+
+            if lower.contains("invalid json arguments for 'agent.install'")
+                && lower.contains("missing field")
+            {
+                return Some("agent.install payload is missing required fields. Re-check required keys and ensure nested capability objects are complete.".to_string());
+            }
+
+            if lower.contains("must not be empty") {
+                return Some(
+                    "Ensure all required fields are provided and not empty.".to_string(),
+                );
+            }
+
+            if lower.contains("invalid json") {
+                return Some("Check the tool schema and ensure JSON is valid.".to_string());
+            }
+
+            None
+        }
+
         // Check if this is a tagged error by looking at the error chain
         for cause in err.chain() {
             let msg = cause.to_string();
             let msg_trimmed = msg.trim();
             if msg.starts_with("validation:") {
                 let inner = msg.strip_prefix("validation:").unwrap_or(&msg);
-                // Add repair hint for common validation patterns
-                let repair_hint = if msg_trimmed.contains("must not be empty") {
-                    Some("Ensure all required fields are provided and not empty.".to_string())
-                } else if msg_trimmed.contains("Invalid JSON") {
-                    Some("Check the tool schema and ensure JSON is valid.".to_string())
-                } else {
-                    None
-                };
+                let repair_hint = derive_validation_hint(msg_trimmed);
                 return Self::validation(inner.to_string(), repair_hint);
             } else if msg.starts_with("permission:") {
                 let inner = msg.strip_prefix("permission:").unwrap_or(&msg);
@@ -271,7 +299,11 @@ impl From<anyhow::Error> for ToolError {
             || msg_trimmed.contains("required")
             || msg_trimmed.contains("denied by policy")
         {
-            Self::validation(msg, Some("Check the tool schema and ensure all required fields are provided with valid values."))
+            let repair_hint = derive_validation_hint(msg_trimmed).unwrap_or_else(|| {
+                "Check the tool schema and ensure all required fields are provided with valid values."
+                    .to_string()
+            });
+            Self::validation(msg, Some(repair_hint))
         } else if msg_trimmed.contains("not found")
             || msg_trimmed.contains("File not found")
             || msg_trimmed.contains("connection")
@@ -339,5 +371,28 @@ mod tests {
         let err: ToolError = anyhow_err.into();
         assert_eq!(err.error_type, ToolErrorType::Validation);
         assert!(err.is_recoverable());
+    }
+
+    #[test]
+    fn test_agent_install_missing_type_gets_specific_hint() {
+        let anyhow_err = anyhow::anyhow!(
+            "Invalid JSON arguments for 'agent.install': missing field `type` at line 1 column 123"
+        );
+        let err: ToolError = anyhow_err.into();
+        assert_eq!(err.error_type, ToolErrorType::Validation);
+        let hint = err.repair_hint.unwrap_or_default();
+        assert!(hint.contains("capabilities"));
+        assert!(hint.contains("type"));
+    }
+
+    #[test]
+    fn test_agent_install_unknown_variant_gets_specific_hint() {
+        let anyhow_err = anyhow::anyhow!(
+            "Invalid JSON arguments for 'agent.install': unknown variant `capability`, expected one of `ToolInvoke`, `MemoryRead` at line 1 column 42"
+        );
+        let err: ToolError = anyhow_err.into();
+        assert_eq!(err.error_type, ToolErrorType::Validation);
+        let hint = err.repair_hint.unwrap_or_default();
+        assert!(hint.contains("allowed enum"));
     }
 }

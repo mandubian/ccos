@@ -148,6 +148,7 @@ impl GatewayExecutionService {
                 crate::runtime::tools::default_registry(),
             )
             .with_gateway_dir(self.config.agents_dir.join(".gateway"))
+            .with_config(self.config.clone())
             .with_initial_user_message(message.to_string())
                 .with_session_id(session_id.to_string());
             let mut history = build_initial_history(
@@ -208,6 +209,7 @@ impl GatewayExecutionService {
                 &agent_dir,
                 action,
                 &crate::runtime::tools::default_registry(),
+                Some(self.config.as_ref()),
             )
         })
         .await

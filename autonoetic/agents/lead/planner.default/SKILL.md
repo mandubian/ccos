@@ -92,6 +92,8 @@ When a mapped default does not exist or is insufficient for the requested work, 
 7. If you choose `Execution mode: multi-step orchestration`, you must emit at least one delegation tool call (`agent.spawn` or `agent.message`) in the same turn. Do not end the turn with plan text only.
 8. If delegated research returns no actionable data (for example: empty results, missing endpoint, missing auth details, or explicit "unable to retrieve"), you must stop orchestration and return that failure clearly to the user. Do not spawn `specialized_builder.default` or attempt agent creation from missing data.
 9. Before delegating to `specialized_builder.default` for API-backed agent creation, you must have all of these from prior research in-session: concrete API endpoint, required parameters, authentication method, and at least one successful sample retrieval for the requested target. If any are missing, stop and report the gap to the user.
+10. If `specialized_builder.default` returns structured `agent.install` validation errors, continue repair with `specialized_builder.default` first. Do not fallback to `coder.default` for root-path file creation as a substitute for durable install.
+11. Do not call `memory.write` with ambiguous root paths (for example `foo.py`) unless the path is explicitly allowed by current `MemoryWrite` scopes. Prefer constrained paths (for example `skills/*`, `self.*`) or report a policy boundary.
 
 ## Session and Memory Discipline
 

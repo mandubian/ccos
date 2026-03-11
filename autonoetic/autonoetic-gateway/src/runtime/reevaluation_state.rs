@@ -43,9 +43,23 @@ pub fn execute_scheduled_action(
     agent_dir: &Path,
     action: &ScheduledAction,
     registry: &NativeToolRegistry,
+    _config: Option<&autonoetic_types::config::GatewayConfig>,
 ) -> anyhow::Result<String> {
     let policy = PolicyEngine::new(manifest.clone());
     match action {
+        ScheduledAction::AgentInstall {
+            agent_id,
+            summary: _,
+            ..
+        } => {
+            // Approval-only: we do not run an install here. The caller retries agent.install with install_approval_ref to perform the install.
+            Ok(serde_json::json!({
+                "ok": true,
+                "kind": "agent_install_approval_resolved",
+                "agent_id": agent_id
+            })
+            .to_string())
+        }
         ScheduledAction::WriteFile { path, content, .. } => {
             anyhow::ensure!(
                 !path.trim().is_empty(),
@@ -87,6 +101,7 @@ pub fn execute_scheduled_action(
                 &args,
                 None,
                 None,
+                _config,
             )?;
 
             let parsed: serde_json::Value = serde_json::from_str(&result).map_err(|error| {
@@ -108,5 +123,93 @@ pub fn execute_scheduled_action(
 
             Ok(result)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
+
+    fn minimal_manifest() -> AgentManifest {
+        AgentManifest {
+            version: "1.0".to_string(),
+            runtime: RuntimeDeclaration {
+                engine: "autonoetic".to_string(),
+                gateway_version: "0.1.0".to_string(),
+                sdk_version: "0.1.0".to_string(),
+                runtime_type: "stateful".to_string(),
+                sandbox: "bubblewrap".to_string(),
+                runtime_lock: "runtime.lock".to_string(),
+            },
+            agent: AgentIdentity {
+                id: "caller-agent".to_string(),
+                name: "caller-agent".to_string(),
+                description: "Test".to_string(),
+            },
+            capabilities: vec![],
+            llm_config: None,
+            limits: None,
+            background: None,
+            disclosure: None,
+        }
+    }
+
+    /// Regression: AgentInstall is not executed by the scheduler; it only resolves as approval
+    /// metadata. The background path returns a success payload and performs no install.
+    #[test]
+    fn test_agent_install_in_background_path_resolves_as_approval_metadata_only() {
+        let action = ScheduledAction::AgentInstall {
+            agent_id: "would-be-child".to_string(),
+            summary: "Test install".to_string(),
+            requested_by_agent_id: "caller-agent".to_string(),
+            install_fingerprint: "abc123".to_string(),
+        };
+        assert!(
+            !action.is_executable_by_scheduler(),
+            "AgentInstall must not be considered executable by the scheduler"
+        );
+
+        let manifest = minimal_manifest();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let agent_dir = temp.path();
+        let registry = crate::runtime::tools::default_registry();
+
+        let result = execute_scheduled_action(
+            &manifest,
+            agent_dir,
+            &action,
+            &registry,
+            None,
+        )
+        .expect("execute_scheduled_action(AgentInstall) must succeed with approval-resolved payload");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).expect("result must be JSON");
+        assert_eq!(
+            json.get("ok").and_then(|v| v.as_bool()),
+            Some(true),
+            "payload must indicate success"
+        );
+        assert_eq!(
+            json.get("kind").and_then(|v| v.as_str()),
+            Some("agent_install_approval_resolved"),
+            "payload must be approval-resolution only, not an actual install"
+        );
+        assert_eq!(
+            json.get("agent_id").and_then(|v| v.as_str()),
+            Some("would-be-child"),
+            "agent_id must echo the approval subject"
+        );
+
+        // No install must have occurred: no new agent directory under agent_dir
+        let state_dir = agent_dir.join("state");
+        let skills_dir = agent_dir.join("skills");
+        assert!(!state_dir.exists(), "AgentInstall must not create state");
+        assert!(!skills_dir.exists(), "AgentInstall must not create skills");
+        assert!(
+            std::fs::read_dir(agent_dir).map(|d| d.count()).unwrap_or(0) == 0,
+            "agent_dir must remain empty; no install side-effects"
+        );
     }
 }

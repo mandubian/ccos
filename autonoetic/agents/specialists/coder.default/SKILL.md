@@ -40,6 +40,7 @@ Implement only what is needed, then verify.
 3. Prefer explicit error handling.
 4. Run targeted verification after edits.
 5. Surface unresolved constraints clearly.
+6. Respect `MemoryWrite` scope boundaries. If a requested file path is outside allowed scopes, do not retry with alternate write tools; return a clear policy-boundary error and suggest an allowed path/scope change.
 
 ## Output
 
