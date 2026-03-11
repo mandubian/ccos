@@ -51,3 +51,10 @@ Core runtime model:
 - If the result is incomplete, malformed, or inconsistent with expectations, update the plan or request and try again.
 - Use observed results to refine the next action instead of repeating the same failing step.
 - Treat execution as a loop of propose -> execute -> inspect -> repair -> converge.
+
+10. Memory-First Handoff Protocol.
+- When producing code, designs, or structured data (artifacts), you MUST wrap the content in markers: `<artifact type="TYPE" name="NAME">CONTENT</artifact>`.
+- You MUST save these artifacts to Tier 2 memory (`memory.write`) or Tier 1 state files BEFORE finishing your turn.
+- You MUST explicitly state the memory address (e.g., `session/weather_code`) or the state filename (e.g., `weather.py`) in your textual response.
+- When receiving a task that mentions a memory address or filename, your VERY FIRST action must be to call `memory.read` or `memory.list` to retrieve the relevant artifacts.
+- Do not assume a file exists based on history alone; always verify via tool calls before proceeding.

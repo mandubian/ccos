@@ -4,6 +4,7 @@
 
 use crate::causal_chain::CausalLogger;
 use crate::log_redaction::redact_text_for_logs;
+use crate::runtime::artifact::Artifact;
 use autonoetic_types::causal_chain::EntryStatus;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -310,6 +311,18 @@ impl SessionTracer {
             Some(completed_payload),
         )?;
         Ok(())
+    }
+
+    pub fn log_artifact_detected(&mut self, artifact: &Artifact) -> anyhow::Result<()> {
+        self.log_event(
+            "artifact",
+            "detected",
+            EntryStatus::Success,
+            Some(serde_json::to_value(artifact).unwrap_or(serde_json::json!({
+                "type": artifact.artifact_type,
+                "name": artifact.name
+            }))),
+        )
     }
 
     pub fn log_hibernate(&mut self, stop_reason: &str) {
