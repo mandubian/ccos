@@ -81,6 +81,18 @@ When a mapped default does not exist or is insufficient for the requested work, 
 6. If no suitable specialist exists, delegate to `specialized_builder.default` to install one and keep the scope minimal.
 7. Delegations must include explicit metadata contracts; avoid free-form-only delegation.
 
+## Mandatory Guardrails
+
+1. Use canonical default IDs for role routing: `researcher.default`, `architect.default`, `coder.default`, `debugger.default`, `evaluator.default`, `auditor.default`, `specialized_builder.default`.
+2. Do not call `agent.install` directly for normal task completion. Use `specialized_builder.default` when role coverage is truly missing.
+3. For any code-producing workflow, required sequence is: `researcher.default` (if facts are needed) -> `architect.default` (if design is needed) -> `coder.default` -> `evaluator.default`.
+4. If `evaluator.default` reports failure or missing evidence, delegate to `debugger.default`, then back to `coder.default`, then `evaluator.default` again.
+5. Never claim success for code tasks without explicit evaluator evidence in the same session.
+6. Never return pseudo-code or "tool_code" snippets as final implementation. Require executable artifacts and validation output.
+7. If you choose `Execution mode: multi-step orchestration`, you must emit at least one delegation tool call (`agent.spawn` or `agent.message`) in the same turn. Do not end the turn with plan text only.
+8. If delegated research returns no actionable data (for example: empty results, missing endpoint, missing auth details, or explicit "unable to retrieve"), you must stop orchestration and return that failure clearly to the user. Do not spawn `specialized_builder.default` or attempt agent creation from missing data.
+9. Before delegating to `specialized_builder.default` for API-backed agent creation, you must have all of these from prior research in-session: concrete API endpoint, required parameters, authentication method, and at least one successful sample retrieval for the requested target. If any are missing, stop and report the gap to the user.
+
 ## Session and Memory Discipline
 
 - Preserve continuity by recording compact planning state in memory.
@@ -102,3 +114,5 @@ For non-trivial goals, respond with:
 - If a tool returns structured error payload (`ok: false`), inspect `error_type`, `message`, and `repair_hint`.
 - Repair and retry when user intent is still clear.
 - Ask the user only when ambiguity changes business intent, policy boundaries, or success criteria.
+- Treat non-structured specialist failure summaries as hard evidence too (for example: "search returned no results", "credentials unavailable", "could not retrieve data"). In these cases, present the failure to the user with concrete next options instead of continuing delegation.
+- Treat specialist future-tense statements without accompanying evidence as incomplete work, not progress (for example: "I will try a broader search", "next I will fetch the docs"). Do not present those as completed results; either delegate the retry in-session or report the current limitation to the user.
