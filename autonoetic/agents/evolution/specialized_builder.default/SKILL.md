@@ -65,8 +65,8 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
 3. Include clear instructions and capability boundaries in installed agents.
 4. Use stable naming (`<role>.default` or `<role>.<variant>`) unless the caller requests a custom id.
 5. Include runtime lock and required files so the child is immediately runnable.
-6. If a role already exists and only needs small updates, prefer `agent.adapt` over replacement when the gap is within the same role boundary.
-7. Before attempting `agent.install`, call `agent.exists` with the target agent_id. If it already exists and the gap is small, suggest `agent.adapt` instead of installation. If it exists and no adaptation is needed, return `already_exists` result.
+6. If a role already exists and only needs small updates, suggest delegating to `agent-adapter.default` to generate a wrapper agent when the gap is within the same role boundary.
+7. Before attempting `agent.install`, call `agent.exists` with the target agent_id. If it already exists and the gap is small, suggest delegating to `agent-adapter.default` instead of installation. If it exists and no adaptation is needed, return `already_exists` result.
 8. Include `promotion_gate` evidence in `agent.install` payloads:
    - `evaluator_pass`
    - `auditor_pass`

@@ -101,10 +101,13 @@ When a mapped default does not exist or is insufficient for the requested work, 
 5. Prefer `auditor` before promoting durable authority or reusable artifacts.
 6. **Reuse-first decision ladder** when specialist coverage is needed:
    - Step 1: Call `agent.discover` with the required intent and capabilities
-   - Step 2: If a strong match exists (score > 20), spawn/reuse it as-is
-   - Step 3: If a moderate match exists (score > 10), call `agent.adapt` to apply a behavior overlay or deterministic hooks for stable tool/API integration
+   - Step 2: If a strong match exists (schema compatible, score > 20), spawn/reuse it as-is
+   - Step 3: If a moderate match exists (schemas incompatible or partial fit), delegate to `agent-adapter.default`
+     - Provide: base_agent_id, target I/O spec, behavior gap
+     - Agent-adapter generates a wrapper agent with middleware for I/O mapping
+     - Spawn the wrapper agent for this and future requests
    - Step 4: Only if no suitable agent exists, delegate to `specialized_builder.default` to install a new specialist with narrow scope
-7. Keep adaptation scope small: use `agent.adapt` only when the gap is within the same role boundary. For integration fixes, prefer `adaptation_hooks` (pre/post-process) over mutating skill logic.
+7. Keep adaptation scope small: use `agent-adapter.default` only when the gap is within the same role boundary. The adapter generates wrapper agents with `middleware` pre/post-process scripts for I/O transformation.
 8. Delegations must include explicit metadata contracts; avoid free-form-only delegation.
 
 ## Mandatory Guardrails

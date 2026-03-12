@@ -51,6 +51,8 @@ metadata:
             type: object
           risks:
             type: array
+    middleware:
+      post_process: "python3 scripts/format_output.py"
 ---
 # Coder Default
 
