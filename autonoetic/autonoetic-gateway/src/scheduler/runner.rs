@@ -175,7 +175,7 @@ pub async fn handle_due_wake(
         let kickoff = background_kickoff_prompt(&reason, &reevaluation);
         Some(
             execution
-                .spawn_agent_once(agent_id, &kickoff, session_id, None, false, None)
+                .spawn_agent_once(agent_id, &kickoff, session_id, None, false, None, None)
                 .await
                 .map(|spawn| spawn.assistant_reply.unwrap_or_default()),
         )

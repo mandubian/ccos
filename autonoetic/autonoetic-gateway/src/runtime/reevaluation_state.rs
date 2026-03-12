@@ -152,6 +152,7 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
+            adaptation_hooks: None,
         }
     }
 
@@ -175,17 +176,12 @@ mod tests {
         let agent_dir = temp.path();
         let registry = crate::runtime::tools::default_registry();
 
-        let result = execute_scheduled_action(
-            &manifest,
-            agent_dir,
-            &action,
-            &registry,
-            None,
-        )
-        .expect("execute_scheduled_action(AgentInstall) must succeed with approval-resolved payload");
+        let result = execute_scheduled_action(&manifest, agent_dir, &action, &registry, None)
+            .expect(
+            "execute_scheduled_action(AgentInstall) must succeed with approval-resolved payload",
+        );
 
-        let json: serde_json::Value =
-            serde_json::from_str(&result).expect("result must be JSON");
+        let json: serde_json::Value = serde_json::from_str(&result).expect("result must be JSON");
         assert_eq!(
             json.get("ok").and_then(|v| v.as_bool()),
             Some(true),

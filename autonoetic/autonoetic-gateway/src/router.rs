@@ -213,7 +213,15 @@ impl JsonRpcRouter {
         let _ = trace_session.log_requested(action_name, Some(requested_data));
 
         let result = match self
-            .spawn_agent_once(&agent_id, &message, &session_id, source_agent_id.as_deref(), false, event_type_for_inbox.as_deref())
+            .spawn_agent_once(
+                &agent_id,
+                &message,
+                &session_id,
+                source_agent_id.as_deref(),
+                false,
+                event_type_for_inbox.as_deref(),
+                metadata_for_trace.as_ref(),
+            )
             .await
         {
             Ok(r) => r,
@@ -434,9 +442,18 @@ impl JsonRpcRouter {
         source_agent_id: Option<&str>,
         is_message: bool,
         ingest_event_type: Option<&str>,
+        metadata: Option<&serde_json::Value>,
     ) -> anyhow::Result<SpawnResult> {
         self.execution
-            .spawn_agent_once(agent_id, message, session_id, source_agent_id, is_message, ingest_event_type)
+            .spawn_agent_once(
+                agent_id,
+                message,
+                session_id,
+                source_agent_id,
+                is_message,
+                ingest_event_type,
+                metadata,
+            )
             .await
     }
 

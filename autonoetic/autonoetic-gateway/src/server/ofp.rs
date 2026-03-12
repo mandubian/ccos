@@ -318,7 +318,7 @@ async fn handle_inbound_connection(
                         if registry.peer_hosts_agent(&peer_node_id, sender_agent).await =>
                     {
                         match router
-                            .spawn_agent_once(&agent, &message, &session_id, None, true, None)
+                            .spawn_agent_once(&agent, &message, &session_id, None, true, None, None)
                             .await
                         {
                             Ok(result) => {
