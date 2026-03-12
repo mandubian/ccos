@@ -782,39 +782,11 @@ Progress notes (2026-03-11):
 
 ### Reuse-first adaptation and deterministic execution
 
-- [x] Add planner decision ladder: reuse existing agent as-is -> adapt existing agent for small scoped gaps -> install new agent only when adaptation is not suitable.
-- [x] Add an adaptation workflow contract (`agent.adapt`) with composition-first semantics (`behavior_overlay`) and bounded `asset_changes` for runtime materialization.
-- [x] Define composition metadata for adaptation (`compose_mode`, base manifest hash, capability delta, evidence refs) so adaptations remain auditable and reversible.
-- [x] Store adaptation artifacts in gateway-managed metadata under `.gateway/adaptations/<agent_id>/` with JSON overlay files.
-- [x] Enforce adaptation limits (allowed paths: `skills/*` or `state/*`, max 5 changes, 100KB content limit).
-- [x] Require evaluator/auditor evidence when adaptation changes capability surface (returns `approval_required: true`).
-- [x] Add policy to prefer adapting an existing specialist when the gap is small and intent remains within the same role boundary.
-- [x] Add unit tests for adaptation: successful overlay, approval for capabilities, path validation, change budget enforcement.
-
-Progress notes (2026-03-11):
-- Implemented `AgentAdaptTool` in `autonoetic-gateway/src/runtime/tools.rs` with `agent.adapt` tool
-- Uses composition-first semantics with `behavior_overlay` field for instruction augmentation
-- Bounded `asset_changes` with max 5 entries, paths restricted to `skills/*` or `state/*`
-- `AdaptationMetadata` includes: `compose_mode`, `base_manifest_hash` (SHA-256), `capability_delta`, `evidence_refs`, `adapted_at`, `adapter_agent_id`
-- Adaptation artifacts stored in `.gateway/adaptations/<agent_id>/<uuid>.json` for auditability and reversibility
-- **Behavior overlay materialized**: `.behavior_overlay.md` appended to agent directory for runtime consumption
-- **Asset changes applied**: Files created/updated/deleted in agent's `skills/` or `state/` directories
-- Capability additions require approval via `promotion_gate` field with `evaluator_pass` and `auditor_pass`
-- Updated `planner.default/SKILL.md` with reuse-first decision ladder (Rule 6):
-  - Step 1: `agent.discover` to find matches
-  - Step 2: Strong match (score > 20) -> spawn/reuse as-is
-  - Step 3: Moderate match (score > 10) -> `agent.adapt` for small gaps
-  - Step 4: No match -> `specialized_builder.default` for new install
-- Updated `specialized_builder.default/SKILL.md` to prefer `agent.adapt` over replacement (Rule 6-7)
-- **Fixed `agent.exists`**: Now distinguishes between `not_found`, `identity_mismatch`, and `load_error` with actionable status
-- Registered `AgentAdaptTool` in `default_registry()` requiring `AgentSpawn` capability
-- Added 6 unit tests: `test_agent_adapt_successful_overlay` (verifies file creation), `test_agent_adapt_requires_approval_for_capabilities`, `test_agent_adapt_approval_with_promotion_gate_succeeds`, `test_agent_adapt_rejects_invalid_paths`, `test_agent_adapt_enforces_change_budget`, `test_agent_exists_reports_identity_mismatch`
-- All 136 library tests pass
-
-- [ ] Add integration tests for adaptation: successful small overlay, rejected over-budget overlay, failed validation with rollback, and post-adaptation reuse.
+- [x] Replace overlay-based adaptation with schema-driven wrapper generation via `agent-adapter.default`.
+- [x] Keep planner reuse-first ladder as: reuse as-is -> adapter wrapper for small role-local gaps -> builder install only when no suitable role exists.
+- [x] Use manifest-owned `middleware` (`pre_process`/`post_process`) for deterministic I/O transforms.
+- [x] Remove overlay-era references from planner/builder guidance and runtime docs/tests.
 - [ ] Push deterministic-runtime patterns for operational API agents (weather-like): LLM for setup/planning, deterministic execution path for routine runs.
-- [ ] Add deterministic pipeline hooks (`adaptation_hooks: { pre_process, post_process }`) allowing planners to compose scripts around the agent tick for robust I/O transformation without LLM prompt-brittleness.
-- [ ] Ensure `agent.adapt` allows planners to package hook scripts via `asset_changes` and instantly register them as the boundary interface for the agent.
 - [ ] Implement Gateway-level native pipeline interceptors to execute pre/post scripts automatically outside of the LLM window.
 - [ ] Add explicit planner/builder guardrail: for procedural data retrieval tasks, prefer no-LLM execution loops (scheduled action or direct deterministic tool path) and only escalate to LLM reasoning on error/ambiguity.
 - [ ] Add evaluator checks proving steady-state operation succeeds without LLM calls for deterministic agents.

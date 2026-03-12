@@ -163,7 +163,7 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 
 **File: `agents/lead/planner.default/SKILL.md`**
 
-Replace lines 83-88 (reuse-first decision ladder):
+- [x] Replace reuse-first decision ladder with adapter specialist delegation flow:
 
 ```
 ## Reuse-First Decision Ladder
@@ -176,24 +176,22 @@ Replace lines 83-88 (reuse-first decision ladder):
 4. If no match, delegate to `specialized_builder.default` to create new specialist
 ```
 
-Remove references to:
-- `agent.adapt` (lines 86, 88)
-- `adaptation_hooks` (line 88)
-- `selected_adaptation_ids`
+- [x] Remove references to `agent.adapt`
+- [x] Remove references to `adaptation_hooks`
+- [x] Remove references to `selected_adaptation_ids`
 
 ### 4.2 Update specialized_builder.default SKILL.md
 
 **File: `agents/evolution/specialized_builder.default/SKILL.md`**
 
-Replace lines 47-48 (adaptation references):
-- Remove "prefer `agent.adapt` over replacement"
-- Add "if role exists with minor gap, suggest delegating to `agent-adapter.default`"
+- [x] Remove "prefer `agent.adapt` over replacement"
+- [x] Add "if role exists with minor gap, suggest delegating to `agent-adapter.default`"
 
 ### 4.3 Update foundation rules
 
 **File: `autonoetic-gateway/src/runtime/foundation.rs`** (or wherever foundation instructions are assembled)
-- Remove any references to overlay system, `selected_adaptation_ids`
-- No replacement needed — middleware is automatic when present in manifest
+- [x] Remove any references to overlay system, `selected_adaptation_ids`
+- [x] Keep middleware automatic when present in manifest (no extra replacement text needed)
 
 ---
 
@@ -204,65 +202,65 @@ Replace lines 47-48 (adaptation references):
 ### 5.1 Remove `agent.adapt` tool
 
 **File: `autonoetic-gateway/src/runtime/tools.rs`**
-- Delete `AgentAdaptArgs` struct (lines 3195-3211)
-- Delete `PromotionGate` struct (lines 3213-3221)
-- Delete `AdaptationMetadata` struct (lines 3223-3231)
-- Delete `AgentAdaptTool` struct and impl (lines 3233-3455, ~220 lines)
-- Remove `registry.register(Box::new(AgentAdaptTool))` (line 3473)
-- Delete adaptation-related unit tests (lines 5414-5829, ~415 lines)
+- [x] Delete `AgentAdaptArgs` struct (lines 3195-3211)
+- [x] Delete `PromotionGate` struct (lines 3213-3221)
+- [x] Delete `AdaptationMetadata` struct (lines 3223-3231)
+- [x] Delete `AgentAdaptTool` struct and impl (lines 3233-3455, ~220 lines)
+- [x] Remove `registry.register(Box::new(AgentAdaptTool))` (line 3473)
+- [x] Delete adaptation-related unit tests (lines 5414-5829, ~415 lines)
 
 ### 5.2 Remove overlay types
 
 **File: `autonoetic-types/src/agent.rs`**
-- Delete `AdaptationHooks` struct
-- Delete `AssetAction` enum
-- Delete `AssetChange` struct
+- [x] Delete `AdaptationHooks` struct
+- [x] Delete `AssetAction` enum
+- [x] Delete `AssetChange` struct
 
 ### 5.3 Remove overlay composition logic
 
 **File: `autonoetic-gateway/src/agent/repository.rs`**
-- Delete `AdaptationOverlay` struct
-- Delete `AdaptationComposition` struct
-- Delete `get_sync_with_adaptations()` method
-- Delete `load_from_meta_with_adaptations()` method
-- Delete `compose_instructions_with_adaptations()` function (~170 lines)
-- Remove `adaptation_hooks` and `adaptation_assets` from `LoadedAgent`
-- Delete adaptation-related unit tests (lines 616-726)
+- [x] Delete `AdaptationOverlay` struct
+- [x] Delete `AdaptationComposition` struct
+- [x] Delete `get_sync_with_adaptations()` method
+- [x] Delete `load_from_meta_with_adaptations()` method
+- [x] Delete `compose_instructions_with_adaptations()` function (~170 lines)
+- [x] Remove `adaptation_hooks` and `adaptation_assets` from `LoadedAgent`
+- [x] Delete adaptation-related unit tests (lines 616-726)
 
 ### 5.4 Remove overlay entry points
 
 **File: `autonoetic-gateway/src/execution.rs`**
-- Delete `extract_selected_adaptation_ids()` function
-- Remove `selected_adaptation_ids` extraction from `spawn_agent_once()`
-- Remove `with_adaptation_hooks()` and `with_adaptation_assets()` calls
+- [x] Delete `extract_selected_adaptation_ids()` function
+- [x] Remove `selected_adaptation_ids` extraction from `spawn_agent_once()`
+- [x] Remove `with_adaptation_hooks()` and `with_adaptation_assets()` calls
 
 ### 5.5 Remove hook projection
 
 **File: `autonoetic-gateway/src/runtime/lifecycle.rs`**
-- Delete `with_adaptation_assets()` method
-- Delete `project_adaptation_assets()` method (~45 lines)
+- [x] Delete `with_adaptation_assets()` method
+- [x] Delete `project_adaptation_assets()` method (~45 lines)
 
 ### 5.6 Remove overlay storage directory
 
 **Directory: `agents/.gateway/adaptations/`**
-- Delete entire directory tree
+- [x] Delete entire directory tree
 
 ### 5.7 Delete overlay test files
 
-- Delete `autonoetic-gateway/tests/adaptation_composition_integration.rs` (145 lines)
-- Delete `autonoetic-gateway/tests/pipeline_hooks_integration.rs` (228 lines)
+- [x] Delete `autonoetic-gateway/tests/adaptation_composition_integration.rs` (145 lines)
+- [x] Delete `autonoetic-gateway/tests/pipeline_hooks_integration.rs` (228 lines)
 
 ### 5.8 Update defaults in non-core files
 
 **Files with `adaptation_hooks: None` defaults:**
-- `autonoetic-gateway/src/runtime/parser.rs:103` — replace with `middleware: None`
-- `autonoetic-gateway/src/policy.rs:243` — replace with `middleware: None`
-- `autonoetic-gateway/src/runtime/tools.rs:2708, 3516` — replace with `middleware: None`
+- [x] `autonoetic-gateway/src/runtime/parser.rs:103` — replace with `middleware: None`
+- [x] `autonoetic-gateway/src/policy.rs:243` — replace with `middleware: None`
+- [x] `autonoetic-gateway/src/runtime/tools.rs:2708, 3516` — replace with `middleware: None`
 
 ### 5.9 Delete documentation
 
-- Delete `docs/adaptation-composition-model.md` (219 lines)
-- Update `plan.md`: remove adaptation feature checklist items
+- [x] Delete `docs/adaptation-composition-model.md` (219 lines)
+- [x] Update `plan.md`: remove adaptation feature checklist items
 
 ---
 
@@ -273,14 +271,14 @@ Replace lines 47-48 (adaptation references):
 ### 6.1 Example: Input normalization for researcher.default
 
 Create `agents/specialists/researcher.default/scripts/normalize_query.py`:
-- Strips whitespace, normalizes encoding
-- Add to `SKILL.md` frontmatter: `middleware: { pre_process: "scripts/normalize_query.py" }`
+- [x] Strips whitespace, normalizes encoding
+- [x] Add to `SKILL.md` frontmatter: `middleware: { pre_process: "scripts/normalize_query.py" }`
 
 ### 6.2 Example: Output formatting for coder.default
 
 Create `agents/specialists/coder.default/scripts/format_output.py`:
-- Ensures output matches declared `returns` schema
-- Add to `SKILL.md` frontmatter: `middleware: { post_process: "scripts/format_output.py" }`
+- [x] Ensures output matches declared `returns` schema
+- [x] Add to `SKILL.md` frontmatter: `middleware: { post_process: "scripts/format_output.py" }`
 
 ---
 

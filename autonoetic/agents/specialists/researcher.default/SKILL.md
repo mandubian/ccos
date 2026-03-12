@@ -55,6 +55,8 @@ metadata:
             type: string
           confidence:
             type: string
+    middleware:
+      pre_process: "python3 scripts/normalize_query.py"
 ---
 # Researcher Default
 
