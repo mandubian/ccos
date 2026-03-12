@@ -12,11 +12,9 @@ use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::runtime::session_tracer::{EvidenceMode, SessionTracer};
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tool_call_processor::ToolCallProcessor;
-use autonoetic_types::agent::{AdaptationHooks, AgentManifest, Middleware};
+use autonoetic_types::agent::{AgentManifest, Middleware};
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosurePolicy;
-use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -59,10 +57,6 @@ pub struct AgentExecutor {
     pub turn_counter: u64,
     /// When set, passed to tool execution (e.g. agent.install approval policy).
     pub config: Option<Arc<GatewayConfig>>,
-    /// Deterministic pipeline hooks from adaptation overlays (legacy).
-    pub adaptation_hooks: AdaptationHooks,
-    /// Asset changes from adaptation overlays, to be projected into the sandbox.
-    pub adaptation_assets: Vec<autonoetic_types::agent::AssetChange>,
     /// Middleware hooks declared in the agent manifest.
     pub middleware: Middleware,
 }
@@ -88,8 +82,6 @@ impl AgentExecutor {
             session_started: false,
             turn_counter: 0,
             config: None,
-            adaptation_hooks: AdaptationHooks::default(),
-            adaptation_assets: Vec::new(),
             middleware: Middleware::default(),
         }
     }
@@ -114,19 +106,6 @@ impl AgentExecutor {
         self
     }
 
-    pub fn with_adaptation_hooks(mut self, hooks: AdaptationHooks) -> Self {
-        self.adaptation_hooks = hooks;
-        self
-    }
-
-    pub fn with_adaptation_assets(
-        mut self,
-        assets: Vec<autonoetic_types::agent::AssetChange>,
-    ) -> Self {
-        self.adaptation_assets = assets;
-        self
-    }
-
     pub fn with_middleware(mut self, middleware: Middleware) -> Self {
         self.middleware = middleware;
         self
@@ -144,71 +123,6 @@ impl AgentExecutor {
     fn next_turn_id(&mut self) -> String {
         self.turn_counter += 1;
         format!("turn-{:06}", self.turn_counter)
-    }
-
-    /// Creates a temporary projection of the agent directory with adaptation assets applied.
-    /// This is a virtual view (via symlinks) to avoid mutating the base agent.
-    pub fn project_adaptation_assets(&self, session_id: &str) -> anyhow::Result<PathBuf> {
-        let projection_base = if let Some(ref gateway_dir) = self.gateway_dir {
-            gateway_dir
-                .join("sessions")
-                .join(session_id)
-                .join("projection")
-        } else {
-            std::env::temp_dir().join(format!(
-                "autonoetic-projection-{}-{}",
-                self.manifest.agent.id, session_id
-            ))
-        };
-
-        if projection_base.exists() {
-            let _ = fs::remove_dir_all(&projection_base);
-        }
-        fs::create_dir_all(&projection_base)?;
-
-        // Recursively symlink everything from agent_dir
-        self.link_dir_contents(&self.agent_dir, &projection_base)?;
-
-        for change in &self.adaptation_assets {
-            let target_path = projection_base.join(&change.path);
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            match change.action {
-                autonoetic_types::agent::AssetAction::Create
-                | autonoetic_types::agent::AssetAction::Update => {
-                    if target_path.is_symlink() || target_path.exists() {
-                        let _ = fs::remove_file(&target_path);
-                    }
-                    fs::write(&target_path, &change.content)?;
-                }
-                autonoetic_types::agent::AssetAction::Delete => {
-                    if target_path.is_symlink() || target_path.exists() {
-                        let _ = fs::remove_file(&target_path);
-                    }
-                }
-            }
-        }
-
-        Ok(projection_base)
-    }
-
-    pub fn link_dir_contents(&self, src: &Path, dst: &Path) -> anyhow::Result<()> {
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let src_path = entry.path();
-            let dst_path = dst.join(name);
-
-            // Don't link .gateway or other internal metadata if they exist
-            if src_path.file_name().and_then(|s| s.to_str()) == Some(".gateway") {
-                continue;
-            }
-
-            symlink(&src_path, &dst_path)?;
-        }
-        Ok(())
     }
 
     pub fn close_session(&mut self, reason: &str) -> anyhow::Result<()> {
@@ -263,12 +177,7 @@ impl AgentExecutor {
         let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
             .with_turn_id(&turn_id);
 
-        // Determine the active agent directory (projected for adaptations, original otherwise)
-        let active_agent_dir = if !self.adaptation_assets.is_empty() {
-            self.project_adaptation_assets(&session_id)?
-        } else {
-            self.agent_dir.clone()
-        };
+        let active_agent_dir = self.agent_dir.clone();
 
         if !self.session_started {
             let trigger = history
@@ -343,11 +252,9 @@ impl AgentExecutor {
             };
 
             // --- Pre-process hook: transform input before LLM call ---
-            // Middleware from manifest takes precedence over adaptation hooks
-            let pre_hook = self.middleware.pre_process.as_ref()
-                .or(self.adaptation_hooks.pre_process.as_ref());
+            let pre_hook = self.middleware.pre_process.as_ref();
             let req = if let Some(pre_hook) = pre_hook {
-                self.apply_pre_process_hook(
+                self.apply_middleware_pre(
                     req,
                     pre_hook,
                     &active_agent_dir,
@@ -395,11 +302,9 @@ impl AgentExecutor {
             };
 
             // --- Post-process hook: transform output after LLM call ---
-            // Middleware from manifest takes precedence over adaptation hooks
-            let post_hook = self.middleware.post_process.as_ref()
-                .or(self.adaptation_hooks.post_process.as_ref());
+            let post_hook = self.middleware.post_process.as_ref();
             let response = if let Some(post_hook) = post_hook {
-                self.apply_post_process_hook(
+                self.apply_middleware_post(
                     response,
                     post_hook,
                     &active_agent_dir,
@@ -531,8 +436,8 @@ impl AgentExecutor {
         );
     }
 
-    /// Executes the pre-process hook script in a sandbox.
-    fn apply_pre_process_hook(
+    /// Executes middleware pre-process script in a sandbox.
+    fn apply_middleware_pre(
         &self,
         mut req: crate::llm::CompletionRequest,
         hook_script: &str,
@@ -550,7 +455,7 @@ impl AgentExecutor {
 
         let input_json = serde_json::to_string(&req)?;
         let output =
-            self.run_hook_sandbox(hook_script, input_json, active_agent_dir, session_id)?;
+            self.run_middleware_script(hook_script, input_json, active_agent_dir, session_id)?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -599,8 +504,8 @@ impl AgentExecutor {
         }
     }
 
-    /// Executes the post-process hook script in a sandbox.
-    fn apply_post_process_hook(
+    /// Executes middleware post-process script in a sandbox.
+    fn apply_middleware_post(
         &self,
         mut response: crate::llm::CompletionResponse,
         hook_script: &str,
@@ -618,7 +523,7 @@ impl AgentExecutor {
 
         let input_json = serde_json::to_string(&response)?;
         let output =
-            self.run_hook_sandbox(hook_script, input_json, active_agent_dir, session_id)?;
+            self.run_middleware_script(hook_script, input_json, active_agent_dir, session_id)?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -653,7 +558,7 @@ impl AgentExecutor {
         }
     }
 
-    fn run_hook_sandbox(
+    fn run_middleware_script(
         &self,
         command: &str,
         stdin_json: String,
@@ -773,7 +678,6 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
-            adaptation_hooks: None,
             io: None,
             middleware: None,
         }

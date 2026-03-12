@@ -273,7 +273,6 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
-            adaptation_hooks: None,
             io: None,
             middleware: None,
         }

@@ -69,49 +69,49 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 ### 2.1 Add middleware types
 
 **File: `autonoetic-types/src/agent.rs`**
-- Rename `AdaptationHooks` to `Middleware` (keep same structure: `pre_process: Option<String>`, `post_process: Option<String>`)
-- Move `middleware: Option<Middleware>` to `AgentManifest` (replacing `adaptation_hooks`)
-- Remove `AdaptationHooks`, `AssetChange`, `AssetAction` types (only used by overlay system)
+- [x] Rename `AdaptationHooks` to `Middleware` (keep same structure: `pre_process: Option<String>`, `post_process: Option<String>`)
+- [x] Move `middleware: Option<Middleware>` to `AgentManifest` (replacing `adaptation_hooks`)
+- [x] Remove `AdaptationHooks`, `AssetChange`, `AssetAction` types (only used by overlay system)
 
 ### 2.2 Parse middleware from SKILL.md
 
 **File: `autonoetic-gateway/src/runtime/parser.rs`**
-- Parse `metadata.autonoetic.middleware.pre_process` and `post_process` from frontmatter
-- Replace `adaptation_hooks: None` with `middleware: None`
+- [x] Parse `metadata.autonoetic.middleware.pre_process` and `post_process` from frontmatter
+- [x] Replace `adaptation_hooks: None` with `middleware: None`
 
 ### 2.3 Simplify hook execution in lifecycle
 
 **File: `autonoetic-gateway/src/runtime/lifecycle.rs`**
-- Replace `adaptation_hooks: AdaptationHooks` field with `middleware: Middleware`
-- Replace `with_adaptation_hooks()` with `with_middleware()`
-- Remove `with_adaptation_assets()` — no longer needed
-- Remove `project_adaptation_assets()` — no longer needed
-- Keep `apply_pre_process_hook()`, `apply_post_process_hook()`, `run_hook_sandbox()` — rename to `apply_middleware_pre()`, `apply_middleware_post()`, `run_middleware_script()`
-- Middleware scripts are resolved relative to the agent's own directory (not projected)
+- [x] Replace `adaptation_hooks: AdaptationHooks` field with `middleware: Middleware`
+- [x] Replace `with_adaptation_hooks()` with `with_middleware()`
+- [x] Remove `with_adaptation_assets()` — no longer needed
+- [x] Remove `project_adaptation_assets()` — no longer needed
+- [x] Keep `apply_pre_process_hook()`, `apply_post_process_hook()`, `run_hook_sandbox()` — rename to `apply_middleware_pre()`, `apply_middleware_post()`, `run_middleware_script()`
+- [x] Middleware scripts are resolved relative to the agent's own directory (not projected)
 
 ### 2.4 Update execution path
 
 **File: `autonoetic-gateway/src/execution.rs`**
-- Replace `with_adaptation_hooks(loaded.adaptation_hooks)` with `with_middleware(loaded.manifest.middleware.clone())`
-- Remove `extract_selected_adaptation_ids()` function
-- Remove `adaptation_assets` from executor construction
+- [x] Replace `with_adaptation_hooks(loaded.adaptation_hooks)` with `with_middleware(loaded.manifest.middleware.clone())`
+- [x] Remove `extract_selected_adaptation_ids()` function
+- [x] Remove `adaptation_assets` from executor construction
 
 ### 2.5 Update agent loading
 
 **File: `autonoetic-gateway/src/agent/repository.rs`**
-- Remove `get_sync_with_adaptations()` method
-- Remove `compose_instructions_with_adaptations()` function (~170 lines)
-- Remove `AdaptationOverlay`, `AdaptationComposition` structs
-- Remove `adaptation_hooks` and `adaptation_assets` from `LoadedAgent`
-- Simplify `LoadedAgent` to `{ dir, manifest, instructions }`
-- Keep `get_sync()` as the sole loading method
+- [x] Remove `get_sync_with_adaptations()` method
+- [x] Remove `compose_instructions_with_adaptations()` function (~170 lines)
+- [x] Remove `AdaptationOverlay`, `AdaptationComposition` structs
+- [x] Remove `adaptation_hooks` and `adaptation_assets` from `LoadedAgent`
+- [x] Simplify `LoadedAgent` to `{ dir, manifest, instructions }`
+- [x] Keep `get_sync()` as the sole loading method
 
 ### 2.6 Tests
 
-- Unit test: parser extracts middleware from SKILL.md
-- Unit test: middleware pre_process hook runs and transforms input
-- Unit test: middleware post_process hook runs and transforms output
-- Integration test: agent with middleware in manifest executes hooks correctly
+- [x] Unit test: parser extracts middleware from SKILL.md
+- [x] Unit test: middleware pre_process hook runs and transforms input
+- [x] Unit test: middleware post_process hook runs and transforms output
+- [x] Integration test: agent with middleware in manifest executes hooks correctly
 
 ---
 

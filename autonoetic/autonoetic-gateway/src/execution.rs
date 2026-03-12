@@ -56,7 +56,7 @@ impl GatewayExecutionService {
         source_agent_id: Option<&str>,
         is_message: bool,
         ingest_event_type: Option<&str>,
-        metadata: Option<&serde_json::Value>,
+        _metadata: Option<&serde_json::Value>,
     ) -> anyhow::Result<SpawnResult> {
         let span = tracing::info_span!(
             "spawn_agent_once",
@@ -115,11 +115,7 @@ impl GatewayExecutionService {
                 }
             }
 
-            let selected_adaptation_ids = extract_selected_adaptation_ids(metadata);
-            let loaded = repo.get_sync_with_adaptations(
-                agent_id,
-                selected_adaptation_ids.as_deref(),
-            )?;
+            let loaded = repo.get_sync(agent_id)?;
 
             // Validate spawn input against target agent's accepts schema (informational only)
             if let Some(ref io_schema) = loaded.manifest.io {
@@ -173,6 +169,7 @@ impl GatewayExecutionService {
                 .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
             let driver = build_driver(llm_config, self.http_client.clone())?;
 
+            let middleware = loaded.manifest.middleware.clone().unwrap_or_default();
             let mut runtime = AgentExecutor::new(
                 loaded.manifest,
                 loaded.instructions,
@@ -182,8 +179,7 @@ impl GatewayExecutionService {
             )
             .with_gateway_dir(self.config.agents_dir.join(".gateway"))
             .with_config(self.config.clone())
-            .with_adaptation_hooks(loaded.adaptation_hooks)
-            .with_adaptation_assets(loaded.adaptation_assets)
+            .with_middleware(middleware)
             .with_initial_user_message(message.to_string())
             .with_session_id(session_id.to_string());
             let mut history = build_initial_history(
@@ -316,18 +312,6 @@ impl GatewayExecutionService {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
-}
-
-fn extract_selected_adaptation_ids(metadata: Option<&serde_json::Value>) -> Option<Vec<String>> {
-    let value = metadata?;
-    let arr = value.get("selected_adaptation_ids")?.as_array()?;
-    let ids: Vec<String> = arr
-        .iter()
-        .filter_map(|v| v.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    Some(ids)
 }
 
 /// Logs agent.spawn.requested and agent.spawn.completed to the gateway causal chain for nested

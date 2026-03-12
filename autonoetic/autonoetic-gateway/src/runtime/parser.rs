@@ -105,7 +105,6 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         limits: meta.limits,
         background: meta.background,
         disclosure: meta.disclosure,
-        adaptation_hooks: None,
         io: meta.io,
         middleware: meta.middleware,
     }
@@ -299,5 +298,38 @@ agent:
 "#;
         let (manifest, _body) = SkillParser::parse(content).expect("should parse");
         assert!(manifest.io.is_none());
+    }
+
+    #[test]
+    fn test_parse_middleware_hooks() {
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "test"
+  name: "Test"
+  description: "A test"
+middleware:
+  pre_process: "python3 scripts/pre.py"
+  post_process: "python3 scripts/post.py"
+---
+# Test
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        let middleware = manifest.middleware.expect("middleware should parse");
+        assert_eq!(
+            middleware.pre_process.as_deref(),
+            Some("python3 scripts/pre.py")
+        );
+        assert_eq!(
+            middleware.post_process.as_deref(),
+            Some("python3 scripts/post.py")
+        );
     }
 }
