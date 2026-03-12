@@ -231,6 +231,13 @@ You should see:
 - tool usage including `agent.spawn` in planner trace;
 - specialist session activity tied to the same request lineage.
 
+## Adapter specialist docs
+
+For schema/behavior wrapper generation via `agent-adapter.default`, including
+details of `schema_diff.py` and `generate_wrapper.py`, see:
+
+- `docs/agent-adapter-specialist.md`
+
 **Why is `result_preview` truncated in causal_chain.jsonl?**  
 Tool results in the causal chain are intentionally limited to 256 characters so log lines stay readable and bounded. The payload still has `result_len` and `result_sha256`. To get full tool output in logs, set `AUTONOETIC_EVIDENCE_MODE=full` when starting the gateway; then each tool_invoke completed entry gets an `evidence_ref` pointing to a file under the agent's `history/evidence/<session_id>/` with the full result.
 

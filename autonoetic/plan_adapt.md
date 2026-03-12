@@ -122,8 +122,8 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 ### 3.1 Create adapter specialist bundle
 
 **New directory: `agents/evolution/agent-adapter.default/`**
-- `SKILL.md`: Instructions for reading base agent manifest + target requirements, generating wrapper agent
-- `runtime.lock`: Standard runtime lock
+- [x] `SKILL.md`: Instructions for reading base agent manifest + target requirements, generating wrapper agent
+- [x] `runtime.lock`: Standard runtime lock
 
 **Adapter specialist workflow:**
 1. Receive: `base_agent_id`, `target_spec` (desired I/O schema + behavior modifications), `rationale`
@@ -139,19 +139,19 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 ### 3.2 Add I/O mapping capabilities
 
 **New files in adapter specialist's `scripts/`:**
-- `schema_diff.py`: Compares two JSON schemas and generates mapping description
-- `generate_wrapper.py`: Takes base SKILL.md + diff → produces adapted SKILL.md + middleware scripts
+- [x] `schema_diff.py`: Compares two JSON schemas and generates mapping description
+- [x] `generate_wrapper.py`: Takes base SKILL.md + diff → produces adapted SKILL.md + middleware scripts
 
 ### 3.3 Register in role catalog
 
 **File: `agents/lead/planner.default/SKILL.md`**
-- Add `agent-adapter` → `agent-adapter.default` to role registry
+- [x] Add `agent-adapter` → `agent-adapter.default` to role registry
 
 ### 3.4 Tests
 
-- Unit test: adapter specialist generates wrapper with correct schema mapping
-- Integration test: base agent + adapter specialist → wrapper agent → execution produces correct I/O transformation
-- Integration test: wrapper agent inherits base capabilities correctly
+- [x] Unit test: adapter specialist generates wrapper with correct schema mapping
+- [x] Integration test: base agent + adapter specialist → wrapper agent → execution produces correct I/O transformation
+- [x] Integration test: wrapper agent inherits base capabilities correctly
 
 ---
 
