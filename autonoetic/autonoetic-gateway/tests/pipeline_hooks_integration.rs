@@ -69,6 +69,8 @@ print(json.dumps(req))
             pre_process: Some("python3 pre_hook.py".to_string()),
             post_process: None,
         }),
+        io: None,
+        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {
@@ -134,6 +136,8 @@ print(json.dumps({"skip_llm": True, "assistant_reply": "DET_REPLY"}))
             pre_process: Some("python3 skip_hook.py".to_string()),
             post_process: None,
         }),
+        io: None,
+        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {
@@ -205,6 +209,8 @@ print(json.dumps(resp))
             pre_process: None,
             post_process: Some("python3 post_hook.py".to_string()),
         }),
+        io: None,
+        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {

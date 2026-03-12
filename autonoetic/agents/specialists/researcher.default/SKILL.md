@@ -34,6 +34,27 @@ metadata:
         scopes: ["self.*", "shared.*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - query
+        properties:
+          query:
+            type: string
+          domain:
+            type: string
+      returns:
+        type: object
+        required:
+          - findings
+        properties:
+          findings:
+            type: array
+          summary:
+            type: string
+          confidence:
+            type: string
 ---
 # Researcher Default
 

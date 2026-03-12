@@ -28,6 +28,29 @@ metadata:
         scopes: ["self.*", "shared.*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - problem
+        properties:
+          problem:
+            type: string
+          constraints:
+            type: array
+          existing:
+            type: string
+      returns:
+        type: object
+        required:
+          - design
+        properties:
+          design:
+            type: string
+          interfaces:
+            type: array
+          tradeoffs:
+            type: array
 ---
 # Architect Default
 

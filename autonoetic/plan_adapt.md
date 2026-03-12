@@ -13,19 +13,20 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 ### 1.1 Add schema types to agent manifest
 
 **File: `autonoetic-types/src/agent.rs`**
-- Add `AgentIO` struct with `accepts: Option<serde_json::Value>` and `returns: Option<serde_json::Value>`
-- Add `pub io: Option<AgentIO>` field to `AgentManifest`
-- Both fields are JSON Schema values (following existing `ToolDefinition.input_schema` pattern in `llm/mod.rs:55`)
+- [x] Add `AgentIO` struct with `accepts: Option<serde_json::Value>` and `returns: Option<serde_json::Value>`
+- [x] Add `pub io: Option<AgentIO>` field to `AgentManifest`
+- [x] Both fields are JSON Schema values (following existing `ToolDefinition.input_schema` pattern in `llm/mod.rs:55`)
 
 ### 1.2 Parse schemas from SKILL.md frontmatter
 
 **File: `autonoetic-gateway/src/runtime/parser.rs`**
-- Parse `metadata.autonoetic.io.accepts` and `metadata.autonoetic.io.returns` from YAML frontmatter
-- Default to `None` when not present (backward compatible)
+- [x] Parse `metadata.autonoetic.io.accepts` and `metadata.autonoetic.io.returns` from YAML frontmatter
+- [x] Default to `None` when not present (backward compatible)
 
 ### 1.3 Add I/O schemas to existing agent manifests
 
 **Files to update (add `io` section to `metadata.autonoetic`):**
+- [x] Add/update `io` sections for all listed agents below
 
 | Agent | accepts | returns |
 |-------|---------|---------|
@@ -41,23 +42,23 @@ The current overlay system (`agent.adapt` + composition + pre/post hooks) adds ~
 ### 1.4 Expose schemas in agent discovery
 
 **File: `autonoetic-gateway/src/runtime/tools.rs`**
-- Update `agent.discover` tool output to include `io` field from manifest
-- Planner can now compare schemas mechanically
+- [x] Update `agent.discover` tool output to include `io` field from manifest
+- [x] Planner can now compare schemas mechanically
 
 ### 1.5 Add schema validation in execution
 
 **File: `autonoetic-gateway/src/execution.rs`**
-- In `spawn_agent_once()`, validate spawn input against target agent's `accepts` schema (if present)
-- Log validation result to causal chain as informational event (do NOT hard-fail — LLM can handle minor mismatches)
-- Add output validation in `lifecycle.rs`: log output against `returns` schema after execution
+- [x] In `spawn_agent_once()`, validate spawn input against target agent's `accepts` schema (if present)
+- [x] Log validation result to causal chain as informational event (do NOT hard-fail — LLM can handle minor mismatches)
+- [x] Add output validation in `lifecycle.rs`: log output against `returns` schema after execution
 
 ### 1.6 Tests
 
-- Unit test: parser extracts I/O schemas from SKILL.md frontmatter
-- Unit test: parser defaults to None when schema absent
-- Unit test: `agent.discover` returns schema in output
-- Integration test: spawn with mismatched input logs warning to causal chain
-- Integration test: spawn with valid input passes schema check
+- [x] Unit test: parser extracts I/O schemas from SKILL.md frontmatter
+- [x] Unit test: parser defaults to None when schema absent
+- [x] Unit test: `agent.discover` returns schema in output
+- [x] Integration test: spawn with mismatched input logs warning to causal chain
+- [x] Integration test: spawn with valid input passes schema check
 
 ---
 

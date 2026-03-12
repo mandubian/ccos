@@ -26,6 +26,27 @@ metadata:
         scopes: ["*"]
       - type: "MemoryWrite"
         scopes: ["self.*", "shared.*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - role
+        properties:
+          role:
+            type: string
+          requirements:
+            type: object
+          constraints:
+            type: array
+      returns:
+        type: object
+        required:
+          - agent_id
+        properties:
+          agent_id:
+            type: string
+          status:
+            type: string
 ---
 # Specialized Builder Default
 

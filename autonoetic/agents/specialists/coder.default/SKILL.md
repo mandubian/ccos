@@ -28,6 +28,29 @@ metadata:
         scopes: ["self.*", "skills/*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - task
+        properties:
+          task:
+            type: string
+          context:
+            type: string
+          constraints:
+            type: array
+      returns:
+        type: object
+        required:
+          - changes
+        properties:
+          changes:
+            type: array
+          verification:
+            type: object
+          risks:
+            type: array
 ---
 # Coder Default
 

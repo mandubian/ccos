@@ -28,6 +28,27 @@ metadata:
         scopes: ["self.*", "shared.*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - target
+        properties:
+          target:
+            type: string
+          scope:
+            type: array
+      returns:
+        type: object
+        required:
+          - findings
+        properties:
+          findings:
+            type: array
+          risk_level:
+            type: string
+          recommendations:
+            type: array
 ---
 # Auditor Default
 

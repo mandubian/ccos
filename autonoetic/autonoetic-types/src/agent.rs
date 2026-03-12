@@ -61,6 +61,10 @@ pub struct AgentManifest {
     pub disclosure: Option<DisclosurePolicy>,
     #[serde(default)]
     pub adaptation_hooks: Option<AdaptationHooks>,
+    #[serde(default)]
+    pub io: Option<AgentIO>,
+    #[serde(default)]
+    pub middleware: Option<Middleware>,
 }
 
 /// Pipeline hooks extracted from adaptation overlays.
@@ -72,6 +76,28 @@ pub struct AdaptationHooks {
     /// Script/command to run on LLM output before returning to the user.
     #[serde(default)]
     pub post_process: Option<String>,
+}
+
+/// Middleware hooks declared in the agent's own manifest (replaces overlay-based hooks).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Middleware {
+    /// Script/command to run on user input before passing to the LLM.
+    #[serde(default)]
+    pub pre_process: Option<String>,
+    /// Script/command to run on LLM output before returning to the user.
+    #[serde(default)]
+    pub post_process: Option<String>,
+}
+
+/// I/O schema contract for an agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentIO {
+    /// JSON Schema describing accepted input.
+    #[serde(default)]
+    pub accepts: Option<serde_json::Value>,
+    /// JSON Schema describing produced output.
+    #[serde(default)]
+    pub returns: Option<serde_json::Value>,
 }
 
 /// Lightweight metadata about a discovered agent on disk.
