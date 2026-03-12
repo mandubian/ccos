@@ -1,7 +1,7 @@
 //! Integration tests for Tier 2 memory provenance and secure sharing.
 
-use autonoetic_types::memory::{MemoryObject, MemoryVisibility};
-use std::path::PathBuf;
+use autonoetic_types::memory::MemoryVisibility;
+// use std::path::PathBuf;
 use tempfile::tempdir;
 
 /// Helper to create a test gateway directory with memory database

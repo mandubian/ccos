@@ -279,6 +279,17 @@ async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow
         },
     )?;
 
+    write_background_state(
+        &config,
+        agent_id,
+        &BackgroundState {
+            agent_id: agent_id.to_string(),
+            session_id: autonoetic_gateway::scheduler::decision::background_session_id(agent_id),
+            next_due_at: Some((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339()),
+            ..BackgroundState::default()
+        },
+    )?;
+
     let execution = Arc::new(GatewayExecutionService::new(config.clone()));
     let request = require_single_pending_approval(execution.clone(), &config).await?;
     assert!(!agent_dir

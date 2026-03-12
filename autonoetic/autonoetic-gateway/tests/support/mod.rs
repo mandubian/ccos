@@ -272,7 +272,14 @@ pub async fn require_single_pending_approval(
     execution: Arc<GatewayExecutionService>,
     config: &GatewayConfig,
 ) -> anyhow::Result<ApprovalRequest> {
-    run_scheduler_tick(execution).await?;
+    for _ in 0..5 {
+        run_scheduler_tick(execution.clone()).await?;
+        let approvals = load_approval_requests(config)?;
+        if approvals.len() == 1 {
+            return Ok(approvals.into_iter().next().expect("approval should exist"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
     let approvals = load_approval_requests(config)?;
     anyhow::ensure!(
         approvals.len() == 1,
