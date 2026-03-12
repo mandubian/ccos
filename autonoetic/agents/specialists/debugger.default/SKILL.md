@@ -30,6 +30,29 @@ metadata:
         scopes: ["self.*", "shared.*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - failure
+        properties:
+          failure:
+            type: string
+          logs:
+            type: string
+          expected:
+            type: string
+      returns:
+        type: object
+        required:
+          - root_cause
+        properties:
+          root_cause:
+            type: string
+          fix:
+            type: string
+          evidence:
+            type: array
 ---
 # Debugger Default
 

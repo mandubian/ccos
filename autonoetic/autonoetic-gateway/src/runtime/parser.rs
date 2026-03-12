@@ -1,7 +1,8 @@
 //! SKILL.md Parser.
 
 use autonoetic_types::agent::{
-    AgentIdentity, AgentManifest, LlmConfig, ResourceLimits, RuntimeDeclaration,
+    AgentIO, AgentIdentity, AgentManifest, LlmConfig, Middleware, ResourceLimits,
+    RuntimeDeclaration,
 };
 use autonoetic_types::background::BackgroundPolicy;
 use autonoetic_types::capability::Capability;
@@ -34,6 +35,10 @@ struct AutonoeticMetadata {
     background: Option<BackgroundPolicy>,
     #[serde(default)]
     disclosure: Option<autonoetic_types::disclosure::DisclosurePolicy>,
+    #[serde(default)]
+    io: Option<AgentIO>,
+    #[serde(default)]
+    middleware: Option<Middleware>,
 }
 
 /// Parser for `SKILL.md` files.
@@ -101,6 +106,8 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         background: meta.background,
         disclosure: meta.disclosure,
         adaptation_hooks: None,
+        io: meta.io,
+        middleware: meta.middleware,
     }
 }
 
@@ -225,5 +232,72 @@ background:
         assert_eq!(background.interval_secs, 45);
         assert!(background.wake_predicates.timer);
         assert!(background.wake_predicates.stale_goals);
+    }
+
+    #[test]
+    fn test_parse_io_schemas() {
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "researcher"
+  name: "Researcher"
+  description: "A researcher"
+io:
+  accepts:
+    type: object
+    required:
+      - query
+    properties:
+      query:
+        type: string
+      domain:
+        type: string
+  returns:
+    type: object
+    required:
+      - findings
+    properties:
+      findings:
+        type: array
+      summary:
+        type: string
+---
+# Researcher
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        let io = manifest.io.expect("io should parse");
+        let accepts = io.accepts.expect("accepts should exist");
+        assert_eq!(accepts["type"], "object");
+        let returns = io.returns.expect("returns should exist");
+        assert_eq!(returns["type"], "object");
+    }
+
+    #[test]
+    fn test_parse_without_io_schemas() {
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "test"
+  name: "Test"
+  description: "A test"
+---
+# Test
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        assert!(manifest.io.is_none());
     }
 }

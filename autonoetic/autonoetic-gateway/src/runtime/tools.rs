@@ -2706,6 +2706,8 @@ impl NativeTool for AgentInstallTool {
             background: background.clone(),
             disclosure: None,
             adaptation_hooks: None,
+            io: None,
+            middleware: None,
         };
 
         let mut install_validation_error: Option<String> = None;
@@ -2973,6 +2975,8 @@ struct AgentDiscoveryResult {
     description: String,
     capabilities: Vec<String>,
     match_reasons: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    io: Option<serde_json::Value>,
 }
 
 pub struct AgentDiscoverTool;
@@ -3094,6 +3098,13 @@ impl NativeTool for AgentDiscoverTool {
                     match_reasons.push("supports background execution".to_string());
                 }
 
+                let io_schema = agent.manifest.io.as_ref().map(|io| {
+                    serde_json::json!({
+                        "accepts": io.accepts,
+                        "returns": io.returns,
+                    })
+                });
+
                 AgentDiscoveryResult {
                     score,
                     agent_id: agent.id().to_string(),
@@ -3101,6 +3112,7 @@ impl NativeTool for AgentDiscoverTool {
                     description: agent.manifest.agent.description,
                     capabilities: agent_cap_types,
                     match_reasons,
+                    io: io_schema,
                 }
             })
             .filter(|r| r.score > 0.0)
@@ -3514,6 +3526,8 @@ mod tests {
             background: None,
             disclosure: None,
             adaptation_hooks: None,
+            io: None,
+            middleware: None,
         }
     }
 
@@ -5409,6 +5423,81 @@ metadata:
             agent_ids.contains(&"coder.default"),
             "non-excluded agent should appear in results"
         );
+    }
+
+    #[test]
+    fn test_agent_discover_includes_io_schema_in_results() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist with schema"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist with schema"
+    capabilities: []
+    io:
+      accepts:
+        type: object
+        required: [query]
+      returns:
+        type: object
+        required: [findings]
+---
+# Researcher
+Research agent instructions.
+"#;
+        std::fs::write(agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "intent": "research",
+            "required_capabilities": [],
+            "exclude_ids": []
+        });
+        let result = registry
+            .execute(
+                "agent.discover",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.discover should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        let results = parsed
+            .get("results")
+            .and_then(|v| v.as_array())
+            .expect("results should be an array");
+        let first = results.first().expect("one agent should be discovered");
+        let io = first.get("io").expect("io should be present");
+        assert_eq!(io.get("accepts").and_then(|v| v.get("type")), Some(&serde_json::json!("object")));
+        assert_eq!(io.get("returns").and_then(|v| v.get("type")), Some(&serde_json::json!("object")));
     }
 
     #[test]

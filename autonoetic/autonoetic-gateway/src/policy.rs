@@ -241,6 +241,8 @@ mod tests {
             background: None,
             disclosure: None,
             adaptation_hooks: None,
+            io: None,
+            middleware: None,
         }
     }
 

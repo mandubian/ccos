@@ -28,6 +28,29 @@ metadata:
         scopes: ["self.*", "shared.*"]
       - type: "AgentMessage"
         patterns: ["*"]
+    io:
+      accepts:
+        type: object
+        required:
+          - artifact
+        properties:
+          artifact:
+            type: string
+          criteria:
+            type: array
+          test_command:
+            type: string
+      returns:
+        type: object
+        required:
+          - passed
+        properties:
+          passed:
+            type: boolean
+          results:
+            type: array
+          confidence:
+            type: string
 ---
 # Evaluator Default
 

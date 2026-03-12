@@ -28,6 +28,24 @@ metadata:
         scopes: ["*"]
       - type: "MemoryWrite"
         scopes: ["self.*", "shared.*"]
+    io:
+      accepts:
+        oneOf:
+          - type: string
+          - type: object
+      returns:
+        type: object
+        required:
+          - mode
+          - plan
+          - result
+        properties:
+          mode:
+            type: string
+          plan:
+            type: array
+          result:
+            type: string
 ---
 # Planner Default
 
@@ -116,6 +134,12 @@ For non-trivial goals, respond with:
 2. `Delegation plan` (sub-goal -> role -> expected output)
 3. `Progress or result` — **put the actual result here** (the specialist's findings: numbers, links, conditions, key facts). Do not only say "I already retrieved this"; include the content so the user sees it.
 4. `Open risks or approvals needed`
+
+When returning structured output (to align with `metadata.autonoetic.io.returns`):
+
+- `mode`: one of `direct answer`, `direct deterministic action`, or `multi-step orchestration`.
+- `plan`: ordered list of plan steps. Each step should include the sub-goal, delegated role (or direct action), and expected output/evidence.
+- `result`: final user-facing synthesis containing concrete findings, outcomes, and any unresolved gaps.
 
 ## Reliability and Repair
 

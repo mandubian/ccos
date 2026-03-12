@@ -12,7 +12,7 @@ use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::runtime::session_tracer::{EvidenceMode, SessionTracer};
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tool_call_processor::ToolCallProcessor;
-use autonoetic_types::agent::{AdaptationHooks, AgentManifest};
+use autonoetic_types::agent::{AdaptationHooks, AgentManifest, Middleware};
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosurePolicy;
 use std::fs;
@@ -25,6 +25,12 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 const FOUNDATION_INSTRUCTIONS: &str = include_str!("foundation_instructions.md");
+
+#[derive(Debug, Clone, Default)]
+struct SchemaValidation {
+    valid: bool,
+    messages: Vec<String>,
+}
 
 pub(crate) fn compose_system_instructions(agent_instructions: &str) -> String {
     let trimmed = agent_instructions.trim();
@@ -53,10 +59,12 @@ pub struct AgentExecutor {
     pub turn_counter: u64,
     /// When set, passed to tool execution (e.g. agent.install approval policy).
     pub config: Option<Arc<GatewayConfig>>,
-    /// Deterministic pipeline hooks from adaptation overlays.
+    /// Deterministic pipeline hooks from adaptation overlays (legacy).
     pub adaptation_hooks: AdaptationHooks,
     /// Asset changes from adaptation overlays, to be projected into the sandbox.
     pub adaptation_assets: Vec<autonoetic_types::agent::AssetChange>,
+    /// Middleware hooks declared in the agent manifest.
+    pub middleware: Middleware,
 }
 
 impl AgentExecutor {
@@ -82,6 +90,7 @@ impl AgentExecutor {
             config: None,
             adaptation_hooks: AdaptationHooks::default(),
             adaptation_assets: Vec::new(),
+            middleware: Middleware::default(),
         }
     }
 
@@ -115,6 +124,11 @@ impl AgentExecutor {
         assets: Vec<autonoetic_types::agent::AssetChange>,
     ) -> Self {
         self.adaptation_assets = assets;
+        self
+    }
+
+    pub fn with_middleware(mut self, middleware: Middleware) -> Self {
+        self.middleware = middleware;
         self
     }
 
@@ -329,7 +343,10 @@ impl AgentExecutor {
             };
 
             // --- Pre-process hook: transform input before LLM call ---
-            let req = if let Some(ref pre_hook) = self.adaptation_hooks.pre_process {
+            // Middleware from manifest takes precedence over adaptation hooks
+            let pre_hook = self.middleware.pre_process.as_ref()
+                .or(self.adaptation_hooks.pre_process.as_ref());
+            let req = if let Some(pre_hook) = pre_hook {
                 self.apply_pre_process_hook(
                     req,
                     pre_hook,
@@ -378,7 +395,10 @@ impl AgentExecutor {
             };
 
             // --- Post-process hook: transform output after LLM call ---
-            let response = if let Some(ref post_hook) = self.adaptation_hooks.post_process {
+            // Middleware from manifest takes precedence over adaptation hooks
+            let post_hook = self.middleware.post_process.as_ref()
+                .or(self.adaptation_hooks.post_process.as_ref());
+            let response = if let Some(post_hook) = post_hook {
                 self.apply_post_process_hook(
                     response,
                     post_hook,
@@ -390,6 +410,8 @@ impl AgentExecutor {
             } else {
                 response
             };
+
+            self.log_output_schema_validation(&response.text, &mut tracer);
 
             // Extract new artifacts from response for logging
             let new_artifacts = extract_artifacts_from_text(&response.text);
@@ -485,6 +507,28 @@ impl AgentExecutor {
         }
 
         Ok(latest_assistant_text.map(|t| disclosure_state.filter_reply(&t)))
+    }
+
+    fn log_output_schema_validation(&self, output_text: &str, tracer: &mut SessionTracer) {
+        let Some(returns_schema) = self
+            .manifest
+            .io
+            .as_ref()
+            .and_then(|io| io.returns.as_ref())
+        else {
+            return;
+        };
+
+        let validation = validate_against_schema(output_text, returns_schema);
+        let _ = tracer.log_event(
+            "agent.process",
+            "output_schema_validation",
+            autonoetic_types::causal_chain::EntryStatus::Success,
+            Some(serde_json::json!({
+                "valid": validation.valid,
+                "messages": validation.messages,
+            })),
+        );
     }
 
     /// Executes the pre-process hook script in a sandbox.
@@ -639,6 +683,60 @@ impl AgentExecutor {
     }
 }
 
+/// Lightweight schema validation: checks required fields and basic type hints.
+fn validate_against_schema(input: &str, schema: &serde_json::Value) -> SchemaValidation {
+    let mut validation = SchemaValidation {
+        valid: true,
+        messages: Vec::new(),
+    };
+
+    let parsed_input: serde_json::Value = match serde_json::from_str(input) {
+        Ok(v) => v,
+        Err(_) => {
+            validation.valid = false;
+            validation
+                .messages
+                .push("Output is not valid JSON".to_string());
+            return validation;
+        }
+    };
+
+    if let Some(expected_type) = schema.get("type").and_then(|t| t.as_str()) {
+        let type_matches = match expected_type {
+            "object" => parsed_input.is_object(),
+            "array" => parsed_input.is_array(),
+            "string" => parsed_input.is_string(),
+            "number" => parsed_input.is_number(),
+            "boolean" => parsed_input.is_boolean(),
+            _ => true,
+        };
+        if !type_matches {
+            validation.valid = false;
+            validation.messages.push(format!(
+                "Type mismatch: expected {}, got {}",
+                expected_type, parsed_input
+            ));
+        }
+    }
+
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        if let Some(obj) = parsed_input.as_object() {
+            for field in required {
+                if let Some(field_name) = field.as_str() {
+                    if !obj.contains_key(field_name) {
+                        validation.valid = false;
+                        validation
+                            .messages
+                            .push(format!("Missing required field: {}", field_name));
+                    }
+                }
+            }
+        }
+    }
+
+    validation
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,6 +774,8 @@ mod tests {
             background: None,
             disclosure: None,
             adaptation_hooks: None,
+            io: None,
+            middleware: None,
         }
     }
 
@@ -797,6 +897,30 @@ mod tests {
         let registry = crate::runtime::tools::default_registry();
         let meta = registry.extract_metadata("memory.read", "{\"path\": \"secrets.txt\"}");
         assert_eq!(meta.path.as_deref(), Some("secrets.txt"));
+    }
+
+    #[test]
+    fn test_validate_output_schema_valid_json_input() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["findings", "summary"]
+        });
+        let output = r#"{"findings":["fact1"],"summary":"ok"}"#;
+        let result = validate_against_schema(output, &schema);
+        assert!(result.valid);
+        assert!(result.messages.is_empty());
+    }
+
+    #[test]
+    fn test_validate_output_schema_non_json_input() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["findings"]
+        });
+        let output = "plain text response";
+        let result = validate_against_schema(output, &schema);
+        assert!(!result.valid);
+        assert!(result.messages.iter().any(|m| m.contains("not valid JSON")));
     }
 
     #[tokio::test]

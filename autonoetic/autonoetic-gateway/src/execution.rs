@@ -120,6 +120,34 @@ impl GatewayExecutionService {
                 agent_id,
                 selected_adaptation_ids.as_deref(),
             )?;
+
+            // Validate spawn input against target agent's accepts schema (informational only)
+            if let Some(ref io_schema) = loaded.manifest.io {
+                if let Some(ref accepts) = io_schema.accepts {
+                    let validation = validate_against_schema(message, accepts);
+                    tracing::info!(
+                        agent_id = agent_id,
+                        valid = validation.valid,
+                        issues = ?validation.issues,
+                        "Input schema validation"
+                    );
+                    if let Err(error) = log_input_schema_validation_to_gateway(
+                        self.config.as_ref(),
+                        session_id,
+                        source_agent_id,
+                        agent_id,
+                        message,
+                        &validation,
+                    ) {
+                        tracing::warn!(
+                            error = %error,
+                            agent_id = agent_id,
+                            session_id = session_id,
+                            "Failed to append input schema validation to gateway causal chain"
+                        );
+                    }
+                }
+            }
             // Determine if background signaling is needed
             let should_signal_background = ingest_event_type.is_some()
                 && loaded
@@ -319,7 +347,16 @@ fn log_nested_spawn_to_gateway(
     let path = logger.path().to_path_buf();
     let entries = match CausalLogger::read_entries(&path) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(err) => {
+            if path.exists() {
+                tracing::warn!(
+                    error = %err,
+                    "Failed to read existing gateway causal entries before input schema log"
+                );
+                return;
+            }
+            Vec::new()
+        }
     };
     let mut seq = entries.last().map(|e| e.event_seq + 1).unwrap_or(1);
     let requested_data = serde_json::json!({
@@ -355,6 +392,49 @@ fn log_nested_spawn_to_gateway(
         EntryStatus::Success,
         Some(completed_data),
     );
+}
+
+fn log_input_schema_validation_to_gateway(
+    config: &GatewayConfig,
+    session_id: &str,
+    source_agent_id: Option<&str>,
+    agent_id: &str,
+    message: &str,
+    validation: &SchemaValidation,
+) -> anyhow::Result<()> {
+    let logger = init_gateway_causal_logger(config)?;
+    let path = logger.path().to_path_buf();
+    let entries = match CausalLogger::read_entries(&path) {
+        Ok(e) => e,
+        Err(err) => {
+            if path.exists() {
+                return Err(err);
+            }
+            Vec::new()
+        }
+    };
+    let seq = entries.last().map(|e| e.event_seq + 1).unwrap_or(1);
+    let payload = serde_json::json!({
+        "agent_id": agent_id,
+        "source_agent_id": source_agent_id,
+        "session_id": session_id,
+        "valid": validation.valid,
+        "issues": validation.issues,
+        "issue_count": validation.issues.len(),
+        "message_len": message.len(),
+        "message_sha256": sha256_hex(message),
+    });
+    logger.log(
+        &gateway_actor_id(),
+        session_id,
+        None,
+        seq,
+        "gateway",
+        "agent.spawn.input_schema_validation",
+        EntryStatus::Success,
+        Some(payload),
+    )?;
+    Ok(())
 }
 
 pub fn gateway_actor_id() -> String {
@@ -488,6 +568,75 @@ fn count_spawned_children_for_source_session(
     Ok(count)
 }
 
+struct SchemaValidation {
+    valid: bool,
+    issues: Vec<String>,
+}
+
+/// Lightweight schema validation: checks required fields and basic type hints.
+/// Logs results but does NOT hard-fail — the LLM can handle minor mismatches.
+fn validate_against_schema(input: &str, schema: &serde_json::Value) -> SchemaValidation {
+    let mut issues = Vec::new();
+
+    // Try to parse input as JSON; if it's plain text, check if schema expects an object
+    let input_value: serde_json::Value = match serde_json::from_str(input) {
+        Ok(v) => v,
+        Err(_) => {
+            // Plain text input — if schema expects an object with required fields, note the mismatch
+            if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
+                if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                    if !required.is_empty() {
+                        issues.push(format!(
+                            "Input is plain text but schema expects object with required fields: {:?}",
+                            required.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()
+                        ));
+                    }
+                }
+            }
+            return SchemaValidation {
+                valid: issues.is_empty(),
+                issues,
+            };
+        }
+    };
+
+    // Check type
+    if let Some(expected_type) = schema.get("type").and_then(|t| t.as_str()) {
+        let actual_type = match &input_value {
+            serde_json::Value::Object(_) => "object",
+            serde_json::Value::Array(_) => "array",
+            serde_json::Value::String(_) => "string",
+            serde_json::Value::Number(_) => "number",
+            serde_json::Value::Bool(_) => "boolean",
+            serde_json::Value::Null => "null",
+        };
+        if actual_type != expected_type {
+            issues.push(format!(
+                "Type mismatch: expected '{}', got '{}'",
+                expected_type, actual_type
+            ));
+        }
+    }
+
+    // Check required fields for objects
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        if let Some(obj) = input_value.as_object() {
+            for field in required {
+                if let Some(field_name) = field.as_str() {
+                    if !obj.contains_key(field_name) {
+                        issues.push(format!("Missing required field: '{}'", field_name));
+                    }
+                }
+            }
+        }
+    }
+
+    SchemaValidation {
+        valid: issues.is_empty(),
+        issues,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +688,96 @@ mod tests {
         let body = std::fs::read_to_string(path).expect("session context file should exist");
         assert!(body.contains("\"last_user_message\": \"hello there\""));
         assert!(body.contains("\"last_assistant_reply\": \"general kenobi\""));
+    }
+
+    #[test]
+    fn test_validate_valid_json_input() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": { "type": "string" }
+            }
+        });
+        let input = r#"{"query": "test search"}"#;
+        let result = validate_against_schema(input, &schema);
+        assert!(result.valid, "Expected valid, got issues: {:?}", result.issues);
+    }
+
+    #[test]
+    fn test_validate_missing_required_field() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["query", "domain"],
+            "properties": {
+                "query": { "type": "string" },
+                "domain": { "type": "string" }
+            }
+        });
+        let input = r#"{"query": "test"}"#;
+        let result = validate_against_schema(input, &schema);
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("domain")));
+    }
+
+    #[test]
+    fn test_validate_type_mismatch() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["count"],
+            "properties": {
+                "count": { "type": "number" }
+            }
+        });
+        let input = r#"["not", "an", "object"]"#;
+        let result = validate_against_schema(input, &schema);
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("Type mismatch")));
+    }
+
+    #[test]
+    fn test_validate_plain_text_input() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": { "type": "string" }
+            }
+        });
+        let input = "just a plain text query";
+        let result = validate_against_schema(input, &schema);
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|i| i.contains("plain text")));
+    }
+
+    #[test]
+    fn test_log_input_schema_validation_to_gateway_writes_event() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let mut config = GatewayConfig::default();
+        config.agents_dir = temp.path().join("agents");
+
+        let validation = SchemaValidation {
+            valid: false,
+            issues: vec!["Missing required field: 'query'".to_string()],
+        };
+        log_input_schema_validation_to_gateway(
+            &config,
+            "session-3",
+            Some("planner.default"),
+            "researcher.default",
+            "plain text query",
+            &validation,
+        )
+        .expect("schema validation event should log");
+
+        let entries = CausalLogger::read_entries(&gateway_causal_path(&config))
+            .expect("causal entries should be readable");
+        let last = entries.last().expect("expected at least one causal entry");
+        assert_eq!(last.action, "agent.spawn.input_schema_validation");
+        assert_eq!(last.session_id, "session-3");
+        assert!(matches!(last.status, EntryStatus::Success));
+        let payload = last.payload.as_ref().expect("payload should be present");
+        assert_eq!(payload["valid"], serde_json::Value::Bool(false));
+        assert_eq!(payload["agent_id"], "researcher.default");
     }
 }
