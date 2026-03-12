@@ -2,7 +2,7 @@ use autonoetic_gateway::llm::{
     CompletionRequest, CompletionResponse, LlmDriver, Message, StopReason, TokenUsage,
 };
 use autonoetic_gateway::runtime::lifecycle::AgentExecutor;
-use autonoetic_types::agent::{AdaptationHooks, AgentIdentity, AgentManifest, RuntimeDeclaration};
+use autonoetic_types::agent::{AgentIdentity, AgentManifest, Middleware, RuntimeDeclaration};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -65,12 +65,11 @@ print(json.dumps(req))
         limits: None,
         background: None,
         disclosure: None,
-        adaptation_hooks: Some(AdaptationHooks {
+        io: None,
+        middleware: Some(Middleware {
             pre_process: Some("python3 pre_hook.py".to_string()),
             post_process: None,
         }),
-        io: None,
-        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {
@@ -83,7 +82,7 @@ print(json.dumps(req))
         agent_dir.to_path_buf(),
         autonoetic_gateway::runtime::tools::default_registry(),
     )
-    .with_adaptation_hooks(manifest.adaptation_hooks.clone().unwrap());
+    .with_middleware(manifest.middleware.clone().unwrap());
 
     let mut history = vec![Message::user("hello")];
     executor.execute_with_history(&mut history).await?;
@@ -132,12 +131,11 @@ print(json.dumps({"skip_llm": True, "assistant_reply": "DET_REPLY"}))
         limits: None,
         background: None,
         disclosure: None,
-        adaptation_hooks: Some(AdaptationHooks {
+        io: None,
+        middleware: Some(Middleware {
             pre_process: Some("python3 skip_hook.py".to_string()),
             post_process: None,
         }),
-        io: None,
-        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {
@@ -150,7 +148,7 @@ print(json.dumps({"skip_llm": True, "assistant_reply": "DET_REPLY"}))
         agent_dir.to_path_buf(),
         autonoetic_gateway::runtime::tools::default_registry(),
     )
-    .with_adaptation_hooks(manifest.adaptation_hooks.clone().unwrap());
+    .with_middleware(manifest.middleware.clone().unwrap());
 
     let mut history = vec![Message::user("hello")];
     let reply = executor.execute_with_history(&mut history).await?;
@@ -205,12 +203,11 @@ print(json.dumps(resp))
         limits: None,
         background: None,
         disclosure: None,
-        adaptation_hooks: Some(AdaptationHooks {
+        io: None,
+        middleware: Some(Middleware {
             pre_process: None,
             post_process: Some("python3 post_hook.py".to_string()),
         }),
-        io: None,
-        middleware: None,
     };
 
     let mock_llm = Arc::new(MockLlm {
@@ -223,7 +220,7 @@ print(json.dumps(resp))
         agent_dir.to_path_buf(),
         autonoetic_gateway::runtime::tools::default_registry(),
     )
-    .with_adaptation_hooks(manifest.adaptation_hooks.clone().unwrap());
+    .with_middleware(manifest.middleware.clone().unwrap());
 
     let mut history = vec![Message::user("hello")];
     let reply = executor.execute_with_history(&mut history).await?;

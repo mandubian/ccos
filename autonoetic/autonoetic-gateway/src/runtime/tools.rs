@@ -2705,7 +2705,6 @@ impl NativeTool for AgentInstallTool {
             limits: None,
             background: background.clone(),
             disclosure: None,
-            adaptation_hooks: None,
             io: None,
             middleware: None,
         };
@@ -3209,7 +3208,7 @@ struct AgentAdaptArgs {
     target_agent_id: String,
     behavior_overlay: String,
     #[serde(default)]
-    asset_changes: Vec<autonoetic_types::agent::AssetChange>,
+    asset_changes: Vec<AdaptAssetChange>,
     #[serde(default)]
     capability_additions: Vec<serde_json::Value>,
     #[serde(default)]
@@ -3219,7 +3218,31 @@ struct AgentAdaptArgs {
     /// Optional deterministic pipeline hooks that run outside the LLM window.
     /// `pre_process` transforms input before LLM; `post_process` transforms output after LLM.
     #[serde(default)]
-    pub adaptation_hooks: Option<autonoetic_types::agent::AdaptationHooks>,
+    pub adaptation_hooks: Option<AdaptationHookSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AdaptAssetAction {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdaptAssetChange {
+    path: String,
+    #[serde(default)]
+    content: String,
+    action: AdaptAssetAction,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AdaptationHookSpec {
+    #[serde(default)]
+    pre_process: Option<String>,
+    #[serde(default)]
+    post_process: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -3346,12 +3369,12 @@ impl NativeTool for AgentAdaptTool {
                 "asset_changes paths must be within skills/* or state/*"
             );
             anyhow::ensure!(
-                change.action == autonoetic_types::agent::AssetAction::Create
-                    || change.action == autonoetic_types::agent::AssetAction::Update
-                    || change.action == autonoetic_types::agent::AssetAction::Delete,
+                change.action == AdaptAssetAction::Create
+                    || change.action == AdaptAssetAction::Update
+                    || change.action == AdaptAssetAction::Delete,
                 "action must be create, update, or delete"
             );
-            if change.action != autonoetic_types::agent::AssetAction::Delete
+            if change.action != AdaptAssetAction::Delete
                 && !change.content.is_empty()
             {
                 anyhow::ensure!(
@@ -3525,7 +3548,6 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
-            adaptation_hooks: None,
             io: None,
             middleware: None,
         }

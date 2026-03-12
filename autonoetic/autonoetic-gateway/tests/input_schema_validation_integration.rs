@@ -42,7 +42,7 @@ io:
     properties:
       query:
         type: string
-adaptation_hooks:
+middleware:
   pre_process: "python3 skip_hook.py"
 ---
 # Schema Validation Agent
@@ -92,7 +92,7 @@ async fn test_spawn_logs_schema_validation_for_mismatched_and_valid_inputs() -> 
         .await?;
 
     assert_eq!(result.session_id, mismatched_session_id);
-    assert_eq!(result.assistant_reply.as_deref(), Some("stub assistant reply"));
+    assert_eq!(result.assistant_reply.as_deref(), Some("deterministic reply"));
 
     let result = execution
         .spawn_agent_once(
@@ -107,7 +107,7 @@ async fn test_spawn_logs_schema_validation_for_mismatched_and_valid_inputs() -> 
         .await?;
 
     assert_eq!(result.session_id, valid_session_id);
-    assert_eq!(result.assistant_reply.as_deref(), Some("stub assistant reply"));
+    assert_eq!(result.assistant_reply.as_deref(), Some("deterministic reply"));
 
     let entries = read_causal_entries(
         &workspace

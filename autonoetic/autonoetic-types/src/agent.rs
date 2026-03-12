@@ -60,22 +60,9 @@ pub struct AgentManifest {
     #[serde(default)]
     pub disclosure: Option<DisclosurePolicy>,
     #[serde(default)]
-    pub adaptation_hooks: Option<AdaptationHooks>,
-    #[serde(default)]
     pub io: Option<AgentIO>,
     #[serde(default)]
     pub middleware: Option<Middleware>,
-}
-
-/// Pipeline hooks extracted from adaptation overlays.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AdaptationHooks {
-    /// Script/command to run on user input before passing to the LLM.
-    #[serde(default)]
-    pub pre_process: Option<String>,
-    /// Script/command to run on LLM output before returning to the user.
-    #[serde(default)]
-    pub post_process: Option<String>,
 }
 
 /// Middleware hooks declared in the agent's own manifest (replaces overlay-based hooks).
@@ -105,21 +92,4 @@ pub struct AgentIO {
 pub struct AgentMeta {
     pub id: String,
     pub dir: std::path::PathBuf,
-}
-
-/// Action to perform on an asset during adaptation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AssetAction {
-    Create,
-    Update,
-    Delete,
-}
-
-/// A specific file change to apply during adaptation overlay.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AssetChange {
-    pub path: String,
-    pub content: String,
-    pub action: AssetAction,
 }
