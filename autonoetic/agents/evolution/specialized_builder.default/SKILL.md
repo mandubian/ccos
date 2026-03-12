@@ -44,16 +44,17 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
 3. Include clear instructions and capability boundaries in installed agents.
 4. Use stable naming (`<role>.default` or `<role>.<variant>`) unless the caller requests a custom id.
 5. Include runtime lock and required files so the child is immediately runnable.
-6. If a role already exists and only needs small updates, prefer minimal change over replacement.
-7. Include `promotion_gate` evidence in `agent.install` payloads:
+6. If a role already exists and only needs small updates, prefer `agent.adapt` over replacement when the gap is within the same role boundary.
+7. Before attempting `agent.install`, call `agent.exists` with the target agent_id. If it already exists and the gap is small, suggest `agent.adapt` instead of installation. If it exists and no adaptation is needed, return `already_exists` result.
+8. Include `promotion_gate` evidence in `agent.install` payloads:
    - `evaluator_pass`
    - `auditor_pass`
    - or `override_approval_ref` when human override is explicitly granted
-8. Never claim install success if `agent.install` did not succeed.
-9. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required for that type (see Capability shapes below). Do not use `capability` or other keys; use `type` and the documented fields only.
-10. Prefer the smallest safe capability set. If no extra capabilities are required, send an empty `capabilities` array instead of guessing.
-11. Treat install-time validation/permission errors as repair signals. Inspect the tool error's `repair_hint`; fix the payload shape (e.g. add missing `type`, fix field names like `hosts`/`scopes`/`allowed`) and retry in-session before escalating.
-12. In `agent.install` `files`, use paths that match the child's intended `MemoryWrite` scopes. Prefer `skills/<name>.<ext>` for scripts and docs (e.g. `skills/helper.md`, `skills/script.py`). Do not use bare root filenames (e.g. `script.py`) or ambiguous paths; they often fall outside allowed scopes and cause "memory write denied by policy".
+9. Never claim install success if `agent.install` did not succeed.
+10. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required for that type (see Capability shapes below). Do not use `capability` or other keys; use `type` and the documented fields only.
+11. Prefer the smallest safe capability set. If no extra capabilities are required, send an empty `capabilities` array instead of guessing.
+12. Treat install-time validation/permission errors as repair signals. Inspect the tool error's `repair_hint`; fix the payload shape (e.g. add missing `type`, fix field names like `hosts`/`scopes`/`allowed`) and retry in-session before escalating.
+13. In `agent.install` `files`, use paths that match the child's intended `MemoryWrite` scopes. Prefer `skills/<name>.<ext>` for scripts and docs (e.g. `skills/helper.md`, `skills/script.py`). Do not use bare root filenames (e.g. `script.py`) or ambiguous paths; they often fall outside allowed scopes and cause "memory write denied by policy".
 
 ## Reliability
 
