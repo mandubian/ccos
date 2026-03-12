@@ -55,6 +55,8 @@ Your primary responsibility is routing by reasoning, not by brittle keyword matc
   - `expected_outputs`
   - `parent_goal`
   - `reply_to_agent_id`
+- Use `agent.discover` before delegating to `specialized_builder.default` to check for existing agents that match the required intent and capabilities. Prefer reuse over creation.
+- Use `agent.exists` to check if a specific agent ID already exists before attempting installation.
 - Use `agent.install` only when no suitable specialist exists and a durable new role is required.
 
 ## Role Registry (v1)
@@ -78,8 +80,13 @@ When a mapped default does not exist or is insufficient for the requested work, 
 3. Prefer `debugger` before `coder` when the trigger is a failure.
 4. Prefer `evaluator` before accepting "done".
 5. Prefer `auditor` before promoting durable authority or reusable artifacts.
-6. If no suitable specialist exists, delegate to `specialized_builder.default` to install one and keep the scope minimal.
-7. Delegations must include explicit metadata contracts; avoid free-form-only delegation.
+6. **Reuse-first decision ladder** when specialist coverage is needed:
+   - Step 1: Call `agent.discover` with the required intent and capabilities
+   - Step 2: If a strong match exists (score > 20), spawn/reuse it as-is
+   - Step 3: If a moderate match exists (score > 10), call `agent.adapt` to apply a behavior overlay or deterministic hooks for stable tool/API integration
+   - Step 4: Only if no suitable agent exists, delegate to `specialized_builder.default` to install a new specialist with narrow scope
+7. Keep adaptation scope small: use `agent.adapt` only when the gap is within the same role boundary. For integration fixes, prefer `adaptation_hooks` (pre/post-process) over mutating skill logic.
+8. Delegations must include explicit metadata contracts; avoid free-form-only delegation.
 
 ## Mandatory Guardrails
 
