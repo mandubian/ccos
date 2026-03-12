@@ -101,6 +101,7 @@ async fn test_openrouter_tool_call() -> anyhow::Result<()> {
         }],
         max_tokens: Some(512),
         temperature: Some(0.0),
+        metadata: None,
     };
 
     let resp = driver.complete(&req).await?;

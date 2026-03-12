@@ -191,6 +191,8 @@ async fn test_generated_skill_approval_and_execution() {
         agents_dir: agents_dir.clone(),
         max_concurrent_spawns: 4,
         max_pending_spawns_per_agent: 10,
+        background_scheduler_enabled: true,
+        background_min_interval_secs: 1,
         ..Default::default()
     };
 
@@ -309,6 +311,8 @@ async fn test_generated_skill_approval_and_execution() {
     );
 
     // Tick scheduler to promote to ApprovalRequest
+    let r_state = std::fs::read_to_string(learner_dir.join("state").join("reevaluation.json")).unwrap();
+    println!("R_STATE: {}", r_state);
     let draft_request = require_single_pending_approval(execution_service.clone(), &config)
         .await
         .unwrap();

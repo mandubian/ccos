@@ -452,6 +452,11 @@ mod tests {
             &self,
             request: &CompletionRequest,
         ) -> anyhow::Result<CompletionResponse> {
+            for msg in &request.messages {
+                if msg.content.contains("sandbox command denied by ShellExec policy") {
+                    anyhow::bail!("mock observed sandbox command denied by ShellExec policy");
+                }
+            }
             if !request.tools.iter().any(|t| t.name == "sandbox.exec") {
                 anyhow::bail!("sandbox.exec not exposed to model");
             }
