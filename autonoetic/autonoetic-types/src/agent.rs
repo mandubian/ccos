@@ -59,6 +59,19 @@ pub struct AgentManifest {
     pub background: Option<BackgroundPolicy>,
     #[serde(default)]
     pub disclosure: Option<DisclosurePolicy>,
+    #[serde(default)]
+    pub adaptation_hooks: Option<AdaptationHooks>,
+}
+
+/// Pipeline hooks extracted from adaptation overlays.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptationHooks {
+    /// Script/command to run on user input before passing to the LLM.
+    #[serde(default)]
+    pub pre_process: Option<String>,
+    /// Script/command to run on LLM output before returning to the user.
+    #[serde(default)]
+    pub post_process: Option<String>,
 }
 
 /// Lightweight metadata about a discovered agent on disk.
@@ -66,4 +79,21 @@ pub struct AgentManifest {
 pub struct AgentMeta {
     pub id: String,
     pub dir: std::path::PathBuf,
+}
+
+/// Action to perform on an asset during adaptation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AssetAction {
+    Create,
+    Update,
+    Delete,
+}
+
+/// A specific file change to apply during adaptation overlay.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetChange {
+    pub path: String,
+    pub content: String,
+    pub action: AssetAction,
 }
