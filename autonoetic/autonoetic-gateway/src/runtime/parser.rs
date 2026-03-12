@@ -100,6 +100,7 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         limits: meta.limits,
         background: meta.background,
         disclosure: meta.disclosure,
+        adaptation_hooks: None,
     }
 }
 

@@ -97,8 +97,16 @@ fn is_install_high_risk(
     for cap in &args.capabilities {
         match cap {
             Capability::ShellExec { .. } => return true,
-            Capability::MemoryWrite { scopes } if scopes.len() > 2 || scopes.iter().any(|s| s == "*" || s.ends_with("/*")) => return true,
-            Capability::NetConnect { hosts } if hosts.is_empty() || hosts.iter().any(|h| h == "*" || h.ends_with(".*")) => return true,
+            Capability::MemoryWrite { scopes }
+                if scopes.len() > 2 || scopes.iter().any(|s| s == "*" || s.ends_with("/*")) =>
+            {
+                return true
+            }
+            Capability::NetConnect { hosts }
+                if hosts.is_empty() || hosts.iter().any(|h| h == "*" || h.ends_with(".*")) =>
+            {
+                return true
+            }
             _ => {}
         }
     }
@@ -107,7 +115,10 @@ fn is_install_high_risk(
         return true;
     }
     // Scheduled action that runs shell or writes files
-    if matches!(scheduled_action, Some(ScheduledAction::SandboxExec { .. }) | Some(ScheduledAction::WriteFile { .. })) {
+    if matches!(
+        scheduled_action,
+        Some(ScheduledAction::SandboxExec { .. }) | Some(ScheduledAction::WriteFile { .. })
+    ) {
         return true;
     }
     false
@@ -2374,6 +2385,7 @@ impl NativeTool for AgentSpawnTool {
                     Some(&source_agent_id),
                     false,
                     None,
+                    args.metadata.as_ref(),
                 )
                 .await
         };
@@ -2522,7 +2534,8 @@ impl NativeTool for AgentInstallTool {
 
                 if let Some(request_id) = install_approval_ref {
                     // Validate that this request was approved and is for this install.
-                    let approved_path = crate::scheduler::store::approved_approvals_dir(cfg).join(format!("{request_id}.json"));
+                    let approved_path = crate::scheduler::store::approved_approvals_dir(cfg)
+                        .join(format!("{request_id}.json"));
                     if !approved_path.exists() {
                         return Err(tagged::Tagged::validation(anyhow::anyhow!(
                             "install_approval_ref '{}' not found in approved approvals; install must be approved first",
@@ -2573,7 +2586,8 @@ impl NativeTool for AgentInstallTool {
                         reason: Some("agent.install requires human approval".to_string()),
                         evidence_ref: None,
                     };
-                    let pending_path = crate::scheduler::store::pending_approvals_dir(cfg).join(format!("{request_id}.json"));
+                    let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
+                        .join(format!("{request_id}.json"));
                     std::fs::create_dir_all(pending_path.parent().unwrap())?;
                     crate::scheduler::store::write_json_file(&pending_path, &request)?;
                     return Ok(serde_json::json!({
@@ -2691,6 +2705,7 @@ impl NativeTool for AgentInstallTool {
             limits: None,
             background: background.clone(),
             disclosure: None,
+            adaptation_hooks: None,
         };
 
         let mut install_validation_error: Option<String> = None;
@@ -2766,7 +2781,8 @@ impl NativeTool for AgentInstallTool {
                         }
                         Err(e) => {
                             persist_reevaluation_state(&install_tmp_dir, |state| {
-                                state.last_outcome = Some(format!("install_validation_failed:{}", e));
+                                state.last_outcome =
+                                    Some(format!("install_validation_failed:{}", e));
                             })?;
                             let tool_error: autonoetic_types::tool_error::ToolError = e.into();
                             if !tool_error.is_recoverable() {
@@ -2776,8 +2792,9 @@ impl NativeTool for AgentInstallTool {
                                     tool_error.message
                                 ));
                             }
-                            install_validation_error =
-                                Some(serde_json::to_string(&tool_error).map_err(anyhow::Error::from)?);
+                            install_validation_error = Some(
+                                serde_json::to_string(&tool_error).map_err(anyhow::Error::from)?,
+                            );
                         }
                     }
                 }
@@ -2839,6 +2856,290 @@ impl NativeTool for AgentInstallTool {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentExistsArgs {
+    agent_id: String,
+}
+
+pub struct AgentExistsTool;
+
+impl NativeTool for AgentExistsTool {
+    fn name(&self) -> &'static str {
+        "agent.exists"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Check if an agent with the given ID already exists in the repository. Use this before agent.install to avoid duplicate installation attempts.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "The agent ID to check for existence" }
+                },
+                "required": ["agent_id"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        let args: AgentExistsArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        validate_agent_id(&args.agent_id)?;
+
+        let agents_dir = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+
+        let repo = crate::agent::AgentRepository::new(agents_dir.to_path_buf());
+
+        match repo.get_sync(&args.agent_id) {
+            Ok(_) => Ok(serde_json::json!({
+                "ok": true,
+                "exists": true,
+                "agent_id": args.agent_id,
+                "status": "healthy",
+            })
+            .to_string()),
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("not found") {
+                    Ok(serde_json::json!({
+                        "ok": true,
+                        "exists": false,
+                        "agent_id": args.agent_id,
+                        "status": "not_found",
+                    })
+                    .to_string())
+                } else if error_msg.contains("identity mismatch") {
+                    Ok(serde_json::json!({
+                        "ok": true,
+                        "exists": true,
+                        "agent_id": args.agent_id,
+                        "status": "identity_mismatch",
+                        "error": error_msg,
+                        "message": "Agent directory exists but manifest ID does not match directory name. This agent needs to be fixed before use."
+                    })
+                    .to_string())
+                } else {
+                    Ok(serde_json::json!({
+                        "ok": true,
+                        "exists": true,
+                        "agent_id": args.agent_id,
+                        "status": "load_error",
+                        "error": error_msg,
+                        "message": "Agent exists but cannot be loaded. Check SKILL.md syntax or file permissions."
+                    })
+                    .to_string())
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentDiscoverArgs {
+    intent: String,
+    #[serde(default)]
+    required_capabilities: Vec<String>,
+    #[serde(default)]
+    exclude_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentDiscoveryResult {
+    score: f64,
+    agent_id: String,
+    name: String,
+    description: String,
+    capabilities: Vec<String>,
+    match_reasons: Vec<String>,
+}
+
+pub struct AgentDiscoverTool;
+
+impl NativeTool for AgentDiscoverTool {
+    fn name(&self) -> &'static str {
+        "agent.discover"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Discover existing agents that match the given intent and capabilities. Returns ranked candidates with match scores and reasons. Use this before deciding to install a new agent to prefer reuse over creation.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "intent": { "type": "string", "description": "The task intent or goal to match against agent descriptions" },
+                    "required_capabilities": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of required capability types (e.g., 'ShellExec', 'MemoryWrite', 'NetConnect')"
+                    },
+                    "exclude_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Agent IDs to exclude from results"
+                    }
+                },
+                "required": ["intent"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        let args: AgentDiscoverArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.intent.trim().is_empty(), "intent must not be empty");
+
+        let agents_dir = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+
+        let repo = crate::agent::AgentRepository::new(agents_dir.to_path_buf());
+        let loaded_agents = repo.list_loaded_sync()?;
+
+        let mut results: Vec<AgentDiscoveryResult> = loaded_agents
+            .into_iter()
+            .filter(|agent| !args.exclude_ids.contains(&agent.id().to_string()))
+            .map(|agent| {
+                let mut score = 0.0;
+                let mut match_reasons = Vec::new();
+
+                let description_lower = agent.instructions.to_lowercase();
+                let intent_lower = args.intent.to_lowercase();
+
+                if description_lower.contains(&intent_lower) {
+                    score += 30.0;
+                    match_reasons.push("exact intent match in description".to_string());
+                } else {
+                    let keywords: Vec<String> = intent_lower
+                        .split_whitespace()
+                        .filter(|w| w.len() > 3)
+                        .map(|s| s.to_string())
+                        .collect();
+                    let matched_keywords: Vec<String> = keywords
+                        .iter()
+                        .filter(|k| description_lower.contains(*k))
+                        .cloned()
+                        .collect();
+                    if !matched_keywords.is_empty() {
+                        let keyword_score =
+                            (matched_keywords.len() as f64 / keywords.len() as f64) * 20.0;
+                        score += keyword_score;
+                        match_reasons.push(format!("keyword match: {:?}", matched_keywords));
+                    }
+                }
+
+                let agent_cap_types: Vec<String> = agent
+                    .manifest
+                    .capabilities
+                    .iter()
+                    .map(|c| capability_type_name(c))
+                    .collect();
+
+                for req_cap in &args.required_capabilities {
+                    if agent_cap_types.iter().any(|cap| cap == req_cap) {
+                        score += 15.0;
+                        match_reasons.push(format!("has required capability: {}", req_cap));
+                    }
+                }
+
+                if agent
+                    .manifest
+                    .background
+                    .as_ref()
+                    .map(|b| b.enabled)
+                    .unwrap_or(false)
+                {
+                    score += 5.0;
+                    match_reasons.push("supports background execution".to_string());
+                }
+
+                AgentDiscoveryResult {
+                    score,
+                    agent_id: agent.id().to_string(),
+                    name: agent.manifest.agent.name,
+                    description: agent.manifest.agent.description,
+                    capabilities: agent_cap_types,
+                    match_reasons,
+                }
+            })
+            .filter(|r| r.score > 0.0)
+            .collect();
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "query": {
+                "intent": args.intent,
+                "required_capabilities": args.required_capabilities,
+            },
+            "results": results,
+            "result_count": results.len(),
+        })
+        .to_string())
+    }
+}
+
+fn capability_type_name(cap: &Capability) -> String {
+    match cap {
+        Capability::ToolInvoke { .. } => "ToolInvoke".to_string(),
+        Capability::MemoryRead { .. } => "MemoryRead".to_string(),
+        Capability::MemoryWrite { .. } => "MemoryWrite".to_string(),
+        Capability::MemoryShare { .. } => "MemoryShare".to_string(),
+        Capability::MemorySearch { .. } => "MemorySearch".to_string(),
+        Capability::NetConnect { .. } => "NetConnect".to_string(),
+        Capability::AgentSpawn { .. } => "AgentSpawn".to_string(),
+        Capability::AgentMessage { .. } => "AgentMessage".to_string(),
+        Capability::BackgroundReevaluation { .. } => "BackgroundReevaluation".to_string(),
+        Capability::ShellExec { .. } => "ShellExec".to_string(),
+    }
+}
+
 /// Builds the default registry with the core native tools.
 
 #[derive(Debug, Deserialize)]
@@ -2891,6 +3192,268 @@ fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result
     Ok(DependencyPlan { runtime, packages })
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentAdaptArgs {
+    target_agent_id: String,
+    behavior_overlay: String,
+    #[serde(default)]
+    asset_changes: Vec<autonoetic_types::agent::AssetChange>,
+    #[serde(default)]
+    capability_additions: Vec<serde_json::Value>,
+    #[serde(default)]
+    rationale: String,
+    #[serde(default)]
+    promotion_gate: Option<PromotionGate>,
+    /// Optional deterministic pipeline hooks that run outside the LLM window.
+    /// `pre_process` transforms input before LLM; `post_process` transforms output after LLM.
+    #[serde(default)]
+    pub adaptation_hooks: Option<autonoetic_types::agent::AdaptationHooks>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PromotionGate {
+    #[serde(default)]
+    evaluator_pass: bool,
+    #[serde(default)]
+    auditor_pass: bool,
+    #[serde(default)]
+    override_approval_ref: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdaptationMetadata {
+    compose_mode: String,
+    base_manifest_hash: String,
+    capability_delta: Vec<String>,
+    evidence_refs: Vec<String>,
+    adapted_at: String,
+    adapter_agent_id: String,
+}
+
+pub struct AgentAdaptTool;
+
+impl NativeTool for AgentAdaptTool {
+    fn name(&self) -> &'static str {
+        "agent.adapt"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Adapt an existing agent by applying a behavior overlay and bounded asset changes. Prefer adaptation over installation when the gap is small and within the same role boundary. Uses composition-first semantics with auditable metadata.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target_agent_id": { "type": "string", "description": "The existing agent ID to adapt" },
+                    "behavior_overlay": { "type": "string", "description": "Additional or modified instructions to compose with base agent" },
+                    "asset_changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string" },
+                                "content": { "type": "string" },
+                                "action": { "type": "string", "enum": ["create", "update", "delete"] }
+                            },
+                            "required": ["path", "action"],
+                            "additionalProperties": false
+                        },
+                        "description": "Bounded file changes (max 5 changes, paths must be within skills/* or state/*)"
+                    },
+                    "capability_additions": {
+                        "type": "array",
+                        "items": { "type": "object" },
+                        "description": "Additional capabilities to grant (requires evaluator/auditor approval)"
+                    },
+                    "rationale": { "type": "string", "description": "Why this adaptation is needed" },
+                    "promotion_gate": {
+                        "type": "object",
+                        "properties": {
+                            "evaluator_pass": { "type": "boolean" },
+                            "auditor_pass": { "type": "boolean" },
+                            "override_approval_ref": { "type": "string" }
+                        },
+                        "description": "Approval evidence for capability additions"
+                    },
+                    "adaptation_hooks": {
+                        "type": "object",
+                        "properties": {
+                            "pre_process": { "type": "string", "description": "Script/command to run on user input before passing to the LLM (executed via sandbox.exec outside the LLM window)" },
+                            "post_process": { "type": "string", "description": "Script/command to run on LLM output before returning to the user (executed via sandbox.exec outside the LLM window)" }
+                        },
+                        "description": "Deterministic pipeline hooks for pre/post LLM processing"
+                    }
+                },
+                "required": ["target_agent_id", "behavior_overlay"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        let args: AgentAdaptArgs = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        validate_agent_id(&args.target_agent_id)?;
+        anyhow::ensure!(
+            !args.behavior_overlay.trim().is_empty(),
+            "behavior_overlay must not be empty"
+        );
+        anyhow::ensure!(
+            args.asset_changes.len() <= 5,
+            "asset_changes limited to 5 entries"
+        );
+
+        let agents_dir = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+
+        let repo = crate::agent::AgentRepository::new(agents_dir.to_path_buf());
+        let target_agent = repo.get_sync(&args.target_agent_id)?;
+
+        for change in &args.asset_changes {
+            anyhow::ensure!(
+                change.path.starts_with("skills/") || change.path.starts_with("state/"),
+                "asset_changes paths must be within skills/* or state/*"
+            );
+            anyhow::ensure!(
+                change.action == autonoetic_types::agent::AssetAction::Create
+                    || change.action == autonoetic_types::agent::AssetAction::Update
+                    || change.action == autonoetic_types::agent::AssetAction::Delete,
+                "action must be create, update, or delete"
+            );
+            if change.action != autonoetic_types::agent::AssetAction::Delete
+                && !change.content.is_empty()
+            {
+                anyhow::ensure!(
+                    change.content.len() < 100_000,
+                    "asset content size limited to 100KB"
+                );
+            }
+        }
+
+        let base_manifest_hash = {
+            let content = serde_json::to_string(&target_agent.manifest)?;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        let capability_delta: Vec<String> = args
+            .capability_additions
+            .iter()
+            .filter_map(|c| c.get("type").and_then(|t| t.as_str()))
+            .map(|s| s.to_string())
+            .collect();
+
+        let requires_approval = !capability_delta.is_empty();
+
+        if requires_approval {
+            let has_approval = args
+                .promotion_gate
+                .as_ref()
+                .map(|g| {
+                    let has_override = g
+                        .override_approval_ref
+                        .as_ref()
+                        .map(|r| !r.trim().is_empty())
+                        .unwrap_or(false);
+                    has_override || (g.evaluator_pass && g.auditor_pass)
+                })
+                .unwrap_or(false);
+
+            if !has_approval {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "approval_required": true,
+                    "reason": "capability additions require evaluator/auditor approval",
+                    "target_agent_id": args.target_agent_id,
+                    "capability_delta": capability_delta,
+                    "message": "Submit adaptation with promotion_gate: { evaluator_pass: true, auditor_pass: true } or provide override_approval_ref."
+                })
+                .to_string());
+            }
+        }
+
+        let overlay_dir = agents_dir
+            .join(".gateway")
+            .join("adaptations")
+            .join(&args.target_agent_id);
+        std::fs::create_dir_all(&overlay_dir)?;
+
+        let adaptation_id = uuid::Uuid::new_v4().to_string();
+
+        let adaptation_metadata = AdaptationMetadata {
+            compose_mode: "behavior_overlay".to_string(),
+            base_manifest_hash,
+            capability_delta: capability_delta.clone(),
+            evidence_refs: session_id
+                .map(|s| format!("session:{}", s))
+                .into_iter()
+                .collect(),
+            adapted_at: chrono::Utc::now().to_rfc3339(),
+            adapter_agent_id: manifest.agent.id.clone(),
+        };
+
+        // Composition-only adaptation: record overlays without mutating base agent files.
+        let mut applied_changes: Vec<String> = args
+            .asset_changes
+            .iter()
+            .map(|c| format!("overlay {:?}: {}", c.action, c.path))
+            .collect();
+        applied_changes.push("overlay behavior_overlay: appended".to_string());
+
+        let overlay_path = overlay_dir.join(format!("{}.json", adaptation_id));
+        let mut overlay_data = serde_json::json!({
+            "adaptation_id": adaptation_id,
+            "metadata": adaptation_metadata,
+            "behavior_overlay": args.behavior_overlay,
+            "asset_changes": args.asset_changes,
+            "asset_changes_mode": "overlay_only",
+            "base_mutation": false,
+            "rationale": args.rationale,
+            "applied_at": chrono::Utc::now().to_rfc3339(),
+        });
+
+        if let Some(hooks) = &args.adaptation_hooks {
+            overlay_data["adaptation_hooks"] = serde_json::to_value(hooks)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize adaptation_hooks: {}", e))?;
+        }
+
+        std::fs::write(&overlay_path, serde_json::to_string_pretty(&overlay_data)?)?;
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "status": "adaptation_applied",
+            "target_agent_id": args.target_agent_id,
+            "adaptation_id": adaptation_id,
+            "compose_mode": "behavior_overlay",
+            "base_manifest_hash": adaptation_metadata.base_manifest_hash,
+            "applied_changes": applied_changes,
+            "overlay_path": overlay_path.to_string_lossy().to_string(),
+            "message": format!("Adaptation applied to {} with {} asset changes", args.target_agent_id, args.asset_changes.len())
+        })
+        .to_string())
+    }
+}
+
 pub fn default_registry() -> NativeToolRegistry {
     let mut registry = NativeToolRegistry::new();
     registry.register(Box::new(SandboxExecTool));
@@ -2905,6 +3468,9 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(SkillDraftTool));
     registry.register(Box::new(AgentSpawnTool));
     registry.register(Box::new(AgentInstallTool));
+    registry.register(Box::new(AgentExistsTool));
+    registry.register(Box::new(AgentDiscoverTool));
+    registry.register(Box::new(AgentAdaptTool));
     registry
 }
 
@@ -2947,6 +3513,7 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
+            adaptation_hooks: None,
         }
     }
 
@@ -3034,9 +3601,12 @@ mod tests {
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
-        assert_eq!(defs_spawn.len(), 2);
+        assert_eq!(defs_spawn.len(), 5);
         assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
         assert!(defs_spawn.iter().any(|d| d.name == "agent.install"));
+        assert!(defs_spawn.iter().any(|d| d.name == "agent.exists"));
+        assert!(defs_spawn.iter().any(|d| d.name == "agent.discover"));
+        assert!(defs_spawn.iter().any(|d| d.name == "agent.adapt"));
 
         let manifest_net = test_manifest(vec![Capability::NetConnect {
             hosts: vec!["*".to_string()],
@@ -4302,10 +4872,9 @@ dependencies:
                 None,
             )
             .expect_err("install should fail when files overwrite generated SKILL.md");
-        assert!(
-            err.to_string()
-                .contains("files may not overwrite generated SKILL.md or runtime.lock")
-        );
+        assert!(err
+            .to_string()
+            .contains("files may not overwrite generated SKILL.md or runtime.lock"));
         assert!(
             !agents_dir.join("broken_worker").exists(),
             "failed install should not leave partial child directory"
@@ -4353,7 +4922,9 @@ dependencies:
             .expect_err("malformed capabilities should yield validation/parse error");
         let err_str = err.to_string();
         assert!(
-            err_str.contains("agent.install") || err_str.contains("Invalid JSON") || err_str.contains("capabilities"),
+            err_str.contains("agent.install")
+                || err_str.contains("Invalid JSON")
+                || err_str.contains("capabilities"),
             "error should mention agent.install or invalid JSON or capabilities: {}",
             err_str
         );
@@ -4450,5 +5021,810 @@ dependencies:
             !reevaluation.contains("install_validation"),
             "validation should not have run"
         );
+    }
+
+    #[test]
+    fn test_agent_exists_returns_true_for_existing_agent() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let existing_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(existing_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist for gathering information"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist for gathering information"
+    capabilities: []
+---
+# Researcher
+Research agent instructions.
+"#;
+        std::fs::write(existing_agent_dir.join("SKILL.md"), skill_md)
+            .expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "agent_id": "researcher.default"
+        });
+
+        let result = registry
+            .execute(
+                "agent.exists",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.exists should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(parsed.get("exists").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            parsed.get("agent_id").and_then(|v| v.as_str()),
+            Some("researcher.default")
+        );
+    }
+
+    #[test]
+    fn test_agent_exists_returns_false_for_nonexistent_agent() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "agent_id": "nonexistent.agent"
+        });
+
+        let result = registry
+            .execute(
+                "agent.exists",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.exists should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(parsed.get("exists").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("not_found")
+        );
+    }
+
+    #[test]
+    fn test_agent_exists_reports_identity_mismatch() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let mismatched_agent_dir = agents_dir.join("dir_name");
+        std::fs::create_dir_all(mismatched_agent_dir.join("state"))
+            .expect("agent dir should create");
+        let skill_md = r#"---
+name: "different_id"
+description: "Agent with mismatched ID"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "different_id"
+      name: "different_id"
+      description: "Agent with mismatched ID"
+    capabilities: []
+---
+# different_id
+Instructions.
+"#;
+        std::fs::write(mismatched_agent_dir.join("SKILL.md"), skill_md)
+            .expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "agent_id": "dir_name"
+        });
+
+        let result = registry
+            .execute(
+                "agent.exists",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.exists should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(parsed.get("exists").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("identity_mismatch")
+        );
+        assert!(parsed
+            .get("message")
+            .map(|m| m.as_str().unwrap().contains("needs to be fixed"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn test_agent_discover_returns_ranked_candidates() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let create_agent = |id: &str, desc: &str, caps: &[&str]| {
+            let agent_dir = agents_dir.join(id);
+            std::fs::create_dir_all(agent_dir.join("state")).expect("agent dir should create");
+            let caps_json = caps
+                .iter()
+                .map(|c| match *c {
+                    "ShellExec" => r#"{"type":"ShellExec","patterns":["*"]}"#.to_string(),
+                    "MemoryWrite" => r#"{"type":"MemoryWrite","scopes":["*"]}"#.to_string(),
+                    _ => format!(r#"{{"type":"ToolInvoke","allowed":["{}"]}}"#, c),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let skill_md = format!(
+                r#"---
+name: "{}"
+description: "{}"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "{}"
+      name: "{}"
+      description: "{}"
+    capabilities: [{}]
+---
+# {}
+{} agent instructions.
+"#,
+                id, desc, id, id, desc, caps_json, id, desc
+            );
+            std::fs::write(agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+        };
+
+        create_agent(
+            "researcher.default",
+            "Web research and information gathering specialist",
+            &["ToolInvoke"],
+        );
+        create_agent(
+            "coder.default",
+            "Code generation and software development specialist with ShellExec",
+            &["ShellExec", "MemoryWrite"],
+        );
+        create_agent(
+            "auditor.default",
+            "Security audit and compliance specialist",
+            &["MemoryRead"],
+        );
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "intent": "code generation",
+            "required_capabilities": ["ShellExec"],
+            "exclude_ids": []
+        });
+
+        let result = registry
+            .execute(
+                "agent.discover",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.discover should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let results = parsed
+            .get("results")
+            .expect("results should exist")
+            .as_array()
+            .expect("results should be array");
+        assert!(
+            !results.is_empty(),
+            "should find at least one matching agent"
+        );
+
+        let first_result = results.get(0).expect("first result should exist");
+        assert!(
+            first_result
+                .get("score")
+                .expect("score should exist")
+                .as_f64()
+                .expect("score should be number")
+                > 0.0
+        );
+        assert_eq!(
+            first_result.get("agent_id").and_then(|v| v.as_str()),
+            Some("coder.default")
+        );
+        assert!(
+            first_result
+                .get("match_reasons")
+                .expect("match_reasons should exist")
+                .as_array()
+                .expect("match_reasons should be array")
+                .is_empty()
+                == false
+        );
+    }
+
+    #[test]
+    fn test_agent_discover_exclude_ids() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let create_agent = |id: &str, desc: &str| {
+            let agent_dir = agents_dir.join(id);
+            std::fs::create_dir_all(agent_dir.join("state")).expect("agent dir should create");
+            let skill_md = format!(
+                r#"---
+name: "{}"
+description: "{}"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "{}"
+      name: "{}"
+      description: "{}"
+    capabilities: []
+---
+# {}
+{} agent instructions.
+"#,
+                id, desc, id, id, desc, id, desc
+            );
+            std::fs::write(agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+        };
+
+        create_agent("researcher.default", "Research and web scraping specialist");
+        create_agent("coder.default", "Code generation specialist");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "intent": "specialist",
+            "required_capabilities": [],
+            "exclude_ids": ["researcher.default"]
+        });
+
+        let result = registry
+            .execute(
+                "agent.discover",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.discover should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        let results = parsed
+            .get("results")
+            .expect("results should exist")
+            .as_array()
+            .expect("results should be array");
+
+        let agent_ids: Vec<&str> = results
+            .iter()
+            .map(|r| r.get("agent_id").unwrap().as_str().unwrap())
+            .collect();
+        assert!(
+            !agent_ids.contains(&"researcher.default"),
+            "excluded agent should not appear in results"
+        );
+        assert!(
+            agent_ids.contains(&"coder.default"),
+            "non-excluded agent should appear in results"
+        );
+    }
+
+    #[test]
+    fn test_agent_adapt_successful_overlay() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let target_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(target_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist for gathering information"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist for gathering information"
+    capabilities: []
+---
+# Researcher
+Research agent instructions.
+"#;
+        std::fs::write(target_agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "target_agent_id": "researcher.default",
+            "behavior_overlay": "Additional focus on financial research and SEC filings analysis.",
+            "asset_changes": [
+                {
+                    "path": "skills/financial_research.md",
+                    "content": "Guide for financial research tasks.",
+                    "action": "create"
+                }
+            ],
+            "rationale": "Need specialized financial research capabilities"
+        });
+
+        let result = registry
+            .execute(
+                "agent.adapt",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                Some("test-session-123"),
+                None,
+                None,
+            )
+            .expect("agent.adapt should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("adaptation_applied")
+        );
+        assert_eq!(
+            parsed.get("target_agent_id").and_then(|v| v.as_str()),
+            Some("researcher.default")
+        );
+        assert!(parsed.get("adaptation_id").is_some());
+        assert_eq!(
+            parsed.get("compose_mode").and_then(|v| v.as_str()),
+            Some("behavior_overlay")
+        );
+
+        let overlay_dir = agents_dir
+            .join(".gateway")
+            .join("adaptations")
+            .join("researcher.default");
+        assert!(
+            overlay_dir.exists(),
+            "adaptations directory should be created"
+        );
+        let overlay_files: Vec<_> = std::fs::read_dir(&overlay_dir)
+            .expect("should read dir")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            !overlay_files.is_empty(),
+            "at least one overlay file should exist"
+        );
+
+        assert!(
+            !target_agent_dir
+                .join("skills/financial_research.md")
+                .exists(),
+            "composition-only adaptation should not mutate base files"
+        );
+        assert!(
+            !target_agent_dir.join(".behavior_overlay.md").exists(),
+            "composition-only adaptation should not write root overlay files"
+        );
+
+        let overlay_path = overlay_files[0].path();
+        let overlay_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&overlay_path).expect("overlay should read"),
+        )
+        .expect("overlay should be valid json");
+        assert_eq!(
+            overlay_json
+                .get("asset_changes_mode")
+                .and_then(|v| v.as_str()),
+            Some("overlay_only")
+        );
+        assert_eq!(
+            overlay_json.get("base_mutation").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert!(
+            overlay_json
+                .get("behavior_overlay")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("financial research"),
+            "overlay metadata should contain behavior content"
+        );
+    }
+
+    #[test]
+    fn test_agent_adapt_requires_approval_for_capabilities() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let target_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(target_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist"
+    capabilities: []
+---
+# Researcher
+Instructions.
+"#;
+        std::fs::write(target_agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "target_agent_id": "researcher.default",
+            "behavior_overlay": "Extended capabilities.",
+            "capability_additions": [
+                { "type": "ShellExec", "patterns": ["*"] }
+            ],
+            "rationale": "Need shell execution"
+        });
+
+        let result = registry
+            .execute(
+                "agent.adapt",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.adapt should return approval required");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            parsed.get("approval_required").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed.get("reason").and_then(|v| v.as_str()),
+            Some("capability additions require evaluator/auditor approval")
+        );
+    }
+
+    #[test]
+    fn test_agent_adapt_approval_with_promotion_gate_succeeds() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let target_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(target_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist"
+    capabilities: []
+---
+# Researcher
+Instructions.
+"#;
+        std::fs::write(target_agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "target_agent_id": "researcher.default",
+            "behavior_overlay": "Extended capabilities.",
+            "capability_additions": [
+                { "type": "ShellExec", "patterns": ["*"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            },
+            "rationale": "Approved shell execution"
+        });
+
+        let result = registry
+            .execute(
+                "agent.adapt",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect("agent.adapt with approval should succeed");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("adaptation_applied")
+        );
+    }
+
+    #[test]
+    fn test_agent_adapt_rejects_invalid_paths() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let target_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(target_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist"
+    capabilities: []
+---
+# Researcher
+Instructions.
+"#;
+        std::fs::write(target_agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let args = serde_json::json!({
+            "target_agent_id": "researcher.default",
+            "behavior_overlay": "Test overlay.",
+            "asset_changes": [
+                {
+                    "path": "/etc/passwd",
+                    "content": "malicious",
+                    "action": "create"
+                }
+            ]
+        });
+
+        let err = registry
+            .execute(
+                "agent.adapt",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect_err("should reject invalid path");
+
+        assert!(err
+            .to_string()
+            .contains("must be within skills/* or state/*"));
+    }
+
+    #[test]
+    fn test_agent_adapt_enforces_change_budget() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let caller_dir = agents_dir.join("planner.default");
+        std::fs::create_dir_all(&caller_dir).expect("caller dir should create");
+
+        let target_agent_dir = agents_dir.join("researcher.default");
+        std::fs::create_dir_all(target_agent_dir.join("state")).expect("agent dir should create");
+        let skill_md = r#"---
+name: "researcher.default"
+description: "Research specialist"
+metadata:
+  autonoetic:
+    version: "1.0"
+    runtime:
+      engine: "autonoetic"
+      gateway_version: "0.1.0"
+      sdk_version: "0.1.0"
+      type: "stateful"
+      sandbox: "bubblewrap"
+      runtime_lock: "runtime.lock"
+    agent:
+      id: "researcher.default"
+      name: "researcher.default"
+      description: "Research specialist"
+    capabilities: []
+---
+# Researcher
+Instructions.
+"#;
+        std::fs::write(target_agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let registry = default_registry();
+
+        let mut asset_changes = Vec::new();
+        for i in 0..6 {
+            asset_changes.push(serde_json::json!({
+                "path": format!("skills/file{}.md", i),
+                "content": "content",
+                "action": "create"
+            }));
+        }
+
+        let args = serde_json::json!({
+            "target_agent_id": "researcher.default",
+            "behavior_overlay": "Test overlay.",
+            "asset_changes": asset_changes
+        });
+
+        let err = registry
+            .execute(
+                "agent.adapt",
+                &manifest,
+                &policy,
+                &caller_dir,
+                None,
+                &args.to_string(),
+                None,
+                None,
+                None,
+            )
+            .expect_err("should reject too many changes");
+
+        assert!(err.to_string().contains("limited to 5 entries"));
     }
 }

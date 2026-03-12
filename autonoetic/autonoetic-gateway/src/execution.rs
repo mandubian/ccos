@@ -1,11 +1,11 @@
 //! Shared gateway execution service for ingress and scheduler-driven runs.
 
+use crate::agent::AgentRepository;
 use crate::causal_chain::CausalLogger;
 use crate::llm::{build_driver, Message};
 use crate::runtime::lifecycle::{compose_system_instructions, AgentExecutor};
 use crate::runtime::reevaluation_state::execute_scheduled_action;
 use crate::runtime::session_context::SessionContext;
-use crate::agent::AgentRepository;
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
@@ -56,6 +56,7 @@ impl GatewayExecutionService {
         source_agent_id: Option<&str>,
         is_message: bool,
         ingest_event_type: Option<&str>,
+        metadata: Option<&serde_json::Value>,
     ) -> anyhow::Result<SpawnResult> {
         let span = tracing::info_span!(
             "spawn_agent_once",
@@ -114,7 +115,11 @@ impl GatewayExecutionService {
                 }
             }
 
-            let loaded = repo.get_sync(agent_id)?;
+            let selected_adaptation_ids = extract_selected_adaptation_ids(metadata);
+            let loaded = repo.get_sync_with_adaptations(
+                agent_id,
+                selected_adaptation_ids.as_deref(),
+            )?;
             // Determine if background signaling is needed
             let should_signal_background = ingest_event_type.is_some()
                 && loaded
@@ -149,8 +154,10 @@ impl GatewayExecutionService {
             )
             .with_gateway_dir(self.config.agents_dir.join(".gateway"))
             .with_config(self.config.clone())
+            .with_adaptation_hooks(loaded.adaptation_hooks)
+            .with_adaptation_assets(loaded.adaptation_assets)
             .with_initial_user_message(message.to_string())
-                .with_session_id(session_id.to_string());
+            .with_session_id(session_id.to_string());
             let mut history = build_initial_history(
                 &runtime.agent_dir,
                 &runtime.instructions,
@@ -281,6 +288,18 @@ impl GatewayExecutionService {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
+}
+
+fn extract_selected_adaptation_ids(metadata: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    let value = metadata?;
+    let arr = value.get("selected_adaptation_ids")?.as_array()?;
+    let ids: Vec<String> = arr
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some(ids)
 }
 
 /// Logs agent.spawn.requested and agent.spawn.completed to the gateway causal chain for nested

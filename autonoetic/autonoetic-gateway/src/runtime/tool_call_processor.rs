@@ -3,12 +3,12 @@
 //! Handles tool execution, disclosure tracking, and secret store integration.
 //! Returns structured error responses for recoverable failures instead of aborting.
 
+use crate::llm::ToolCall;
 use crate::runtime::disclosure::DisclosureState;
 use crate::runtime::mcp::McpToolRuntime;
 use crate::runtime::session_tracer::SessionTracer;
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tools::NativeToolRegistry;
-use crate::llm::ToolCall;
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosureClass;
@@ -59,7 +59,11 @@ impl<'a> ToolCallProcessor<'a> {
         }
     }
 
-    pub fn with_session_context(mut self, session_id: Option<String>, turn_id: Option<String>) -> Self {
+    pub fn with_session_context(
+        mut self,
+        session_id: Option<String>,
+        turn_id: Option<String>,
+    ) -> Self {
         self.session_id = session_id;
         self.turn_id = turn_id;
         self
@@ -76,9 +80,9 @@ impl<'a> ToolCallProcessor<'a> {
         agent_dir: &Path,
         gateway_dir: Option<&Path>,
         tracer: &mut SessionTracer,
-     ) -> anyhow::Result<(bool, Vec<(String, String, String)>)> {
-         let mut results = Vec::with_capacity(tool_calls.len());
-         let mut had_any_success = false;
+    ) -> anyhow::Result<(bool, Vec<(String, String, String)>)> {
+        let mut results = Vec::with_capacity(tool_calls.len());
+        let mut had_any_success = false;
 
         for tc in tool_calls {
             tracer.log_tool_requested(&tc.name, &tc.arguments)?;
@@ -89,17 +93,17 @@ impl<'a> ToolCallProcessor<'a> {
                     // Success - log and continue
                     self.log_memory_tool_event(tracer, &tc.name, &res);
                     tracer.log_tool_completed(&tc.name, &res)?;
-                     had_any_success = true;
-                     res
+                    had_any_success = true;
+                    res
                 }
-                 Err(e) => {
+                Err(e) => {
                     // Convert to structured error
                     let tool_error: ToolError = e.into();
-                    
+
                     // Log the failure to causal chain - this must succeed
                     // as audit trail integrity is critical for governance
                     self.log_tool_failure(tracer, tc, &tool_error)?;
-                    
+
                     // Fatal errors abort the session
                     if !tool_error.is_recoverable() {
                         return Err(anyhow::anyhow!(
@@ -108,7 +112,7 @@ impl<'a> ToolCallProcessor<'a> {
                             tool_error.message
                         ));
                     }
-                    
+
                     // Recoverable errors are returned as structured JSON
                     let error_json = tool_error.to_json_string();
                     tracer.log_tool_completed(&tc.name, &error_json)?;
@@ -119,7 +123,7 @@ impl<'a> ToolCallProcessor<'a> {
             results.push((tc.id.clone(), tc.name.clone(), result));
         }
 
-         Ok((had_any_success, results))
+        Ok((had_any_success, results))
     }
 
     async fn execute_tool_call(
@@ -152,8 +156,8 @@ impl<'a> ToolCallProcessor<'a> {
                 self.turn_id.as_deref(),
                 self.config,
             )?
-         } else {
-             return Err(anyhow::Error::from(
+        } else {
+            return Err(anyhow::Error::from(
                  autonoetic_types::tool_error::tagged::Tagged::resource(anyhow::anyhow!(
                      "Unknown tool '{}'. Verify the tool name against the available tools list and retry with the correct name.",
                      tc.name
@@ -162,27 +166,22 @@ impl<'a> ToolCallProcessor<'a> {
         };
 
         let tc_meta = self.registry.extract_metadata(tool_name, &tc.arguments);
-        self.disclosure_state.register_result(
-            tool_name,
-            tc_meta.path.as_deref(),
-            &result,
-        );
+        self.disclosure_state
+            .register_result(tool_name, tc_meta.path.as_deref(), &result);
 
         if let Some(store) = &mut self.secret_store {
             let (new_result, extracted_secrets) = store.apply_and_redact(&result)?;
             result = new_result;
             for s in extracted_secrets {
-                self.disclosure_state.register_explicit_taint(
-                    &s,
-                    DisclosureClass::Secret,
-                );
+                self.disclosure_state
+                    .register_explicit_taint(&s, DisclosureClass::Secret);
             }
         }
 
         Ok(result)
     }
 
-     fn log_tool_failure(
+    fn log_tool_failure(
         &self,
         tracer: &mut SessionTracer,
         tc: &ToolCall,
@@ -228,7 +227,7 @@ impl<'a> ToolCallProcessor<'a> {
             "visibility": parsed.get("visibility").cloned(),
         });
 
-       let _ = tracer.log_event(
+        let _ = tracer.log_event(
             "memory",
             action,
             autonoetic_types::causal_chain::EntryStatus::Success,
@@ -263,13 +262,18 @@ mod tests {
                 description: "test".to_string(),
             },
             capabilities: vec![
-                Capability::MemoryRead { scopes: vec!["*".to_string()] },
-                Capability::MemoryWrite { scopes: vec!["*".to_string()] },
+                Capability::MemoryRead {
+                    scopes: vec!["*".to_string()],
+                },
+                Capability::MemoryWrite {
+                    scopes: vec!["*".to_string()],
+                },
             ],
             llm_config: None,
             limits: None,
             background: None,
             disclosure: None,
+            adaptation_hooks: None,
         }
     }
 
@@ -278,7 +282,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let manifest = test_manifest();
         let mut mcp_runtime = crate::runtime::mcp::McpToolRuntime::empty();
-       let registry = default_registry();
+        let registry = default_registry();
         let mut disclosure_state = DisclosureState::default();
 
         let mut processor = ToolCallProcessor::new(
@@ -296,19 +300,29 @@ mod tests {
             arguments: r#"{"id":"","scope":"test","content":"hello"}"#.to_string(),
         }];
 
-         let (_, result) = processor
-             .process_tool_calls(&tool_calls, temp.path(), None, &mut SessionTracer::test_tracer())
-             .await
-             .unwrap();
+        let (_, result) = processor
+            .process_tool_calls(
+                &tool_calls,
+                temp.path(),
+                None,
+                &mut SessionTracer::test_tracer(),
+            )
+            .await
+            .unwrap();
 
-         assert_eq!(result.len(), 1);
-         let (_, _, tool_result) = &result[0];
+        assert_eq!(result.len(), 1);
+        let (_, _, tool_result) = &result[0];
 
         // Should be a structured error JSON, not a panic
         let parsed: serde_json::Value = serde_json::from_str(tool_result).unwrap();
         assert_eq!(parsed.get("ok").unwrap(), false);
         assert_eq!(parsed.get("error_type").unwrap(), "validation");
-        assert!(parsed.get("message").unwrap().as_str().unwrap().contains("must not be empty"));
+        assert!(parsed
+            .get("message")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("must not be empty"));
     }
 
     #[tokio::test]
@@ -316,7 +330,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let manifest = test_manifest();
         let mut mcp_runtime = crate::runtime::mcp::McpToolRuntime::empty();
-       let registry = default_registry();
+        let registry = default_registry();
         let mut disclosure_state = DisclosureState::default();
 
         let mut processor = ToolCallProcessor::new(
@@ -328,24 +342,29 @@ mod tests {
             None,
         );
 
-         // Unknown tool is now recoverable so the agent can self-repair by
-         // retrying with the correct tool name in the next turn.
+        // Unknown tool is now recoverable so the agent can self-repair by
+        // retrying with the correct tool name in the next turn.
         let tool_calls = vec![ToolCall {
             id: "tc1".to_string(),
             name: "unknown.tool".to_string(),
             arguments: "{}".to_string(),
         }];
 
-         let (had_success, results) = processor
-             .process_tool_calls(&tool_calls, temp.path(), None, &mut SessionTracer::test_tracer())
-             .await
-             .expect("unknown tool must not abort session");
+        let (had_success, results) = processor
+            .process_tool_calls(
+                &tool_calls,
+                temp.path(),
+                None,
+                &mut SessionTracer::test_tracer(),
+            )
+            .await
+            .expect("unknown tool must not abort session");
 
-         assert!(!had_success, "unknown tool must not count as success");
-         assert_eq!(results.len(), 1);
-         let parsed: serde_json::Value = serde_json::from_str(&results[0].2).unwrap();
-         assert_eq!(parsed["ok"], false);
-         assert_eq!(parsed["error_type"], "resource");
+        assert!(!had_success, "unknown tool must not count as success");
+        assert_eq!(results.len(), 1);
+        let parsed: serde_json::Value = serde_json::from_str(&results[0].2).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["error_type"], "resource");
     }
 
     #[tokio::test]
@@ -353,7 +372,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let manifest = test_manifest();
         let mut mcp_runtime = crate::runtime::mcp::McpToolRuntime::empty();
-       let registry = default_registry();
+        let registry = default_registry();
         let mut disclosure_state = DisclosureState::default();
 
         let mut processor = ToolCallProcessor::new(
@@ -379,23 +398,28 @@ mod tests {
             },
         ];
 
-         let (_, result) = processor
-             .process_tool_calls(&tool_calls, temp.path(), None, &mut SessionTracer::test_tracer())
-             .await
-             .unwrap();
+        let (_, result) = processor
+            .process_tool_calls(
+                &tool_calls,
+                temp.path(),
+                None,
+                &mut SessionTracer::test_tracer(),
+            )
+            .await
+            .unwrap();
 
-         // Both calls should complete (first with validation error, second with validation error too)
-         assert_eq!(result.len(), 2);
+        // Both calls should complete (first with validation error, second with validation error too)
+        assert_eq!(result.len(), 2);
 
-         // First is validation error for empty id
-         let parsed1: serde_json::Value = serde_json::from_str(&result[0].2).unwrap();
-         assert_eq!(parsed1.get("ok").unwrap(), false);
-         assert_eq!(parsed1.get("error_type").unwrap(), "validation");
+        // First is validation error for empty id
+        let parsed1: serde_json::Value = serde_json::from_str(&result[0].2).unwrap();
+        assert_eq!(parsed1.get("ok").unwrap(), false);
+        assert_eq!(parsed1.get("error_type").unwrap(), "validation");
 
-         // Second is validation error for missing gateway_dir
-         let parsed2: serde_json::Value = serde_json::from_str(&result[1].2).unwrap();
-         assert_eq!(parsed2.get("ok").unwrap(), false);
-         assert_eq!(parsed2.get("error_type").unwrap(), "validation");
+        // Second is validation error for missing gateway_dir
+        let parsed2: serde_json::Value = serde_json::from_str(&result[1].2).unwrap();
+        assert_eq!(parsed2.get("ok").unwrap(), false);
+        assert_eq!(parsed2.get("error_type").unwrap(), "validation");
     }
 
     #[tokio::test]
@@ -403,7 +427,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let gw_dir = temp.path().join("gateway");
         std::fs::create_dir_all(&gw_dir).unwrap();
-        
+
         let manifest = test_manifest();
         let mut mcp_runtime = crate::runtime::mcp::McpToolRuntime::empty();
         let registry = default_registry();
@@ -426,19 +450,27 @@ mod tests {
         }];
 
         let (had_success_turn1, result_turn1) = processor
-            .process_tool_calls(&tool_calls_turn1, temp.path(), Some(gw_dir.as_path()), &mut SessionTracer::test_tracer())
+            .process_tool_calls(
+                &tool_calls_turn1,
+                temp.path(),
+                Some(gw_dir.as_path()),
+                &mut SessionTracer::test_tracer(),
+            )
             .await
             .unwrap();
 
         assert_eq!(result_turn1.len(), 1);
-        
-        assert!(!had_success_turn1, "failed tool call must not count as success");
+
+        assert!(
+            !had_success_turn1,
+            "failed tool call must not count as success"
+        );
         // Parse the error response
         let parsed_error: serde_json::Value = serde_json::from_str(&result_turn1[0].2).unwrap();
         assert_eq!(parsed_error.get("ok").unwrap(), false);
         assert_eq!(parsed_error.get("error_type").unwrap(), "validation");
         assert!(parsed_error.get("repair_hint").is_some());
-        
+
         // Extract the repair hint for the agent to use
         let repair_hint = parsed_error.get("repair_hint").unwrap().as_str().unwrap();
         assert!(repair_hint.contains("id") || repair_hint.contains("field"));
@@ -447,17 +479,26 @@ mod tests {
         let tool_calls_turn2 = vec![ToolCall {
             id: "tc2".to_string(),
             name: "memory.remember".to_string(),
-            arguments: r#"{"id":"valid-id-123","scope":"test","content":"hello world"}"#.to_string(),
+            arguments: r#"{"id":"valid-id-123","scope":"test","content":"hello world"}"#
+                .to_string(),
         }];
 
         let (had_success_turn2, result_turn2) = processor
-            .process_tool_calls(&tool_calls_turn2, temp.path(), Some(gw_dir.as_path()), &mut SessionTracer::test_tracer())
+            .process_tool_calls(
+                &tool_calls_turn2,
+                temp.path(),
+                Some(gw_dir.as_path()),
+                &mut SessionTracer::test_tracer(),
+            )
             .await
             .unwrap();
 
         assert_eq!(result_turn2.len(), 1);
-        assert!(had_success_turn2, "successful tool call must set had_any_success");
-        
+        assert!(
+            had_success_turn2,
+            "successful tool call must set had_any_success"
+        );
+
         // This time it should succeed
         let parsed_success: serde_json::Value = serde_json::from_str(&result_turn2[0].2).unwrap();
         assert_eq!(parsed_success.get("ok").unwrap(), true);
@@ -466,13 +507,31 @@ mod tests {
 
     #[test]
     fn test_canonical_tool_name_aliases() {
-        assert_eq!(ToolCallProcessor::canonical_tool_name("spawn"), "agent.spawn");
-        assert_eq!(ToolCallProcessor::canonical_tool_name("install"), "agent.install");
-        assert_eq!(ToolCallProcessor::canonical_tool_name("message"), "agent.message");
-        assert_eq!(ToolCallProcessor::canonical_tool_name("search"), "web.search");
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("spawn"),
+            "agent.spawn"
+        );
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("install"),
+            "agent.install"
+        );
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("message"),
+            "agent.message"
+        );
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("search"),
+            "web.search"
+        );
         assert_eq!(ToolCallProcessor::canonical_tool_name("fetch"), "web.fetch");
-        assert_eq!(ToolCallProcessor::canonical_tool_name("agent.spawn"), "agent.spawn");
-        assert_eq!(ToolCallProcessor::canonical_tool_name("web.search"), "web.search");
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("agent.spawn"),
+            "agent.spawn"
+        );
+        assert_eq!(
+            ToolCallProcessor::canonical_tool_name("web.search"),
+            "web.search"
+        );
     }
 
     #[test]

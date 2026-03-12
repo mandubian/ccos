@@ -12,10 +12,12 @@ use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::runtime::session_tracer::{EvidenceMode, SessionTracer};
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tool_call_processor::ToolCallProcessor;
-use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::agent::{AdaptationHooks, AgentManifest};
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosurePolicy;
-use std::path::PathBuf;
+use std::fs;
+use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -51,6 +53,10 @@ pub struct AgentExecutor {
     pub turn_counter: u64,
     /// When set, passed to tool execution (e.g. agent.install approval policy).
     pub config: Option<Arc<GatewayConfig>>,
+    /// Deterministic pipeline hooks from adaptation overlays.
+    pub adaptation_hooks: AdaptationHooks,
+    /// Asset changes from adaptation overlays, to be projected into the sandbox.
+    pub adaptation_assets: Vec<autonoetic_types::agent::AssetChange>,
 }
 
 impl AgentExecutor {
@@ -74,6 +80,8 @@ impl AgentExecutor {
             session_started: false,
             turn_counter: 0,
             config: None,
+            adaptation_hooks: AdaptationHooks::default(),
+            adaptation_assets: Vec::new(),
         }
     }
 
@@ -97,6 +105,19 @@ impl AgentExecutor {
         self
     }
 
+    pub fn with_adaptation_hooks(mut self, hooks: AdaptationHooks) -> Self {
+        self.adaptation_hooks = hooks;
+        self
+    }
+
+    pub fn with_adaptation_assets(
+        mut self,
+        assets: Vec<autonoetic_types::agent::AssetChange>,
+    ) -> Self {
+        self.adaptation_assets = assets;
+        self
+    }
+
     fn ensure_session_id(&mut self) -> String {
         if let Some(id) = &self.session_id {
             return id.clone();
@@ -109,6 +130,71 @@ impl AgentExecutor {
     fn next_turn_id(&mut self) -> String {
         self.turn_counter += 1;
         format!("turn-{:06}", self.turn_counter)
+    }
+
+    /// Creates a temporary projection of the agent directory with adaptation assets applied.
+    /// This is a virtual view (via symlinks) to avoid mutating the base agent.
+    pub fn project_adaptation_assets(&self, session_id: &str) -> anyhow::Result<PathBuf> {
+        let projection_base = if let Some(ref gateway_dir) = self.gateway_dir {
+            gateway_dir
+                .join("sessions")
+                .join(session_id)
+                .join("projection")
+        } else {
+            std::env::temp_dir().join(format!(
+                "autonoetic-projection-{}-{}",
+                self.manifest.agent.id, session_id
+            ))
+        };
+
+        if projection_base.exists() {
+            let _ = fs::remove_dir_all(&projection_base);
+        }
+        fs::create_dir_all(&projection_base)?;
+
+        // Recursively symlink everything from agent_dir
+        self.link_dir_contents(&self.agent_dir, &projection_base)?;
+
+        for change in &self.adaptation_assets {
+            let target_path = projection_base.join(&change.path);
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            match change.action {
+                autonoetic_types::agent::AssetAction::Create
+                | autonoetic_types::agent::AssetAction::Update => {
+                    if target_path.is_symlink() || target_path.exists() {
+                        let _ = fs::remove_file(&target_path);
+                    }
+                    fs::write(&target_path, &change.content)?;
+                }
+                autonoetic_types::agent::AssetAction::Delete => {
+                    if target_path.is_symlink() || target_path.exists() {
+                        let _ = fs::remove_file(&target_path);
+                    }
+                }
+            }
+        }
+
+        Ok(projection_base)
+    }
+
+    pub fn link_dir_contents(&self, src: &Path, dst: &Path) -> anyhow::Result<()> {
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let src_path = entry.path();
+            let dst_path = dst.join(name);
+
+            // Don't link .gateway or other internal metadata if they exist
+            if src_path.file_name().and_then(|s| s.to_str()) == Some(".gateway") {
+                continue;
+            }
+
+            symlink(&src_path, &dst_path)?;
+        }
+        Ok(())
     }
 
     pub fn close_session(&mut self, reason: &str) -> anyhow::Result<()> {
@@ -162,6 +248,13 @@ impl AgentExecutor {
 
         let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
             .with_turn_id(&turn_id);
+
+        // Determine the active agent directory (projected for adaptations, original otherwise)
+        let active_agent_dir = if !self.adaptation_assets.is_empty() {
+            self.project_adaptation_assets(&session_id)?
+        } else {
+            self.agent_dir.clone()
+        };
 
         if !self.session_started {
             let trigger = history
@@ -232,10 +325,71 @@ impl AgentExecutor {
                 tools,
                 max_tokens: None,
                 temperature,
+                metadata: None,
             };
 
-            tracing::debug!("Calling LLM");
-            let response = self.llm.complete(&req).await?;
+            // --- Pre-process hook: transform input before LLM call ---
+            let req = if let Some(ref pre_hook) = self.adaptation_hooks.pre_process {
+                self.apply_pre_process_hook(
+                    req,
+                    pre_hook,
+                    &active_agent_dir,
+                    &session_id,
+                    &turn_id,
+                    &mut tracer,
+                )?
+            } else {
+                req
+            };
+
+            // --- Skip LLM if signaled by pre-process hook ---
+            // The hook can return a response in metadata.assistant_reply and set metadata.skip_llm: true
+            let response = if req
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("skip_llm"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
+                let assistant_reply = req
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("assistant_reply"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                let _ = tracer.log_event(
+                    "agent.process",
+                    "pre_hook_skip_llm",
+                    autonoetic_types::causal_chain::EntryStatus::Success,
+                    None,
+                );
+
+                crate::llm::CompletionResponse {
+                    text: assistant_reply,
+                    tool_calls: vec![],
+                    usage: crate::llm::TokenUsage::default(),
+                    stop_reason: crate::llm::StopReason::EndTurn,
+                }
+            } else {
+                tracing::debug!("Calling LLM");
+                self.llm.complete(&req).await?
+            };
+
+            // --- Post-process hook: transform output after LLM call ---
+            let response = if let Some(ref post_hook) = self.adaptation_hooks.post_process {
+                self.apply_post_process_hook(
+                    response,
+                    post_hook,
+                    &active_agent_dir,
+                    &session_id,
+                    &turn_id,
+                    &mut tracer,
+                )?
+            } else {
+                response
+            };
 
             // Extract new artifacts from response for logging
             let new_artifacts = extract_artifacts_from_text(&response.text);
@@ -288,7 +442,7 @@ impl AgentExecutor {
                     let (had_any_success, results) = processor
                         .process_tool_calls(
                             &response.tool_calls,
-                            &self.agent_dir,
+                            &active_agent_dir,
                             self.gateway_dir.as_deref(),
                             &mut tracer,
                         )
@@ -332,6 +486,157 @@ impl AgentExecutor {
 
         Ok(latest_assistant_text.map(|t| disclosure_state.filter_reply(&t)))
     }
+
+    /// Executes the pre-process hook script in a sandbox.
+    fn apply_pre_process_hook(
+        &self,
+        mut req: crate::llm::CompletionRequest,
+        hook_script: &str,
+        active_agent_dir: &Path,
+        session_id: &str,
+        turn_id: &str,
+        tracer: &mut SessionTracer,
+    ) -> anyhow::Result<crate::llm::CompletionRequest> {
+        let _ = tracer.log_event(
+            "agent.process",
+            "pre_hook_requested",
+            autonoetic_types::causal_chain::EntryStatus::Success,
+            Some(serde_json::json!({ "turn_id": turn_id })),
+        );
+
+        let input_json = serde_json::to_string(&req)?;
+        let output =
+            self.run_hook_sandbox(hook_script, input_json, active_agent_dir, session_id)?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Ok(transformed) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                if let Ok(new_req) =
+                    serde_json::from_value::<crate::llm::CompletionRequest>(transformed.clone())
+                {
+                    req = new_req;
+                } else if let Some(skip) = transformed.get("skip_llm").and_then(|v| v.as_bool()) {
+                    let mut meta = req.metadata.unwrap_or_default();
+                    meta.insert("skip_llm".to_string(), serde_json::Value::Bool(skip));
+                    if let Some(reply) = transformed.get("assistant_reply").and_then(|v| v.as_str())
+                    {
+                        meta.insert(
+                            "assistant_reply".to_string(),
+                            serde_json::Value::String(reply.to_string()),
+                        );
+                    }
+                    req.metadata = Some(meta);
+                }
+                let _ = tracer.log_event(
+                    "agent.process",
+                    "pre_hook_completed",
+                    autonoetic_types::causal_chain::EntryStatus::Success,
+                    None,
+                );
+                Ok(req)
+            } else {
+                let _ = tracer.log_event(
+                    "agent.process",
+                    "pre_hook_failed",
+                    autonoetic_types::causal_chain::EntryStatus::Error,
+                    Some(serde_json::json!({ "error": "Invalid JSON from hook" })),
+                );
+                anyhow::bail!("Pre-process hook returned invalid JSON");
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tracer.log_event(
+                "agent.process",
+                "pre_hook_failed",
+                autonoetic_types::causal_chain::EntryStatus::Error,
+                Some(serde_json::json!({ "error": stderr })),
+            );
+            anyhow::bail!("Pre-process hook failed: {}", stderr);
+        }
+    }
+
+    /// Executes the post-process hook script in a sandbox.
+    fn apply_post_process_hook(
+        &self,
+        mut response: crate::llm::CompletionResponse,
+        hook_script: &str,
+        active_agent_dir: &Path,
+        session_id: &str,
+        turn_id: &str,
+        tracer: &mut SessionTracer,
+    ) -> anyhow::Result<crate::llm::CompletionResponse> {
+        let _ = tracer.log_event(
+            "agent.process",
+            "post_hook_requested",
+            autonoetic_types::causal_chain::EntryStatus::Success,
+            Some(serde_json::json!({ "turn_id": turn_id })),
+        );
+
+        let input_json = serde_json::to_string(&response)?;
+        let output =
+            self.run_hook_sandbox(hook_script, input_json, active_agent_dir, session_id)?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Ok(transformed) = serde_json::from_str::<crate::llm::CompletionResponse>(&stdout)
+            {
+                response = transformed;
+                let _ = tracer.log_event(
+                    "agent.process",
+                    "post_hook_completed",
+                    autonoetic_types::causal_chain::EntryStatus::Success,
+                    None,
+                );
+                Ok(response)
+            } else {
+                let _ = tracer.log_event(
+                    "agent.process",
+                    "post_hook_failed",
+                    autonoetic_types::causal_chain::EntryStatus::Error,
+                    Some(serde_json::json!({ "error": "Invalid JSON from hook" })),
+                );
+                anyhow::bail!("Post-process hook returned invalid JSON");
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tracer.log_event(
+                "agent.process",
+                "post_hook_failed",
+                autonoetic_types::causal_chain::EntryStatus::Error,
+                Some(serde_json::json!({ "error": stderr })),
+            );
+            anyhow::bail!("Post-process hook failed: {}", stderr);
+        }
+    }
+
+    fn run_hook_sandbox(
+        &self,
+        command: &str,
+        stdin_json: String,
+        active_agent_dir: &Path,
+        _session_id: &str,
+    ) -> anyhow::Result<std::process::Output> {
+        use crate::sandbox::{SandboxDriverKind, SandboxRunner};
+        use std::io::Write;
+
+        let driver = SandboxDriverKind::parse(&self.manifest.runtime.sandbox)?;
+        let agent_dir_str = active_agent_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid active_agent_dir"))?;
+
+        let mut runner = SandboxRunner::spawn_with_driver_and_dependencies(
+            driver,
+            agent_dir_str,
+            command,
+            None,
+        )?;
+
+        if let Some(mut stdin) = runner.process.stdin.take() {
+            stdin.write_all(stdin_json.as_bytes())?;
+        }
+
+        runner.process.wait_with_output().map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +675,7 @@ mod tests {
             limits: None,
             background: None,
             disclosure: None,
+            adaptation_hooks: None,
         }
     }
 
