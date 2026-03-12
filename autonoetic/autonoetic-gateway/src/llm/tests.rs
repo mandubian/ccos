@@ -107,6 +107,7 @@ mod tests {
                 tools: vec![search_tool()],
                 max_tokens: None,
                 temperature: None,
+                metadata: None,
             };
             let body = build_payload(&req);
             assert_eq!(body["tools"][0]["type"], "function");
@@ -294,6 +295,7 @@ mod tests {
                 tools: vec![search_tool()],
                 max_tokens: None,
                 temperature: None,
+                metadata: None,
             };
             let body = build_payload(&req);
             // Anthropic uses "input_schema", NOT "parameters"
@@ -464,6 +466,7 @@ mod tests {
                 tools: vec![search_tool()],
                 max_tokens: None,
                 temperature: None,
+                metadata: None,
             };
             let body = build_payload(&req);
             // Gemini wraps tools in functionDeclarations inside a tools array

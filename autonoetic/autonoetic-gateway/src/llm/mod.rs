@@ -22,7 +22,7 @@ mod tests;
 // ---------------------------------------------------------------------------
 
 /// A conversation message role.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     System,
     User,
@@ -47,7 +47,7 @@ impl Role {
 // ---------------------------------------------------------------------------
 
 /// A tool the agent can invoke. Sent to the LLM so it knows what's available.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
@@ -56,7 +56,7 @@ pub struct ToolDefinition {
 }
 
 /// A tool invocation requested by the model in a response.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
     /// Opaque identifier used to match the result back to this call.
     pub id: String,
@@ -66,7 +66,7 @@ pub struct ToolCall {
 }
 
 /// A tool result sent back to the model after the agent executes a tool.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResult {
     /// The ID of the ToolCall this is a result for.
     pub tool_call_id: String,
@@ -81,7 +81,7 @@ pub struct ToolResult {
 // ---------------------------------------------------------------------------
 
 /// A single message in a conversation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -143,7 +143,7 @@ impl Message {
 // ---------------------------------------------------------------------------
 
 /// A request to an LLM provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompletionRequest {
     /// Model identifier (e.g., "gpt-4o", "claude-3-5-sonnet-20241022").
     pub model: String,
@@ -155,6 +155,8 @@ pub struct CompletionRequest {
     pub max_tokens: Option<u32>,
     /// Sampling temperature (optional).
     pub temperature: Option<f32>,
+    /// Optional metadata for pipeline hooks (e.g. skip_llm, assistant_reply).
+    pub metadata: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl CompletionRequest {
@@ -165,12 +167,13 @@ impl CompletionRequest {
             tools: vec![],
             max_tokens: None,
             temperature: None,
+            metadata: None,
         }
     }
 }
 
 /// Why the model stopped generating.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StopReason {
     EndTurn,
     MaxTokens,
@@ -180,14 +183,14 @@ pub enum StopReason {
 }
 
 /// Token usage statistics returned by the provider.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
 
 /// Full response from a completion call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompletionResponse {
     /// Text content (may be empty if the model only returned tool calls).
     pub text: String,
