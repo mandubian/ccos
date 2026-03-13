@@ -250,6 +250,34 @@ impl JsonRpcClient {
         .await?;
         self.recv().await
     }
+
+    pub async fn agent_spawn(
+        &mut self,
+        id: impl Into<String>,
+        target_agent_id: &str,
+        message: &str,
+        metadata: Option<serde_json::Value>,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<JsonRpcResponse> {
+        let mut params = serde_json::json!({
+            "agent_id": target_agent_id,
+            "message": message,
+        });
+        if let Some(metadata) = metadata {
+            params["metadata"] = metadata;
+        }
+        if let Some(session_id) = session_id {
+            params["session_id"] = serde_json::json!(session_id);
+        }
+        self.send(JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: id.into(),
+            method: "agent.spawn".to_string(),
+            params,
+        })
+        .await?;
+        self.recv().await
+    }
 }
 
 pub fn read_jsonl_entries<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Vec<T>> {
