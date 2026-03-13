@@ -950,7 +950,7 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - [x] Add unit tests for all coercion rules: exact match (pass), missing defaults (coerce), field rename (coerce), unrecoverable mismatch (reject)
 - [x] Add integration test: malformed `agent.spawn` payload → auto-coerced → target receives valid input
 - [x] Add integration test: unrecoverable mismatch → structured error with `hint` → calling agent repairs in-session
-- [ ] Update planner `SKILL.md` guidance to note that structural schema errors are auto-corrected when possible; explicit `skill.describe` is optional
+- [x] Update planner `SKILL.md` guidance to note that structural schema errors are auto-corrected when possible; explicit `skill.describe` is optional
 - [ ] (Later) Implement `LlmCoercionEnforcer` with cheap model fallback for complex structural transforms
 - [ ] (Later) Add per-agent enforcement overrides so high-churn callers (planner) can opt into LLM fallback
 
