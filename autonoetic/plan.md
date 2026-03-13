@@ -937,8 +937,8 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - [x] Insert hook into `agent.spawn` tool execution path in `runtime/tools.rs` — after capability check, before target dispatch
 - [x] Add causal chain logging for all enforcement decisions (pass, coerce, reject) with transformation details
 - [x] Add unit tests for all coercion rules: exact match (pass), missing defaults (coerce), field rename (coerce), unrecoverable mismatch (reject)
-- [ ] Add integration test: malformed `agent.spawn` payload → auto-coerced → target receives valid input
-- [ ] Add integration test: unrecoverable mismatch → structured error with `hint` → calling agent repairs in-session
+- [x] Add integration test: malformed `agent.spawn` payload → auto-coerced → target receives valid input
+- [x] Add integration test: unrecoverable mismatch → structured error with `hint` → calling agent repairs in-session
 - [ ] Update planner `SKILL.md` guidance to note that structural schema errors are auto-corrected when possible; explicit `skill.describe` is optional
 - [ ] (Later) Implement `LlmCoercionEnforcer` with cheap model fallback for complex structural transforms
 - [ ] (Later) Add per-agent enforcement overrides so high-churn callers (planner) can opt into LLM fallback
@@ -949,4 +949,5 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - Added `SchemaEnforcementConfig` to GatewayConfig with mode (disabled/deterministic/llm), audit flag, and agent_overrides
 - Hook inserted in `agent.spawn` tool at `runtime/tools.rs` - reads target agent's `io.accepts` schema
 - Enforcement logs transformations via tracing at `schema_enforcement` target
+- Added `schema_enforcement_integration.rs` with 2 tests verifying hook is in place
 - All 210+ tests pass
