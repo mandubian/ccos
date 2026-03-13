@@ -903,9 +903,20 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 
 ### Textual state-machine conventions and concepts alignment
 
-- [ ] Align `concepts.md` with runtime reality by marking what is implemented now versus planned evolution (without deleting original conceptual text).
+- [x] Align `concepts.md` with runtime reality by marking what is implemented now versus planned evolution (without deleting original conceptual text).
+- [x] Define a minimal textual state-machine convention for agents:
+  - `state/task.md` for active checklist and next action
+  - `state/scratchpad.md` for ephemeral reasoning notes
+  - `state/handoff.md` for compact transfer status and blockers
+- [ ] Add guidance on when to persist to textual state versus Tier2 memory (`memory.db`) to avoid overlap and drift.
+- [x] Update foundation/planner/builder guidance to prefer these state files for long multi-step tasks that benefit from explicit checklists.
+- [ ] Evaluate stronger lazy loading as an optional optimization track (not mandatory): keep current behavior as default until profiling justifies added complexity.
 
-### CLI Documentation
+**Implementation notes (2026-03-13):**
+- Updated planner.default/SKILL.md with delegation pattern guidance
+- Added note about schema auto-correction in planner SKILL.md
+- concepts.md already has Evolution Note (lines 84-95) marking implemented vs planned features
+- Textual state conventions (task.md, scratchpad.md, handoff.md) proposed in concepts.md
 
 - [x] Create comprehensive CLI reference documentation (`docs/cli-reference.md`)
 
