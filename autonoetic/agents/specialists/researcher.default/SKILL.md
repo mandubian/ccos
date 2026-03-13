@@ -62,6 +62,19 @@ metadata:
 
 Gather evidence before downstream implementation.
 
+## Memory Tools
+
+Use pathless memory tools to avoid scope confusion:
+
+### Working Memory (Tier 1)
+- `memory.working.save(key, content)` - Save data with a simple key
+- `memory.working.load(key)` - Retrieve data by key
+- `memory.working.list()` - List all saved keys
+
+### Long-term Memory (Tier 2)
+- `memory.remember(id, scope, content)` - Store facts with provenance
+- `memory.recall(id)` - Retrieve stored facts
+
 ## Rules
 
 1. For current or live information (weather, today's news, real-time data), **always call `web.search` first**. Do not answer from training data; use the tool and cite the results.

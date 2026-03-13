@@ -102,11 +102,7 @@ fn is_install_high_risk(
             {
                 return true
             }
-            Capability::NetConnect { hosts }
-                if hosts.is_empty() || hosts.iter().any(|h| h == "*" || h.ends_with(".*")) =>
-            {
-                return true
-            }
+            Capability::NetConnect { hosts } if !hosts.is_empty() => return true,
             _ => {}
         }
     }
@@ -1899,6 +1895,219 @@ impl NativeTool for MemoryShareTool {
 }
 
 // ---------------------------------------------------------------------------
+// Memory Working Save Tool (pathless Tier 1 write)
+// ---------------------------------------------------------------------------
+
+/// Saves content to the agent's working memory (state/) using a simple key
+/// instead of a file path. The key is automatically prefixed with "state/".
+/// This eliminates scope confusion - no need to guess allowed paths.
+pub struct MemoryWorkingSaveTool;
+
+impl NativeTool for MemoryWorkingSaveTool {
+    fn name(&self) -> &'static str {
+        "memory.working.save"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Save content to working memory using a simple key (no path needed). The content is stored in the agent's state/ directory. Use this instead of memory.write to avoid scope issues.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "A simple identifier for the data (e.g., 'weather_report', 'analysis_results'). Alphanumeric, underscores, and hyphens only." },
+                    "content": { "type": "string", "description": "The content to save" }
+                },
+                "required": ["key", "content"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            key: String,
+            content: String,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.key.trim().is_empty(), "key must not be empty");
+        anyhow::ensure!(
+            args.key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'),
+            "key must contain only alphanumeric characters, underscores, or hyphens"
+        );
+
+        let filename = format!("{}.json", args.key);
+        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
+        mem.write_file(&filename, &args.content)?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "key": args.key,
+            "bytes_written": args.content.len(),
+        }))
+        .map_err(Into::into)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory Working Load Tool (pathless Tier 1 read)
+// ---------------------------------------------------------------------------
+
+/// Loads content from the agent's working memory (state/) using a simple key.
+pub struct MemoryWorkingLoadTool;
+
+impl NativeTool for MemoryWorkingLoadTool {
+    fn name(&self) -> &'static str {
+        "memory.working.load"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Load content from working memory using a simple key (no path needed). Reads from the agent's state/ directory. Use this instead of memory.read to avoid scope issues.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "The key used when saving with memory.working.save" },
+                    "default_value": { "type": "string", "description": "Optional value to return if the key doesn't exist" }
+                },
+                "required": ["key"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            key: String,
+            default_value: Option<String>,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.key.trim().is_empty(), "key must not be empty");
+
+        let filename = format!("{}.json", args.key);
+        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
+        match mem.read_file(&filename) {
+            Ok(content) => Ok(content),
+            Err(e) => {
+                if let Some(default) = args.default_value {
+                    Ok(default)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory Working List Tool (pathless Tier 1 listing)
+// ---------------------------------------------------------------------------
+
+/// Lists all keys available in the agent's working memory.
+pub struct MemoryWorkingListTool;
+
+impl NativeTool for MemoryWorkingListTool {
+    fn name(&self) -> &'static str {
+        "memory.working.list"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "List all keys available in working memory. Returns the filenames (without .json extension) of all saved data.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        _arguments_json: &str,
+        _session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        let state_dir = agent_dir.join("state");
+        let mut keys = Vec::new();
+
+        if state_dir.exists() {
+            for entry in std::fs::read_dir(&state_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                        keys.push(name.to_string());
+                    }
+                }
+            }
+        }
+
+        keys.sort();
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "keys": keys,
+            "count": keys.len(),
+        }))
+        .map_err(Into::into)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Skill Draft Tool
 // ---------------------------------------------------------------------------
 
@@ -2441,11 +2650,18 @@ impl NativeTool for AgentInstallTool {
                     "scheduled_action": { "type": "object" },
                     "files": {
                         "type": "array",
+                        "description": "An array of files to be written to the child agent's directory. Each entry must be an object with 'path' and 'content'. DO NOT stringify this array; it must be a literal JSON array.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "path": { "type": "string" },
-                                "content": { "type": "string" }
+                                "path": {
+                                    "type": "string",
+                                    "description": "Relative path to the file (e.g. 'skills/handler.py')."
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The literal content of the file."
+                                }
                             },
                             "required": ["path", "content"],
                             "additionalProperties": false
@@ -3203,7 +3419,6 @@ fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result
     Ok(DependencyPlan { runtime, packages })
 }
 
-
 pub fn default_registry() -> NativeToolRegistry {
     let mut registry = NativeToolRegistry::new();
     registry.register(Box::new(SandboxExecTool));
@@ -3215,6 +3430,10 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(MemoryRecallTool));
     registry.register(Box::new(MemorySearchTool));
     registry.register(Box::new(MemoryShareTool));
+    // Pathless memory tools - no scope confusion
+    registry.register(Box::new(MemoryWorkingSaveTool));
+    registry.register(Box::new(MemoryWorkingLoadTool));
+    registry.register(Box::new(MemoryWorkingListTool));
     registry.register(Box::new(SkillDraftTool));
     registry.register(Box::new(AgentSpawnTool));
     registry.register(Box::new(AgentInstallTool));
@@ -3346,8 +3565,9 @@ mod tests {
             Capability::MemoryWrite { scopes: vec![] },
         ]);
         let defs_all = registry.available_definitions(&manifest_all);
-        // sandbox.exec, memory.read, memory.write, memory.remember, memory.recall, skill.draft = 6
-        assert_eq!(defs_all.len(), 6);
+        // sandbox.exec, memory.read, memory.write, memory.remember, memory.recall, skill.draft,
+        // memory.working.save, memory.working.load, memory.working.list = 9
+        assert_eq!(defs_all.len(), 9);
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
@@ -3990,6 +4210,53 @@ mod tests {
             )
             .expect_err("install should require promotion gate");
         assert!(err.to_string().contains("promotion_gate"));
+    }
+
+    #[test]
+    fn test_agent_install_with_net_connect_requires_approval() {
+        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "net.worker",
+            "instructions": "Worker with network access.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ]
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::RiskBased,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("install should return structured approval request");
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            parsed.get("approval_required").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(parsed.get("request_id").is_some());
     }
 
     #[test]
@@ -5231,8 +5498,13 @@ Research agent instructions.
             .expect("results should be an array");
         let first = results.first().expect("one agent should be discovered");
         let io = first.get("io").expect("io should be present");
-        assert_eq!(io.get("accepts").and_then(|v| v.get("type")), Some(&serde_json::json!("object")));
-        assert_eq!(io.get("returns").and_then(|v| v.get("type")), Some(&serde_json::json!("object")));
+        assert_eq!(
+            io.get("accepts").and_then(|v| v.get("type")),
+            Some(&serde_json::json!("object"))
+        );
+        assert_eq!(
+            io.get("returns").and_then(|v| v.get("type")),
+            Some(&serde_json::json!("object"))
+        );
     }
-
 }

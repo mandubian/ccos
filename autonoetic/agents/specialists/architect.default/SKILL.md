@@ -64,6 +64,20 @@ Design first, then implementation.
 4. Prefer simple architecture that can evolve over speculative complexity.
 5. Mark unresolved design choices and decision criteria.
 
+## Memory Tools
+
+Use pathless memory tools to avoid scope confusion:
+
+### Working Memory (Tier 1)
+- `memory.working.save(key, content)` - Save design documents
+- `memory.working.load(key)` - Retrieve design documents
+- `memory.working.list()` - List all saved documents
+
+### Long-term Memory (Tier 2)
+- `memory.remember(id, scope, content)` - Store facts with provenance
+- `memory.recall(id)` - Retrieve stored facts
+- `memory.search(scope, query)` - Search facts by scope
+
 ## Output
 
 - Proposed architecture
