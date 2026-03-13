@@ -1,7 +1,7 @@
 //! SKILL.md Parser.
 
 use autonoetic_types::agent::{
-    AgentIO, AgentIdentity, AgentManifest, LlmConfig, Middleware, ResourceLimits,
+    AgentIO, AgentIdentity, AgentManifest, ExecutionMode, LlmConfig, Middleware, ResourceLimits,
     RuntimeDeclaration,
 };
 use autonoetic_types::background::BackgroundPolicy;
@@ -39,6 +39,10 @@ struct AutonoeticMetadata {
     io: Option<AgentIO>,
     #[serde(default)]
     middleware: Option<Middleware>,
+    #[serde(default)]
+    execution_mode: Option<ExecutionMode>,
+    #[serde(default)]
+    script_entry: Option<String>,
 }
 
 /// Parser for `SKILL.md` files.
@@ -107,6 +111,8 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         disclosure: meta.disclosure,
         io: meta.io,
         middleware: meta.middleware,
+        execution_mode: meta.execution_mode.unwrap_or_default(),
+        script_entry: meta.script_entry,
     }
 }
 
@@ -331,5 +337,57 @@ middleware:
             middleware.post_process.as_deref(),
             Some("python3 scripts/post.py")
         );
+    }
+
+    #[test]
+    fn test_parse_execution_mode_script() {
+        use autonoetic_types::agent::ExecutionMode;
+
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "weather-script"
+  name: "Weather Script"
+  description: "A deterministic weather agent"
+execution_mode: script
+script_entry: scripts/weather.py
+---
+# Weather Script Agent
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        assert_eq!(manifest.execution_mode, ExecutionMode::Script);
+        assert_eq!(manifest.script_entry.as_deref(), Some("scripts/weather.py"));
+    }
+
+    #[test]
+    fn test_parse_execution_mode_reasoning_default() {
+        use autonoetic_types::agent::ExecutionMode;
+
+        let content = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "reasoning-agent"
+  name: "Reasoning Agent"
+  description: "A reasoning agent"
+---
+# Reasoning Agent
+"#;
+        let (manifest, _body) = SkillParser::parse(content).expect("should parse");
+        assert_eq!(manifest.execution_mode, ExecutionMode::Reasoning);
+        assert!(manifest.script_entry.is_none());
     }
 }

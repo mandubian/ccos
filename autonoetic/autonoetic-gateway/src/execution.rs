@@ -6,13 +6,14 @@ use crate::llm::{build_driver, Message};
 use crate::runtime::lifecycle::{compose_system_instructions, AgentExecutor};
 use crate::runtime::reevaluation_state::execute_scheduled_action;
 use crate::runtime::session_context::SessionContext;
-use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::agent::{AgentManifest, ExecutionMode};
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
 use autonoetic_types::config::GatewayConfig;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -162,6 +163,89 @@ impl GatewayExecutionService {
                     Some(session_id),
                 );
             }
+
+            // --- Fast path for script-only agents ---
+            if matches!(loaded.manifest.execution_mode, ExecutionMode::Script) {
+                let script_entry = loaded.manifest.script_entry.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Agent '{}' has execution_mode=script but is missing script_entry",
+                        agent_id
+                    )
+                })?;
+                let script_path = loaded.dir.join(script_entry);
+                if !script_path.exists() {
+                    anyhow::bail!(
+                        "Script entry point not found: {}",
+                        script_path.display()
+                    );
+                }
+
+                // Log script start to gateway causal chain
+                let gateway_logger = init_gateway_causal_logger(self.config.as_ref())?;
+                log_gateway_causal_event(
+                    &gateway_logger,
+                    agent_id,
+                    session_id,
+                    1,
+                    "script.started",
+                    EntryStatus::Success,
+                    Some(serde_json::json!({
+                        "script_entry": script_entry,
+                        "sandbox": loaded.manifest.runtime.sandbox
+                    })),
+                );
+
+                // Execute script directly in sandbox
+                let script_result = execute_script_in_sandbox(
+                    &loaded.dir,
+                    &script_path,
+                    message,
+                    &loaded.manifest.runtime.sandbox,
+                    self.config.as_ref(),
+                )
+                .await;
+
+                // Log script completion/failure
+                match &script_result {
+                    Ok(result) => {
+                        log_gateway_causal_event(
+                            &gateway_logger,
+                            agent_id,
+                            session_id,
+                            2,
+                            "script.completed",
+                            EntryStatus::Success,
+                            Some(serde_json::json!({
+                                "result_len": result.len()
+                            })),
+                        );
+                    }
+                    Err(e) => {
+                        log_gateway_causal_event(
+                            &gateway_logger,
+                            agent_id,
+                            session_id,
+                            2,
+                            "script.failed",
+                            EntryStatus::Error,
+                            Some(serde_json::json!({
+                                "error": e.to_string()
+                            })),
+                        );
+                    }
+                }
+
+                // Return result (or error)
+                let script_result = script_result?;
+
+                return Ok(SpawnResult {
+                    agent_id: agent_id.to_string(),
+                    session_id: session_id.to_string(),
+                    assistant_reply: Some(script_result),
+                    should_signal_background,
+                });
+            }
+
             let llm_config = loaded
                 .manifest
                 .llm_config
@@ -764,4 +848,105 @@ mod tests {
         assert_eq!(payload["valid"], serde_json::Value::Bool(false));
         assert_eq!(payload["agent_id"], "researcher.default");
     }
+}
+
+/// Execute a script agent directly in sandbox, bypassing the LLM.
+async fn execute_script_in_sandbox(
+    agent_dir: &PathBuf,
+    script_path: &PathBuf,
+    input_payload: &str,
+    sandbox_type: &str,
+    _config: &GatewayConfig,
+) -> anyhow::Result<String> {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    tracing::info!(
+        agent_dir = %agent_dir.display(),
+        script = %script_path.display(),
+        sandbox = %sandbox_type,
+        "Executing script agent"
+    );
+
+    // Build the command based on sandbox type
+    let (program, args) = match sandbox_type {
+        "bubblewrap" | "bwrap" => {
+            bubblewrap_command(agent_dir, script_path)?
+        }
+        "docker" => {
+            docker_command(agent_dir, script_path)?
+        }
+        "microvm" => {
+            microvm_command(script_path)?
+        }
+        _ => {
+            bubblewrap_command(agent_dir, script_path)?
+        }
+    };
+
+    // Create command with environment variables
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .env_clear()
+        .env("SCRIPT_INPUT", input_payload)
+        .env("AGENT_DIR", agent_dir.to_string_lossy().as_ref())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().await.map_err(|e| {
+        anyhow::anyhow!("Failed to execute script: {}", e)
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!(stderr = %stderr, "Script execution failed");
+        anyhow::bail!("Script execution failed with code {:?}: {}", output.status.code(), stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    tracing::info!(stdout_len = stdout.len(), "Script execution completed");
+
+    Ok(stdout)
+}
+
+/// Build bubblewrap command for executing a script.
+fn bubblewrap_command(agent_dir: &PathBuf, script_path: &PathBuf) -> anyhow::Result<(String, Vec<String>)> {
+    let _ = agent_dir; // Currently mounting read-only, but could bind-mount agent dir
+    Ok((
+        "bwrap".to_string(),
+        vec![
+            "--ro-bind".to_string(), script_path.to_string_lossy().to_string(),
+            script_path.to_string_lossy().to_string(),
+        ],
+    ))
+}
+
+/// Build docker command for executing a script.
+fn docker_command(agent_dir: &PathBuf, script_path: &PathBuf) -> anyhow::Result<(String, Vec<String>)> {
+    let image = std::env::var("AUTONOETIC_DOCKER_IMAGE").unwrap_or_else(|_| "python:3.11".to_string());
+    Ok((
+        "docker".to_string(),
+        vec![
+            "run".to_string(),
+            "--rm".to_string(),
+            "-i".to_string(),
+            "--network".to_string(), "none".to_string(),
+            "-v".to_string(), format!("{}:/workspace", agent_dir.to_string_lossy()),
+            image,
+            script_path.to_string_lossy().to_string(),
+        ],
+    ))
+}
+
+/// Build microvm command for executing a script.
+fn microvm_command(_script_path: &PathBuf) -> anyhow::Result<(String, Vec<String>)> {
+    let config = std::env::var("AUTONOETIC_FIRECRACKER_CONFIG")
+        .map_err(|_| anyhow::anyhow!("MicroVM requires AUTONOETIC_FIRECRACKER_CONFIG to be set"))?;
+    Ok((
+        "firecracker".to_string(),
+        vec![
+            "--config-file".to_string(), config,
+        ],
+    ))
 }

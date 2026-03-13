@@ -63,6 +63,12 @@ pub struct AgentManifest {
     pub io: Option<AgentIO>,
     #[serde(default)]
     pub middleware: Option<Middleware>,
+    /// Execution mode: Script (fast path, no LLM) or Reasoning (default, LLM-driven).
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+    /// Entry script for Script mode. Relative path from agent directory.
+    #[serde(default)]
+    pub script_entry: Option<String>,
 }
 
 /// Middleware hooks declared in the agent's own manifest (replaces overlay-based hooks).
@@ -74,6 +80,17 @@ pub struct Middleware {
     /// Script/command to run on LLM output before returning to the user.
     #[serde(default)]
     pub post_process: Option<String>,
+}
+
+/// Execution mode for an agent: script-only or LLM-driven reasoning.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    /// Agent runs a script directly in sandbox, bypassing LLM entirely.
+    Script,
+    /// Default: full LLM-driven reasoning loop.
+    #[default]
+    Reasoning,
 }
 
 /// I/O schema contract for an agent.

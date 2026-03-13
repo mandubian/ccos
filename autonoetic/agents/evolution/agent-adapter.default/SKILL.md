@@ -64,8 +64,8 @@ but has schema or behavior mismatches.
 1. Receive `base_agent_id`, `target_spec`, and optional `rationale`.
 2. Read base agent `SKILL.md` and parse `metadata.autonoetic.io.accepts` and `returns`.
 3. Run `python3 scripts/schema_diff.py` to compare base vs target schemas.
-4. Run `python3 scripts/generate_wrapper.py` to produce:
-   - wrapper `SKILL.md`
+4. Run `python3 scripts/generate_wrapper.py --base-agent-id <base_agent_id> ...` to produce:
+   - wrapper `SKILL.md` (includes traceability metadata)
    - optional middleware scripts (`scripts/pre_map.py`, `scripts/post_map.py`)
 5. Call `agent.exists` for generated wrapper id:
    - if exists and already compatible, return `already_exists`.

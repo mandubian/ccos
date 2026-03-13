@@ -1,0 +1,8 @@
+agents_dir: "smoke/agents"
+port: 4000
+ofp_port: 4200
+tls: false
+background_scheduler_enabled: true
+background_tick_secs: 1
+background_min_interval_secs: 1
+max_background_due_per_tick: 8

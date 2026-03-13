@@ -94,6 +94,7 @@ Generates wrapper agent files from base skill text + schema diff metadata.
 ### CLI arguments
 
 - `--base-skill <path>`: path to base skill markdown.
+- `--base-agent-id <id>`: base agent identifier for traceability.
 - `--wrapper-id <id>`: generated wrapper agent id.
 - `--target-spec-json <json>`: wrapper target I/O schema object.
 - `--schema-diff-json <json>`: output from `schema_diff.py`.
@@ -105,12 +106,41 @@ Generates wrapper agent files from base skill text + schema diff metadata.
 Always:
 
 - `SKILL.md`
-- `runtime.lock`
+- `runtime.lock` (sha256 computed on first gateway load)
 
 Conditionally (when mapping is needed):
 
 - `scripts/pre_map.py`
 - `scripts/post_map.py`
+
+### Wrapper Traceability
+
+Generated `SKILL.md` includes an `adapter` metadata section:
+
+```yaml
+adapter:
+  base_agent_id: "researcher.default"
+  generated_at: "2024-03-12T10:30:00Z"
+  schema_notes: ["accepts: compatible", "returns: target requires additional fields"]
+```
+
+This enables:
+- Lineage tracking: find all wrappers derived from a base agent
+- Debugging: understand why a wrapper was created
+- Audit: timestamp and schema diff summary for governance
+
+### LLMConfig Design
+
+Wrappers hardcode `temperature: 0.0` regardless of base agent settings. This is
+intentional: wrappers are **transformation layers**, not reasoning agents. The
+base agent provides reasoning; the wrapper only maps I/O schemas via middleware
+scripts. Deterministic settings ensure consistent transformation behavior.
+
+### Runtime.lock
+
+The generated `runtime.lock` has an empty `sha256` field. The gateway computes
+the actual hash on first load and caches it. This allows wrapper generation
+without requiring gateway binaries at generation time.
 
 ### Middleware behavior in generated scripts
 

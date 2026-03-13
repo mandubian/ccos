@@ -1,5 +1,5 @@
 ---
-name: "sample_agent"
+name: "builder_agent"
 description: "Builder agent that installs durable specialist workers from chat requests."
 metadata:
   autonoetic:
@@ -11,15 +11,13 @@ metadata:
       type: "stateful"
       sandbox: "bubblewrap"
       runtime_lock: "runtime.lock"
-    middleware:
-      pre_process: "python3 scripts/normalize_input.py"
     agent:
-      id: "sample_agent"
+      id: "builder_agent"
       name: "Specialized Builder"
       description: "Installs durable specialist agents and recurring workers from user requests."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "google/gemini-3-flash-preview"
       temperature: 0.0
     capabilities:
       - type: "AgentSpawn"
@@ -56,11 +54,6 @@ Rules:
 14. Do not pretend a worker exists if `agent.install` was not called successfully.
 15. Do not key off benchmark phrases or memorize one example workflow. Infer the user's intent from semantics such as recurrence, cadence, persisted state, external inputs, and the requested step-by-step transformation.
 16. **Avoid one-shot assumptions**: When a tool call returns a structured error (with `ok: false`), read the `error_type` and `repair_hint` fields, then retry with corrected arguments. Do not assume tools will succeed on first call. The pattern is: propose → execute → inspect result → if error, repair and retry → report final outcome.
-17. In `agent.install` `files`, use paths that match the child's intended `MemoryWrite` scopes. Every entry must be a JSON object with `path` and `content`. Do not stringify the `files` array; it must be a real JSON array of objects. Prefer `skills/` for scripts (e.g. `skills/logic.py`) and do not use bare root filenames.
-18. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required (see shapes below).
-19. If input arrives as a plain-text string without structured reqs, the `normalize_input.py` middleware will wrap it. Treat the result as truth.
-20. **Search Permissions**: If an agent is likely to require web search (e.g. through `web.search`), ensure you grant `NetConnect` for common search providers: `www.googleapis.com` and `duckduckgo.com`.
-21. **API Priority**: For agents designed to query specific public APIs, prioritize direct API calls over web search. Use `NetConnect` with the specific API host(s) and instruct the agent to use `web.fetch` or a specialized Python skill for direct retrieval.
 
 Example target intent shape:
 
@@ -70,28 +63,3 @@ Example target intent shape:
   - Include an `## Output Contract` section describing memory keys and output schema
   - Enable background reevaluation using the requested cadence and execution mode
   - Arm it immediately when the request is clearly asking for a live recurring worker
-| MemoryRecall | `memory_ids`: array of strings | `{ "type": "MemoryRecall", "memory_ids": ["*"] }` |
-| MemoryShare | `allowed_targets`: array of strings | `{ "type": "MemoryShare", "allowed_targets": ["planner.default"] }` |
-| MemorySearch | `scopes`: array of strings | `{ "type": "MemorySearch", "scopes": ["*"] }` |
-| NetConnect | `hosts`: array of strings | `{ "type": "NetConnect", "hosts": ["api.open-meteo.com"] }` |
-| AgentSpawn | `max_children`: number | `{ "type": "AgentSpawn", "max_children": 5 }` |
-| AgentMessage | `patterns`: array of strings | `{ "type": "AgentMessage", "patterns": ["*"] }` |
-| BackgroundReevaluation | `min_interval_secs`: number, `allow_reasoning`: boolean | `{ "type": "BackgroundReevaluation", "min_interval_secs": 60, "allow_reasoning": false }` |
-| ShellExec | `patterns`: array of strings | `{ "type": "ShellExec", "patterns": ["python3", "*.py"] }` |
-
-## File shapes (required for agent.install)
-
-Every `files` entry must be a JSON object with exactly these fields.
-
-| field | type | description |
-|-------|------|-------------|
-| `path` | string | Relative path (e.g. `skills/logic.py`, `state/seed.txt`) |
-| `content` | string | Stringified file content |
-
-Example:
-```json
-{
-  "path": "skills/handler.py",
-  "content": "print('hello world')"
-}
-```
