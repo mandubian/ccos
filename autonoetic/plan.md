@@ -899,7 +899,7 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - Added `migrate_legacy_log()` for automatic migration from `causal_chain.jsonl`
 - Added `read_all_entries_across_segments()` for unified trace reading with hash validation
 - Added `RetentionPolicy` struct for compression/deletion of old segments
-- All 160+ tests pass including new rotation tests
+- All 204 tests pass
 
 ### Textual state-machine conventions and concepts alignment
 
