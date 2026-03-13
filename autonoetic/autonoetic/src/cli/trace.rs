@@ -221,6 +221,14 @@ pub fn load_agent_traces(
     Ok(traces)
 }
 
+fn load_trace_from_path(path: &Path, agent_id: &str) -> anyhow::Result<AgentTrace> {
+    let entries = read_trace_entries(path)?;
+    Ok(AgentTrace {
+        agent_id: agent_id.to_string(),
+        entries,
+    })
+}
+
 pub fn read_trace_entries(path: &Path) -> anyhow::Result<Vec<CausalChainEntry>> {
     let file = std::fs::File::open(path)?;
     let reader = StdBufReader::new(file);
@@ -344,5 +352,248 @@ mod tests {
 
         let actions: Vec<&str> = sorted_entries.iter().map(|e| e.action.as_str()).collect();
         assert_eq!(actions, vec!["test.1", "test.2", "test.3"]);
+    }
+}
+
+pub fn handle_trace_rebuild(
+    config_path: &std::path::Path,
+    session_id: &str,
+    requested_agent: Option<&str>,
+    json_output: bool,
+    skip_checks: bool,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let gateway_dir = config.agents_dir.join(".gateway");
+    
+    let mut all_events: Vec<super::common::TraceEntry> = Vec::new();
+    
+    // Load gateway events
+    let gateway_causal_path = gateway_dir.join("history/causal_chain.jsonl");
+    if gateway_causal_path.exists() {
+        let gateway_traces = load_trace_from_path(&gateway_causal_path, "gateway")?;
+        for entry in gateway_traces.entries {
+            if entry.session_id == session_id {
+                all_events.push(super::common::TraceEntry {
+                    agent_id: "gateway".to_string(),
+                    entry,
+                });
+            }
+        }
+    }
+    
+    // Load agent events
+    let agents_dir = &config.agents_dir;
+    if let Ok(entries) = std::fs::read_dir(agents_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let causal_path = path.join("history/causal_chain.jsonl");
+                if causal_path.exists() {
+                    let agent_id = path.file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    
+                    if let Some(requested) = requested_agent {
+                        if agent_id != requested {
+                            continue;
+                        }
+                    }
+                    
+                    let traces = load_trace_from_path(&causal_path, &agent_id)?;
+                    for entry in traces.entries {
+                        if entry.session_id == session_id {
+                            all_events.push(super::common::TraceEntry {
+                                agent_id: agent_id.clone(),
+                                entry,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if all_events.is_empty() {
+        anyhow::bail!("No events found for session '{}'", session_id);
+    }
+    
+    // Sort by timestamp then event_seq
+    all_events.sort_by(|a, b| {
+        a.entry.timestamp
+            .cmp(&b.entry.timestamp)
+            .then_with(|| a.entry.event_seq.cmp(&b.entry.event_seq))
+    });
+    
+    // Run integrity checks if not skipped
+    let mut integrity_issues: Vec<String> = Vec::new();
+    if !skip_checks {
+        // Check for gaps in event_seq per agent
+        let mut agent_seqs: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for te in &all_events {
+            let prev = agent_seqs.get(&te.agent_id).copied().unwrap_or(0);
+            if te.entry.event_seq != prev + 1 && te.entry.event_seq != 1 {
+                integrity_issues.push(format!(
+                    "Agent '{}': event_seq gap at {} (expected {}, got {})",
+                    te.agent_id, te.entry.timestamp, prev + 1, te.entry.event_seq
+                ));
+            }
+            agent_seqs.insert(te.agent_id.clone(), te.entry.event_seq);
+        }
+    }
+    
+    if json_output {
+        let output = serde_json::json!({
+            "session_id": session_id,
+            "event_count": all_events.len(),
+            "integrity_issues": integrity_issues,
+            "events": all_events.iter().map(|te| {
+                serde_json::json!({
+                    "agent_id": te.agent_id,
+                    "timestamp": te.entry.timestamp,
+                    "action": te.entry.action,
+                    "status": te.entry.status,
+                    "event_seq": te.entry.event_seq,
+                })
+            }).collect::<Vec<_>>()
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Session Reconstruction: {}", session_id);
+        println!("Total events: {}", all_events.len());
+        println!();
+        
+        if !integrity_issues.is_empty() {
+            println!("Integrity Issues:");
+            for issue in &integrity_issues {
+                println!("  - {}", issue);
+            }
+            println!();
+        }
+        
+        println!("{:<10} {:<30} {:<30} {:<20} {:<15}",
+            "SEQ", "TIMESTAMP", "AGENT", "ACTION", "STATUS");
+        println!("{}", "-".repeat(105));
+        
+        for te in &all_events {
+            println!("{:<10} {:<30} {:<30} {:<20} {:<15}",
+                te.entry.event_seq,
+                te.entry.timestamp,
+                te.agent_id,
+                te.entry.action,
+                format!("{:?}", te.entry.status)
+            );
+        }
+    }
+    
+    Ok(())
+}
+
+pub async fn handle_trace_follow(
+    config_path: &std::path::Path,
+    session_id: &str,
+    requested_agent: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+    use tokio::time::{interval, Duration};
+
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let agents_dir = &config.agents_dir;
+
+    let mut seen_log_ids: HashSet<String> = HashSet::new();
+    let mut poll_interval = interval(Duration::from_secs(1));
+
+    println!("Following session '{}'. Press Ctrl+C to stop.", session_id);
+    println!();
+
+    loop {
+        poll_interval.tick().await;
+
+        let mut new_events: Vec<super::common::TraceEntry> = Vec::new();
+
+        // Check gateway causal log
+        let gateway_causal_path = gateway_dir.join("history/causal_chain.jsonl");
+        if gateway_causal_path.exists() {
+            if let Ok(traces) = load_trace_from_path(&gateway_causal_path, "gateway") {
+                for entry in traces.entries {
+                    if entry.session_id == session_id {
+                        let log_id = format!("gateway:{}", entry.log_id);
+                        if !seen_log_ids.contains(&log_id) {
+                            seen_log_ids.insert(log_id);
+                            new_events.push(super::common::TraceEntry {
+                                agent_id: "gateway".to_string(),
+                                entry,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check agent causal logs
+        if let Ok(entries) = std::fs::read_dir(agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let causal_path = path.join("history/causal_chain.jsonl");
+                    if causal_path.exists() {
+                        let agent_id = path.file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+
+                        if let Some(requested) = requested_agent {
+                            if agent_id != requested {
+                                continue;
+                            }
+                        }
+
+                        if let Ok(traces) = load_trace_from_path(&causal_path, &agent_id) {
+                            for entry in traces.entries {
+                                if entry.session_id == session_id {
+                                    let log_id = format!("{}:{}", agent_id, entry.log_id);
+                                    if !seen_log_ids.contains(&log_id) {
+                                        seen_log_ids.insert(log_id);
+                                        new_events.push(super::common::TraceEntry {
+                                            agent_id: agent_id.clone(),
+                                            entry,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !new_events.is_empty() {
+            new_events.sort_by(|a, b| {
+                a.entry.timestamp
+                    .cmp(&b.entry.timestamp)
+                    .then_with(|| a.entry.event_seq.cmp(&b.entry.event_seq))
+            });
+
+            for te in new_events {
+                if json_output {
+                    println!("{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "agent_id": te.agent_id,
+                            "timestamp": te.entry.timestamp,
+                            "action": te.entry.action,
+                            "status": te.entry.status,
+                            "event_seq": te.entry.event_seq,
+                        }))?
+                    );
+                } else {
+                    println!("{:<30} {:<30} {:<20} {:<15}",
+                        te.entry.timestamp,
+                        te.agent_id,
+                        te.entry.action,
+                        format!("{:?}", te.entry.status)
+                    );
+                }
+            }
+        }
     }
 }

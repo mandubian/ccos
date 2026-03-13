@@ -861,11 +861,24 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 
 ### Session log observability and reconstruction
 
-- [ ] Keep physical logs distributed by ownership (`.gateway` and per-agent histories), but add a gateway-owned per-session index manifest for unified timeline reconstruction.
-- [ ] Record cross-agent event references in the session index (agent_id, log_id, timestamp, category/action, causal hash refs) as events are emitted.
-- [ ] Add trace tooling to reconstruct a single ordered session view from gateway + agent logs without manual stitching (`trace session.show` / `trace session.rebuild` semantics).
-- [ ] Add integrity checks in reconstruction mode (missing ref, hash mismatch, orphan entries) and surface explicit diagnostics.
+- [x] Keep physical logs distributed by ownership (`.gateway` and per-agent histories), but add a gateway-owned per-session index manifest for unified timeline reconstruction.
+- [x] Record cross-agent event references in the session index (agent_id, log_id, timestamp, category/action, causal hash refs) as events are emitted.
+- [x] Add trace tooling to reconstruct a single ordered session view from gateway + agent logs without manual stitching (`trace session.show` / `trace session.rebuild` semantics).
+- [x] Add integrity checks in reconstruction mode (missing ref, hash mismatch, orphan entries) and surface explicit diagnostics.
 - [ ] Add integration tests for multi-agent delegated sessions proving full timeline reconstruction and deterministic ordering.
+- [x] Add real-time trace following (`trace session follow`) to watch session events live as they happen.
+
+**Implementation notes (2026-03-13):**
+- Added `autonoetic trace session follow <session_id>` CLI command
+- Polls gateway and agent causal logs every 1 second
+- Supports `--agent` to filter by agent, `--json` for machine output
+- Press Ctrl+C to stop following
+
+**Implementation notes (2026-03-13):**
+- Added session index at `.gateway/sessions/<session_id>/index.json` updated on every gateway causal log write
+- Added `trace session rebuild` CLI command that combines gateway + agent causal logs into unified timeline
+- Integrity checks include event_seq gaps per agent
+- All 148 unit tests pass
 
 ### Causal chain rotation and retention
 
@@ -879,6 +892,15 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 ### Textual state-machine conventions and concepts alignment
 
 - [ ] Align `concepts.md` with runtime reality by marking what is implemented now versus planned evolution (without deleting original conceptual text).
+
+### CLI Documentation
+
+- [x] Create comprehensive CLI reference documentation (`docs/cli-reference.md`)
+
+**Implementation notes (2026-03-13):**
+- Created `docs/cli-reference.md` covering all CLI commands: gateway, agent, chat, trace, skill, federate, mcp
+- Documented all subcommands, arguments, and options
+- Added examples for common workflows
 - [ ] Define a minimal textual state-machine convention for agents:
   - `state/task.md` for active checklist and next action
   - `state/scratchpad.md` for ephemeral reasoning notes
