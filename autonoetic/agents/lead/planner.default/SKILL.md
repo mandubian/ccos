@@ -102,6 +102,7 @@ When spawning a specialist, adhere to its I/O schema if declared.
 - **Structured first**: If a specialist's `SKILL.md` specifies a JSON schema for `agent.spawn.message`, always send a valid JSON object. Do not wrap valid JSON in extra strings or backticks.
 - **Context injection**: Always include the full goal, known requirements, and any discovered constraints in the delegation message.
 - **Durable intent**: When delegating to the `specialized_builder.default`, provide an explicit role definition and expected capabilities.
+- **Schema auto-correction**: If your payload doesn't match the target's `io.accepts` schema, the gateway will automatically apply defaults and type coercion where possible. Missing required fields with type defaults will be silently corrected. Only unrecoverable schema mismatches (e.g., object type required but not provided) will fail with an actionable error. You don't need to manually add `skill.describe` for simple structural fixes—rely on auto-correction for common cases.
 
 ## Delegation Rules
 
