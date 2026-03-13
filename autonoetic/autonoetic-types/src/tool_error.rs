@@ -253,9 +253,7 @@ impl From<anyhow::Error> for ToolError {
             }
 
             if lower.contains("must not be empty") {
-                return Some(
-                    "Ensure all required fields are provided and not empty.".to_string(),
-                );
+                return Some("Ensure all required fields are provided and not empty.".to_string());
             }
 
             if lower.contains("invalid json") {
