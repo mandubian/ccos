@@ -227,6 +227,31 @@ pub enum TraceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Rebuild unified session timeline from gateway + agent causal logs
+    Rebuild {
+        /// Session identifier to rebuild
+        session_id: String,
+        /// Restrict lookup to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+        /// Skip integrity checks
+        #[arg(long)]
+        skip_checks: bool,
+    },
+    /// Follow session events in real-time as they happen
+    Follow {
+        /// Session identifier to follow
+        session_id: String,
+        /// Restrict to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +404,12 @@ pub fn terminal_channel_envelope(
 pub struct AgentTrace {
     pub agent_id: String,
     pub entries: Vec<CausalChainEntry>,
+}
+
+#[derive(Debug)]
+pub struct TraceEntry {
+    pub agent_id: String,
+    pub entry: CausalChainEntry,
 }
 
 #[derive(Debug)]

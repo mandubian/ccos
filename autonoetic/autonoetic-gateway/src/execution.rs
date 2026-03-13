@@ -10,6 +10,7 @@ use autonoetic_types::agent::{AgentManifest, ExecutionMode};
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
 use autonoetic_types::config::GatewayConfig;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
@@ -541,11 +542,91 @@ pub fn log_gateway_causal_event(
     status: EntryStatus,
     payload: Option<serde_json::Value>,
 ) {
+    let status_clone = status.clone();
     if let Err(e) = logger.log(
-        actor_id, session_id, None, event_seq, "gateway", action, status, payload,
+        actor_id, session_id, None, event_seq, "gateway", action, status, payload.clone(),
     ) {
         tracing::warn!(error = %e, action, "Failed to append gateway causal log entry");
     }
+
+    if let Err(e) = update_session_index(logger, actor_id, session_id, event_seq, action, &status_clone, payload.as_ref()) {
+        tracing::warn!(error = %e, action, "Failed to update session index");
+    }
+}
+
+fn update_session_index(
+    logger: &CausalLogger,
+    actor_id: &str,
+    session_id: &str,
+    event_seq: u64,
+    action: &str,
+    status: &EntryStatus,
+    payload: Option<&serde_json::Value>,
+) -> anyhow::Result<()> {
+    let index_path = logger.path()
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Logger path has no parent"))?
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Logger path has no grandparent"))?
+        .join("sessions")
+        .join(session_id)
+        .join("index.json");
+
+    let mut index = if index_path.exists() {
+        serde_json::from_str::<SessionIndex>(&std::fs::read_to_string(&index_path)?)?
+    } else {
+        SessionIndex {
+            session_id: session_id.to_string(),
+            first_timestamp: None,
+            last_timestamp: None,
+            events: vec![],
+        }
+    };
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    if index.first_timestamp.is_none() {
+        index.first_timestamp = Some(timestamp.clone());
+    }
+    index.last_timestamp = Some(timestamp.clone());
+
+    let log_id = format!("{}:{}:{}", actor_id, session_id, event_seq);
+    
+    let event_ref = SessionEventRef {
+        log_id: log_id.clone(),
+        agent_id: actor_id.to_string(),
+        timestamp: timestamp.clone(),
+        category: "gateway".to_string(),
+        action: action.to_string(),
+        status: status.clone(),
+        causal_hash: payload.and_then(|p| p.get("causal_hash").and_then(|h| h.as_str())).map(String::from),
+    };
+    index.events.push(event_ref);
+
+    if let Some(parent) = index_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
+    
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionIndex {
+    session_id: String,
+    first_timestamp: Option<String>,
+    last_timestamp: Option<String>,
+    events: Vec<SessionEventRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionEventRef {
+    log_id: String,
+    agent_id: String,
+    timestamp: String,
+    category: String,
+    action: String,
+    status: EntryStatus,
+    causal_hash: Option<String>,
 }
 
 pub fn sha256_hex(input: &str) -> String {

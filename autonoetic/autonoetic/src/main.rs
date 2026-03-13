@@ -95,6 +95,32 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 cli::trace::handle_trace_event(&config_path, log_id, agent.as_deref(), *json)?;
             }
+            cli::common::TraceCommands::Rebuild {
+                session_id,
+                agent,
+                json,
+                skip_checks,
+            } => {
+                cli::trace::handle_trace_rebuild(
+                    &config_path,
+                    session_id,
+                    agent.as_deref(),
+                    *json,
+                    *skip_checks,
+                )?;
+            }
+            cli::common::TraceCommands::Follow {
+                session_id,
+                agent,
+                json,
+            } => {
+                cli::trace::handle_trace_follow(
+                    &config_path,
+                    session_id,
+                    agent.as_deref(),
+                    *json,
+                ).await?;
+            }
         },
 
         Commands::Skill(args) => match &args.command {
