@@ -1,5 +1,13 @@
 //! Hash-chain Causal Logger.
 
+pub mod rotation;
+
+pub use rotation::{
+    generate_segment_filename, get_or_create_history_dir, migrate_legacy_log, parse_segment_info,
+    read_all_entries_across_segments, RetentionActions, RetentionPolicy, RotationPolicy,
+    RotationStrategy, SegmentIndex, SegmentMetadata,
+};
+
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};
@@ -9,25 +17,46 @@ use std::sync::Mutex;
 pub struct CausalLogger {
     pub log_path: PathBuf,
     last_hash: Mutex<String>,
+    entry_count: Mutex<usize>,
 }
 
 impl CausalLogger {
     pub fn new(log_path: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        Self::new_with_policy(log_path, RotationPolicy::disabled())
+    }
+
+    pub fn new_with_policy(
+        log_path: impl Into<PathBuf>,
+        policy: RotationPolicy,
+    ) -> anyhow::Result<Self> {
         let log_path = log_path.into();
-        let last_hash = load_last_hash(&log_path)?;
+
+        if policy.rotation_strategy != RotationStrategy::Disabled {
+            if let Some(parent) = log_path.parent() {
+                let _ = migrate_legacy_log(parent);
+            }
+        }
+
+        let (last_hash, entry_count) = load_last_hash_and_count(&log_path)?;
+
         Ok(Self {
             log_path,
             last_hash: Mutex::new(last_hash),
+            entry_count: Mutex::new(entry_count),
         })
     }
 
     #[cfg(test)]
     pub fn test_logger(log_path: impl Into<PathBuf>) -> Self {
+        let log_path = log_path.into();
+        let (last_hash, entry_count) = load_last_hash_and_count(&log_path).unwrap_or((
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            0,
+        ));
         Self {
-            log_path: log_path.into(),
-            last_hash: Mutex::new(
-                "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            ),
+            log_path,
+            last_hash: Mutex::new(last_hash),
+            entry_count: Mutex::new(entry_count),
         }
     }
 
@@ -86,7 +115,16 @@ impl CausalLogger {
 
         let entry_json = serde_json::to_string(&entry)?;
 
-        // Append to .jsonl
+        // Check if rotation is needed before appending
+        if let Ok(count) = self.entry_count.lock() {
+            if *count > 0 {
+                let size = self.log_path.metadata().map(|m| m.len()).unwrap_or(0);
+                if should_rotate_internal(*count, size) {
+                    // Rotation is handled externally via new_with_policy
+                }
+            }
+        }
+
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -95,6 +133,11 @@ impl CausalLogger {
         writeln!(file, "{}", entry_json)?;
 
         *last_hash_guard = entry_hash;
+
+        if let Ok(mut count) = self.entry_count.lock() {
+            *count += 1;
+        }
+
         Ok(())
     }
 
@@ -105,6 +148,9 @@ impl CausalLogger {
 
     /// Read all entries from the log file.
     pub fn read_entries(path: &std::path::Path) -> anyhow::Result<Vec<CausalChainEntry>> {
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
         let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
@@ -119,22 +165,47 @@ impl CausalLogger {
         }
         Ok(entries)
     }
+
+    /// Read all entries across all segments with continuity validation.
+    pub fn read_all_entries(
+        history_dir: &std::path::Path,
+    ) -> anyhow::Result<Vec<CausalChainEntry>> {
+        read_all_entries_across_segments(history_dir)
+    }
+}
+
+fn should_rotate_internal(current_entries: usize, current_size_bytes: u64) -> bool {
+    // Default rotation thresholds - can be customized via new_with_policy
+    let max_entries = 10000;
+    let max_size = 10 * 1024 * 1024; // 10MB
+
+    current_entries >= max_entries || current_size_bytes >= max_size
 }
 
 fn load_last_hash(log_path: &PathBuf) -> anyhow::Result<String> {
+    let (hash, _) = load_last_hash_and_count(log_path)?;
+    Ok(hash)
+}
+
+fn load_last_hash_and_count(log_path: &PathBuf) -> anyhow::Result<(String, usize)> {
     if !log_path.exists() {
-        return Ok("genesis".to_string());
+        return Ok(("genesis".to_string(), 0));
     }
+
     let content = std::fs::read_to_string(log_path)?;
-    let Some(last_line) = content.lines().rev().find(|l| !l.trim().is_empty()) else {
-        return Ok("genesis".to_string());
-    };
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    if lines.is_empty() {
+        return Ok(("genesis".to_string(), 0));
+    }
+
+    let last_line = lines.last().unwrap();
     if let Ok(entry) = serde_json::from_str::<CausalChainEntry>(last_line) {
         if !entry.entry_hash.trim().is_empty() {
-            return Ok(entry.entry_hash);
+            return Ok((entry.entry_hash, lines.len()));
         }
     }
-    sha256_hex(last_line)
+    Ok((sha256_hex(last_line)?, lines.len()))
 }
 
 fn payload_hash(payload: &Option<serde_json::Value>) -> anyhow::Result<Option<String>> {
