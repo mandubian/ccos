@@ -885,12 +885,21 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 
 ### Causal chain rotation and retention
 
-- [ ] Add causal log segmentation by date and size (for example `causal_chain-YYYY-MM-DD-0001.jsonl`) to prevent unbounded single-file growth.
-- [ ] Preserve hash-chain continuity across rotated segments (`prev_hash` of first entry in a new segment points to the last entry hash of the prior segment).
-- [ ] Add per-history segment index metadata so trace readers can discover all segments without full directory scans.
-- [ ] Keep backward compatibility for existing `causal_chain.jsonl` paths during migration and update trace tooling to read both legacy and segmented layouts.
-- [ ] Add retention/compression policy for cold segments (optional gzip) with explicit operator controls.
-- [ ] Add tests for rotation boundaries, continuity validation, and cross-segment trace reconstruction.
+- [x] Add causal log segmentation by date and size (for example `causal_chain-YYYY-MM-DD-0001.jsonl`) to prevent unbounded single-file growth.
+- [x] Preserve hash-chain continuity across rotated segments (`prev_hash` of first entry in a new segment points to the last entry hash of the prior segment).
+- [x] Add per-history segment index metadata so trace readers can discover all segments without full directory scans.
+- [x] Keep backward compatibility for existing `causal_chain.jsonl` paths during migration and update trace tooling to read both legacy and segmented layouts.
+- [x] Add retention/compression policy for cold segments (optional gzip) with explicit operator controls.
+- [x] Add tests for rotation boundaries, continuity validation, and cross-segment trace reconstruction.
+
+**Implementation notes (2026-03-13):**
+- Added `causal_chain/rotation.rs` module with rotation and retention logic
+- Added `RotationPolicy` struct with configurable max entries/size per segment
+- Added `SegmentIndex` persisted to `segments.json` for segment discovery
+- Added `migrate_legacy_log()` for automatic migration from `causal_chain.jsonl`
+- Added `read_all_entries_across_segments()` for unified trace reading with hash validation
+- Added `RetentionPolicy` struct for compression/deletion of old segments
+- All 160+ tests pass including new rotation tests
 
 ### Textual state-machine conventions and concepts alignment
 
