@@ -316,7 +316,7 @@ impl AgentExecutor {
                 response
             };
 
-            self.log_output_schema_validation(&response.text, &mut tracer);
+            self.log_output_schema_validation(&response, &mut tracer);
 
             // Extract new artifacts from response for logging
             let new_artifacts = extract_artifacts_from_text(&response.text);
@@ -414,17 +414,27 @@ impl AgentExecutor {
         Ok(latest_assistant_text.map(|t| disclosure_state.filter_reply(&t)))
     }
 
-    fn log_output_schema_validation(&self, output_text: &str, tracer: &mut SessionTracer) {
-        let Some(returns_schema) = self
-            .manifest
-            .io
-            .as_ref()
-            .and_then(|io| io.returns.as_ref())
+    fn log_output_schema_validation(
+        &self,
+        response: &crate::llm::CompletionResponse,
+        tracer: &mut SessionTracer,
+    ) {
+        // Only validate final output when agent claims completion (EndTurn).
+        // Skip validation for tool use responses - agents may emit free text
+        // alongside tool calls, which is expected reasoning/narration.
+        if !matches!(
+            response.stop_reason,
+            crate::llm::StopReason::EndTurn | crate::llm::StopReason::StopSequence
+        ) {
+            return;
+        }
+
+        let Some(returns_schema) = self.manifest.io.as_ref().and_then(|io| io.returns.as_ref())
         else {
             return;
         };
 
-        let validation = validate_against_schema(output_text, returns_schema);
+        let validation = validate_against_schema(&response.text, returns_schema);
         let _ = tracer.log_event(
             "agent.process",
             "output_schema_validation",
@@ -940,5 +950,78 @@ mod tests {
             "Secret should have been redacted"
         );
         assert!(r.contains("REDACTED"), "Redaction marker missing");
+    }
+
+    #[test]
+    fn test_log_output_schema_validation_skips_tool_use() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let executor = AgentExecutor::new(
+            manifest,
+            "p".to_string(),
+            Arc::new(FixedTextDriver),
+            temp.path().to_path_buf(),
+            crate::runtime::tools::default_registry(),
+        );
+
+        let mut tracer = crate::runtime::session_tracer::SessionTracer::test_tracer();
+
+        // ToolUse with any text should be skipped - no validation
+        let response = CompletionResponse {
+            text: "Let me check the database first...".to_string(),
+            tool_calls: vec![ToolCall {
+                id: "c1".to_string(),
+                name: "any".to_string(),
+                arguments: "{}".to_string(),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage::default(),
+        };
+
+        executor.log_output_schema_validation(&response, &mut tracer);
+    }
+
+    #[test]
+    fn test_log_output_schema_validation_validates_end_turn() {
+        let mut manifest = manifest_with_capabilities(vec![]);
+        manifest.io = Some(autonoetic_types::agent::AgentIO {
+            accepts: None,
+            returns: Some(serde_json::json!({
+                "type": "object",
+                "required": ["result"]
+            })),
+        });
+
+        let temp = tempdir().expect("tempdir should create");
+        let executor = AgentExecutor::new(
+            manifest,
+            "p".to_string(),
+            Arc::new(FixedTextDriver),
+            temp.path().to_path_buf(),
+            crate::runtime::tools::default_registry(),
+        );
+
+        let mut tracer = crate::runtime::session_tracer::SessionTracer::test_tracer();
+
+        // EndTurn with invalid JSON should produce validation error
+        let response = CompletionResponse {
+            text: "plain text response".to_string(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage::default(),
+        };
+
+        executor.log_output_schema_validation(&response, &mut tracer);
+
+        // EndTurn with valid JSON matching schema should pass
+        let mut tracer2 = crate::runtime::session_tracer::SessionTracer::test_tracer();
+        let response2 = CompletionResponse {
+            text: r#"{"result": "success"}"#.to_string(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage::default(),
+        };
+
+        executor.log_output_schema_validation(&response2, &mut tracer2);
     }
 }

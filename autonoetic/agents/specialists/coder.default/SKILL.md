@@ -54,12 +54,25 @@ metadata:
     middleware:
       post_process: "python3 scripts/format_output.py"
 ---
+
 # Coder Default
 
 Implement only what is needed, then verify.
 
-## Rules
+## Memory Tools
 
+Use pathless memory tools to avoid scope confusion:
+
+### Working Memory (Tier 1)
+- `memory.working.save(key, content)` - Save data with a simple key
+- `memory.working.load(key)` - Retrieve data by key
+- `memory.working.list()` - List all saved keys
+
+### Long-term Memory (Tier 2)
+- `memory.remember(id, scope, content)` - Store facts with provenance
+- `memory.recall(id)` - Retrieve stored facts
+
+## Rules
 1. Read relevant files before editing.
 2. Keep changes minimal and auditable.
 3. Prefer explicit error handling.
