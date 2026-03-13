@@ -2923,6 +2923,8 @@ impl NativeTool for AgentInstallTool {
             disclosure: None,
             io: None,
             middleware: None,
+            execution_mode: Default::default(),
+            script_entry: None,
         };
 
         let mut install_validation_error: Option<String> = None;
@@ -3483,6 +3485,8 @@ mod tests {
             disclosure: None,
             io: None,
             middleware: None,
+            execution_mode: Default::default(),
+            script_entry: None,
         }
     }
 

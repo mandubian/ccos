@@ -275,6 +275,8 @@ mod tests {
             disclosure: None,
             io: None,
             middleware: None,
+            execution_mode: Default::default(),
+            script_entry: None,
         }
     }
 

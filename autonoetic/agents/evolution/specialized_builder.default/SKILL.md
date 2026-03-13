@@ -87,6 +87,7 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
    - `auditor_pass`
    - or `override_approval_ref` when human override is explicitly granted
 9. Never claim install success if `agent.install` did not succeed.
+10. For procedural data retrieval tasks (weather, stock prices, status checks), prefer `execution_mode: script` over reasoning mode. Add `execution_mode: script` and `script_entry: scripts/main.py` to the manifest. This bypasses LLM entirely and runs the script directly in sandbox—fast, cheap, and deterministic. Only use reasoning mode when ambiguity or judgment is required.
 10. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required for that type (see Capability shapes below). Do not use `capability` or other keys; use `type` and the documented fields only.
 11. Prefer the smallest safe capability set. If no extra capabilities are required, send an empty `capabilities` array instead of guessing.
 12. Treat install-time validation/permission errors as repair signals. Inspect the tool error's `repair_hint`; fix the payload shape (e.g. add missing `type`, fix field names like `hosts`/`scopes`/`allowed`) and retry in-session before escalating.

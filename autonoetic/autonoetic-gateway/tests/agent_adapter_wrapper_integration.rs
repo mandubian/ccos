@@ -116,6 +116,8 @@ Base instructions.
         .arg(&generate_wrapper_script)
         .arg("--base-skill")
         .arg(base_skill_path.to_string_lossy().to_string())
+        .arg("--base-agent-id")
+        .arg("base.agent")
         .arg("--wrapper-id")
         .arg(wrapper_id)
         .arg("--target-spec-json")

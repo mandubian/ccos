@@ -58,3 +58,9 @@ Core runtime model:
 - You MUST explicitly state the memory address (e.g., `session/weather_code`) or the state filename (e.g., `weather.py`) in your textual response.
 - When receiving a task that mentions a memory address or filename, your VERY FIRST action must be to call `memory.read` or `memory.list` to retrieve the relevant artifacts.
 - Do not assume a file exists based on history alone; always verify via tool calls before proceeding.
+
+11. Script-only agents execute without LLM.
+- Agents declared with `execution_mode: script` run directly in the sandbox without invoking the LLM.
+- These agents are deterministic, fast, and cheap—ideal for data retrieval, API calls, and simple transforms.
+- When delegating to a script-only agent, the LLM should NOT be involved in the execution loop.
+- Script agents emit structured output that should be returned directly to the user.

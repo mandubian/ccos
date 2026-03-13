@@ -142,6 +142,18 @@ impl AgentRepository {
             );
         }
 
+        // Validate execution_mode: Script requires script_entry
+        use autonoetic_types::agent::ExecutionMode;
+        if matches!(manifest.execution_mode, ExecutionMode::Script) {
+            if manifest.script_entry.is_none() {
+                anyhow::bail!(
+                    "Agent '{}' has execution_mode=script but is missing script_entry. \
+                    Add 'script_entry: scripts/main.py' to the agent manifest.",
+                    manifest.agent.id
+                );
+            }
+        }
+
         Ok(LoadedAgent {
             dir: meta.dir.clone(),
             manifest,
@@ -311,6 +323,44 @@ Test instructions.
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("identity mismatch"));
+    }
+
+    #[test]
+    fn test_agent_repository_script_mode_requires_script_entry() {
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).expect("agents dir should create");
+
+        let agent_dir = agents_dir.join("script-agent");
+        std::fs::create_dir_all(agent_dir.join("state")).expect("agent dir should create");
+
+        let skill_md = r#"---
+version: "1.0"
+runtime:
+  engine: "autonoetic"
+  gateway_version: "0.1.0"
+  sdk_version: "0.1.0"
+  type: "stateful"
+  sandbox: "bubblewrap"
+  runtime_lock: "runtime.lock"
+agent:
+  id: "script-agent"
+  name: "Script Agent"
+  description: "A script-only agent"
+execution_mode: script
+# Missing script_entry!
+capabilities: []
+---
+# Script Agent
+"#;
+        std::fs::write(agent_dir.join("SKILL.md"), skill_md).expect("skill.md should write");
+
+        let repo = AgentRepository::new(agents_dir);
+        let result = repo.get_sync("script-agent");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("execution_mode=script but is missing script_entry"));
     }
 
     #[tokio::test]

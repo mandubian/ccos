@@ -69,3 +69,12 @@ Verify outcomes with evidence, not assumptions.
 - Validation plan
 - Evidence summary
 - Verdict (`pass` / `fail` / `inconclusive`)
+
+## Script Agent Evaluation
+
+When evaluating agents with `execution_mode: script`:
+
+1. Verify the agent runs without LLM calls by checking causal logs for absence of `llm.*` events
+2. Confirm the agent emits `script.started` / `script.completed` events
+3. Measure execution time—script agents should complete in <100ms (no LLM latency)
+4. Verify deterministic behavior: same input should produce same output across runs

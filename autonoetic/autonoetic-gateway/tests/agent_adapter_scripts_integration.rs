@@ -11,7 +11,11 @@ fn script_path(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-fn run_python_with_stdin(script: &Path, args: &[&str], stdin_json: &serde_json::Value) -> serde_json::Value {
+fn run_python_with_stdin(
+    script: &Path,
+    args: &[&str],
+    stdin_json: &serde_json::Value,
+) -> serde_json::Value {
     let mut child = Command::new("python3")
         .arg(script)
         .args(args)
@@ -46,7 +50,10 @@ fn test_adapter_scripts_generate_wrapper_with_mapping_hooks() {
     let schema_diff_script = script_path("schema_diff.py");
     let generate_wrapper_script = script_path("generate_wrapper.py");
     assert!(schema_diff_script.exists(), "schema_diff.py should exist");
-    assert!(generate_wrapper_script.exists(), "generate_wrapper.py should exist");
+    assert!(
+        generate_wrapper_script.exists(),
+        "generate_wrapper.py should exist"
+    );
 
     let diff_input = serde_json::json!({
         "base_accepts": {
@@ -71,8 +78,14 @@ fn test_adapter_scripts_generate_wrapper_with_mapping_hooks() {
         }
     });
     let diff = run_python_with_stdin(&schema_diff_script, &[], &diff_input);
-    assert_eq!(diff["requires_input_mapping"], serde_json::Value::Bool(true));
-    assert_eq!(diff["requires_output_mapping"], serde_json::Value::Bool(true));
+    assert_eq!(
+        diff["requires_input_mapping"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        diff["requires_output_mapping"],
+        serde_json::Value::Bool(true)
+    );
 
     let temp = tempfile::tempdir().expect("tempdir should create");
     let base_skill_path = temp.path().join("base.SKILL.md");
@@ -109,6 +122,8 @@ Base instructions.
         .arg(&generate_wrapper_script)
         .arg("--base-skill")
         .arg(base_skill_path.to_string_lossy().to_string())
+        .arg("--base-agent-id")
+        .arg("base.agent")
         .arg("--wrapper-id")
         .arg("base.agent.adapter")
         .arg("--target-spec-json")
@@ -140,6 +155,16 @@ Base instructions.
     assert!(output_dir.join("SKILL.md").exists());
     assert!(output_dir.join("scripts").join("pre_map.py").exists());
     assert!(output_dir.join("scripts").join("post_map.py").exists());
+
+    let skill_md = std::fs::read_to_string(output_dir.join("SKILL.md")).expect("SKILL.md readable");
+    assert!(
+        skill_md.contains("base_agent_id: \"base.agent\""),
+        "should have base_agent_id traceability"
+    );
+    assert!(
+        skill_md.contains("generated_at:"),
+        "should have generation timestamp"
+    );
 }
 
 #[test]

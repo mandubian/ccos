@@ -786,10 +786,78 @@ Progress notes (2026-03-11):
 - [x] Keep planner reuse-first ladder as: reuse as-is -> adapter wrapper for small role-local gaps -> builder install only when no suitable role exists.
 - [x] Use manifest-owned `middleware` (`pre_process`/`post_process`) for deterministic I/O transforms.
 - [x] Remove overlay-era references from planner/builder guidance and runtime docs/tests.
-- [ ] Push deterministic-runtime patterns for operational API agents (weather-like): LLM for setup/planning, deterministic execution path for routine runs.
-- [ ] Implement Gateway-level native pipeline interceptors to execute pre/post scripts automatically outside of the LLM window.
-- [ ] Add explicit planner/builder guardrail: for procedural data retrieval tasks, prefer no-LLM execution loops (scheduled action or direct deterministic tool path) and only escalate to LLM reasoning on error/ambiguity.
-- [ ] Add evaluator checks proving steady-state operation succeeds without LLM calls for deterministic agents.
+
+### Deterministic execution patterns
+
+Goal: allow agents that only run scripts/APIs to execute without consuming LLM resources. A "deterministic agent" declares itself as script-only in its manifest; the gateway executes it directly in sandbox, bypassing the full lifecycle loop.
+
+**Current gap:** `BackgroundMode::Deterministic` exists for the background scheduler but only executes `pending_scheduled_action` (WriteFile/SandboxExec). Foreground agents (`event.ingest` / `agent.spawn`) always go through the full LLM lifecycle. The `skip_llm` middleware hook (`lifecycle.rs:269`) is inside the lifecycle loop, not a true bypass — it still builds the LLM request, manages history, and runs the full orchestration path.
+
+**Target behavior:**
+- Agent manifest declares `execution_mode: script` with an entry point script
+- Gateway detects this at dispatch time and runs the script directly in sandbox
+- No LLM call, no lifecycle loop, no history management
+- Output returned through normal ingress channel with causal logging
+- Existing `execution_mode: reasoning` (default) preserves current LLM-driven behavior
+
+#### 1. Manifest-level execution mode declaration
+
+- [x] Add `execution_mode` field to agent manifest (`autonoetic-types/src/agent.rs`): `Script` or `Reasoning` (default)
+- [x] Add optional `script_entry` field for `Script` mode: path to entry script relative to agent dir
+- [x] Parse from SKILL.md frontmatter: `metadata.autonoetic.execution_mode` and `metadata.autonoetic.script_entry`
+- [x] Validate at load time: `Script` mode requires `script_entry`; `Reasoning` mode ignores it (implemented in `AgentRepository::load_from_meta()`)
+
+#### 2. Gateway fast path for script agents
+
+- [x] Add `execute_script_in_sandbox()` function in `execution.rs`: resolve script path, build sandbox command, execute directly, capture stdout as reply
+- [x] Insert mode check in `spawn_agent_once()` before lifecycle entry: if `execution_mode == Script`, call `execute_script_in_sandbox()` and return early
+- [x] Reuse existing sandbox infrastructure (bubblewrap/docker/microvm) - uses `SandboxRunner` API
+- [x] Pass ingress payload as environment variable (`SCRIPT_INPUT`) to the script
+- [x] Emit causal events (`script.started`, `script.completed`, `script.failed`) with same session/turn semantics
+
+#### 3. Planner and builder guardrails
+
+- [x] Update `planner.default/SKILL.md`: for procedural data retrieval tasks (weather, stock price, status check), prefer spawning agents with `execution_mode: script` over LLM-driven agents
+- [x] Update `specialized_builder.default/SKILL.md`: when building agents for deterministic tasks, default to `execution_mode: script` and only use `reasoning` when ambiguity/approval is needed
+- [x] Add foundation rule: agents declared as `script` mode should not be spawned through the LLM lifecycle (see `runtime/foundation_instructions.md` rule 11)
+
+#### 4. Evaluator checks
+
+- [x] Add evaluator criterion: for `script` mode agents, verify steady-state runs complete without any LLM calls (see `agents/specialists/evaluator.default/SKILL.md`)
+- [x] Add causal chain assertion in tests: `script` mode execution emits `script.*` events but no `llm.*` events (see `tests/script_agent_integration.rs::test_script_agent_logs_causal_events`)
+- [x] Add performance assertion: script agent execution completes in <500ms sandbox overhead (no LLM latency)
+
+#### 5. Migration: extend existing agents
+
+- [ ] Convert example weather-like agents to `execution_mode: script` (requires creating new example agents)
+- [ ] Convert Fibonacci background worker to use manifest-level `execution_mode: script` instead of `pending_scheduled_action` plumbing
+- [x] Keep `BackgroundMode::Deterministic` for backward compatibility but prefer manifest-level declaration for new agents
+
+#### 6. Tests
+
+- [x] Unit test: manifest parser extracts `execution_mode` and `script_entry` (see `parser::tests::test_parse_execution_mode_script`)
+- [x] Unit test: `Script` mode without `script_entry` fails validation (see `repository::tests::test_agent_repository_script_mode_requires_script_entry`)
+- [x] Integration test: `event.ingest` to script agent executes script, returns stdout, no LLM call (see `tests/script_agent_integration.rs`)
+- [x] Integration test: script agent with sandbox failure returns structured error (see `tests/script_agent_integration.rs::test_script_agent_with_sandbox_failure_returns_error`)
+- [x] Integration test: script agent respects same policy/capability checks as reasoning agents (see `tests/script_agent_integration.rs::test_script_agent_without_capabilities_cannot_access_tools`)
+- [x] Performance test: script agent execution <500ms (see `tests/script_agent_integration.rs::test_script_agent_execution_time_under_100ms`)
+
+**Implementation notes (2026-03-13):**
+- Added `ExecutionMode` enum to `autonoetic-types/src/agent.rs` with `Script` and `Reasoning` variants
+- Added `execution_mode` and `script_entry` fields to `AgentManifest` with serde defaults
+- Parser updated to extract fields from `metadata.autonoetic.execution_mode` and `metadata.autonoetic.script_entry`
+- Fast path implemented in `execution.rs::spawn_agent_once()` - checks for `ExecutionMode::Script` before building LLM config
+- Script execution uses `SandboxRunner::spawn_for_driver()` with env vars `SCRIPT_INPUT` and `AGENT_DIR`
+- Load-time validation in `AgentRepository::load_from_meta()` rejects `Script` mode without `script_entry`
+- Causal events logged for script execution (`script.started`, `script.completed`, `script.failed`)
+- 5 integration tests added in `tests/script_agent_integration.rs`
+- Foundation rules updated with script agent guidance (rule 11 in `foundation_instructions.md`)
+- Evaluator agent updated with script agent evaluation criteria (`agents/specialists/evaluator.default/SKILL.md`)
+- All 148 unit tests pass
+
+**Remaining migration items (optional):**
+- Converting existing Fibonacci worker to script mode requires creating the worker first
+- Example weather-like agents can be created later as demonstrations
 
 ### Session log observability and reconstruction
 
@@ -818,3 +886,25 @@ Progress notes (2026-03-11):
 - [ ] Add guidance on when to persist to textual state versus Tier2 memory (`memory.db`) to avoid overlap and drift.
 - [ ] Update foundation/planner/builder guidance to prefer these state files for long multi-step tasks that benefit from explicit checklists.
 - [ ] Evaluate stronger lazy loading as an optional optimization track (not mandatory): keep current behavior as default until profiling justifies added complexity.
+
+### Pluggable schema enforcement hook
+
+**Problem:** When agents call other agents via `agent.spawn`, the calling LLM must produce payloads matching the target's `io` schema. LLMs are inconsistent at exact structural output. Current lightweight validation passes through garbage or fails without actionable feedback.
+
+**Goal:** Add a pluggable enforcement hook between tool-call interception and target-agent dispatch that can coerce payloads, reject with actionable errors, and log all decisions. Keep the hook swappable between pure code (first) and cheap LLM (later) implementations.
+
+**Design doc:** `docs/schema-enforcement-hook.md`
+
+**Implementation order:**
+
+- [ ] Define `SchemaEnforcer` trait and `EnforcementResult` enum (`Pass`, `Coerced`, `Reject`) in `autonoetic-types`
+- [ ] Implement `DeterministicCoercionEnforcer` (pure code): required-field defaults, field renaming by similarity, safe type coercion
+- [ ] Add `schema_enforcement` config section to `GatewayConfig` (`primary`, `fallback`, `audit`, `agent_overrides`)
+- [ ] Insert hook into `agent.spawn` tool execution path in `runtime/tools.rs` — after capability check, before target dispatch
+- [ ] Add causal chain logging for all enforcement decisions (pass, coerce, reject) with transformation details
+- [ ] Add unit tests for all coercion rules: exact match (pass), missing defaults (coerce), field rename (coerce), unrecoverable mismatch (reject)
+- [ ] Add integration test: malformed `agent.spawn` payload → auto-coerced → target receives valid input
+- [ ] Add integration test: unrecoverable mismatch → structured error with `hint` → calling agent repairs in-session
+- [ ] Update planner `SKILL.md` guidance to note that structural schema errors are auto-corrected when possible; explicit `skill.describe` is optional
+- [ ] (Later) Implement `LlmCoercionEnforcer` with cheap model fallback for complex structural transforms
+- [ ] (Later) Add per-agent enforcement overrides so high-churn callers (planner) can opt into LLM fallback
