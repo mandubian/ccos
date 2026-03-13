@@ -865,7 +865,7 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - [x] Record cross-agent event references in the session index (agent_id, log_id, timestamp, category/action, causal hash refs) as events are emitted.
 - [x] Add trace tooling to reconstruct a single ordered session view from gateway + agent logs without manual stitching (`trace session.show` / `trace session.rebuild` semantics).
 - [x] Add integrity checks in reconstruction mode (missing ref, hash mismatch, orphan entries) and surface explicit diagnostics.
-- [ ] Add integration tests for multi-agent delegated sessions proving full timeline reconstruction and deterministic ordering.
+- [x] Add integration tests for multi-agent delegated sessions proving full timeline reconstruction and deterministic ordering.
 - [x] Add real-time trace following (`trace session follow`) to watch session events live as they happen.
 
 **Implementation notes (2026-03-13):**
@@ -878,7 +878,10 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - Added session index at `.gateway/sessions/<session_id>/index.json` updated on every gateway causal log write
 - Added `trace session rebuild` CLI command that combines gateway + agent causal logs into unified timeline
 - Integrity checks include event_seq gaps per agent
-- All 148 unit tests pass
+- Added `session_trace_integration.rs` with 2 integration tests:
+  - `test_multi_agent_session_trace_reconstruction`: verifies parent→child agent spawn creates events in all three causal logs (gateway, parent, child) with proper session filtering
+  - `test_session_trace_deterministic_ordering`: verifies events are sorted by timestamp and event_seq within session
+- Test uses `#[tokio::test(flavor = "multi_thread")]` for agent.spawn tool compatibility (block_in_place requires multi-threaded runtime)
 
 ### Causal chain rotation and retention
 
