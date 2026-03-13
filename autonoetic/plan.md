@@ -931,14 +931,22 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 
 **Implementation order:**
 
-- [ ] Define `SchemaEnforcer` trait and `EnforcementResult` enum (`Pass`, `Coerced`, `Reject`) in `autonoetic-types`
-- [ ] Implement `DeterministicCoercionEnforcer` (pure code): required-field defaults, field renaming by similarity, safe type coercion
-- [ ] Add `schema_enforcement` config section to `GatewayConfig` (`primary`, `fallback`, `audit`, `agent_overrides`)
-- [ ] Insert hook into `agent.spawn` tool execution path in `runtime/tools.rs` — after capability check, before target dispatch
-- [ ] Add causal chain logging for all enforcement decisions (pass, coerce, reject) with transformation details
-- [ ] Add unit tests for all coercion rules: exact match (pass), missing defaults (coerce), field rename (coerce), unrecoverable mismatch (reject)
+- [x] Define `SchemaEnforcer` trait and `EnforcementResult` enum (`Pass`, `Coerced`, `Reject`) in `autonoetic-types`
+- [x] Implement `DeterministicCoercionEnforcer` (pure code): required-field defaults, field renaming by similarity, safe type coercion
+- [x] Add `schema_enforcement` config section to `GatewayConfig` (`primary`, `fallback`, `audit`, `agent_overrides`)
+- [x] Insert hook into `agent.spawn` tool execution path in `runtime/tools.rs` — after capability check, before target dispatch
+- [x] Add causal chain logging for all enforcement decisions (pass, coerce, reject) with transformation details
+- [x] Add unit tests for all coercion rules: exact match (pass), missing defaults (coerce), field rename (coerce), unrecoverable mismatch (reject)
 - [ ] Add integration test: malformed `agent.spawn` payload → auto-coerced → target receives valid input
 - [ ] Add integration test: unrecoverable mismatch → structured error with `hint` → calling agent repairs in-session
 - [ ] Update planner `SKILL.md` guidance to note that structural schema errors are auto-corrected when possible; explicit `skill.describe` is optional
 - [ ] (Later) Implement `LlmCoercionEnforcer` with cheap model fallback for complex structural transforms
 - [ ] (Later) Add per-agent enforcement overrides so high-churn callers (planner) can opt into LLM fallback
+
+**Implementation notes (2026-03-13):**
+- Added `schema_enforcement.rs` in autonoetic-types with `SchemaEnforcer` trait and `EnforcementResult` enum
+- Added `DeterministicCoercionEnforcer` with default value and type coercion support
+- Added `SchemaEnforcementConfig` to GatewayConfig with mode (disabled/deterministic/llm), audit flag, and agent_overrides
+- Hook inserted in `agent.spawn` tool at `runtime/tools.rs` - reads target agent's `io.accepts` schema
+- Enforcement logs transformations via tracing at `schema_enforcement` target
+- All 210+ tests pass
