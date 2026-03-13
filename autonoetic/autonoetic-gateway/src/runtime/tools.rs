@@ -7,10 +7,11 @@ use autonoetic_types::background::{
     ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
 use autonoetic_types::capability::Capability;
-use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig};
+use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig, SchemaEnforcementConfig, SchemaEnforcementMode};
 use autonoetic_types::runtime_lock::{
     LockedDependencySet, LockedGateway, LockedSandbox, LockedSdk, RuntimeLock,
 };
+use autonoetic_types::schema_enforcement::{default_enforcer, EnforcementResult, SchemaEnforcer};
 use autonoetic_types::tool_error::tagged;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -2557,12 +2558,64 @@ impl NativeTool for AgentSpawnTool {
         arguments_json: &str,
         session_id: Option<&str>,
         _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: SpawnAgentArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
         validate_agent_id(&args.agent_id)?;
         anyhow::ensure!(!args.message.trim().is_empty(), "message must not be empty");
+
+        // Schema enforcement hook
+        let default_enforcement_config = SchemaEnforcementConfig::default();
+        let enforcement_config = config
+            .map(|c| &c.schema_enforcement)
+            .unwrap_or(&default_enforcement_config);
+        
+        if enforcement_config.mode != SchemaEnforcementMode::Disabled {
+            let agents_dir = agent_dir.parent()
+                .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+            let target_agent_path = agents_dir.join(&args.agent_id).join("SKILL.md");
+            
+            if target_agent_path.exists() {
+                if let Ok(manifest_content) = std::fs::read_to_string(&target_agent_path) {
+                    if let Some(frontmatter) = manifest_content.split("---").nth(1) {
+                        if let Ok(target_manifest) = serde_yaml::from_str::<AgentManifest>(frontmatter) {
+                            if let Some(io) = &target_manifest.io {
+                                if let Some(accepts) = &io.accepts {
+                                    let enforcer = default_enforcer();
+                                    let payload = serde_json::json!({
+                                        "message": args.message,
+                                        "metadata": args.metadata,
+                                        "session_id": args.session_id,
+                                    });
+                                    
+                                    match enforcer.enforce(&payload, accepts) {
+                                        EnforcementResult::Reject(details) => {
+                                            return Err(anyhow::anyhow!(
+                                                "Schema validation failed: {}. Hint: {}",
+                                                details.reason,
+                                                details.hint.unwrap_or_default()
+                                            ));
+                                        }
+                                        EnforcementResult::Coerced(details) => {
+                                            if enforcement_config.audit {
+                                                tracing::info!(
+                                                    target: "schema_enforcement",
+                                                    agent_id = %args.agent_id,
+                                                    transformations = ?details.transformations,
+                                                    "Schema enforcement: payload coerced"
+                                                );
+                                            }
+                                        }
+                                        EnforcementResult::Pass => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let resolved_session_id = args
             .session_id

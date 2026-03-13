@@ -16,6 +16,47 @@ pub enum AgentInstallApprovalPolicy {
     Never,
 }
 
+/// Schema enforcement mode for agent.spawn payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaEnforcementMode {
+    /// Disabled - pass through payloads without enforcement.
+    Disabled,
+    /// Use deterministic coercion (defaults, type coercion).
+    #[default]
+    Deterministic,
+    /// (Later) Use LLM for complex transformations.
+    Llm,
+}
+
+/// Configuration for schema enforcement on agent.spawn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaEnforcementConfig {
+    /// Enforcement mode: disabled, deterministic, or llm.
+    #[serde(default)]
+    pub mode: SchemaEnforcementMode,
+    /// Log all enforcement decisions to causal chain.
+    #[serde(default = "default_true")]
+    pub audit: bool,
+    /// Agent-specific overrides (agent_id -> mode).
+    #[serde(default)]
+    pub agent_overrides: std::collections::HashMap<String, SchemaEnforcementMode>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SchemaEnforcementConfig {
+    fn default() -> Self {
+        Self {
+            mode: SchemaEnforcementMode::Deterministic,
+            audit: true,
+            agent_overrides: std::collections::HashMap::new(),
+        }
+    }
+}
+
 /// Top-level Gateway daemon configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -67,6 +108,10 @@ pub struct GatewayConfig {
     /// When `agent.install` requires human approval. `risk_based` (default) requires approval only for high-risk installs; `always` for every install; `never` to rely on promotion gate only.
     #[serde(default)]
     pub agent_install_approval_policy: AgentInstallApprovalPolicy,
+
+    /// Schema enforcement configuration for agent.spawn payloads.
+    #[serde(default)]
+    pub schema_enforcement: SchemaEnforcementConfig,
 }
 
 fn default_agents_dir() -> PathBuf {
@@ -120,6 +165,7 @@ impl Default for GatewayConfig {
             background_min_interval_secs: default_background_min_interval_secs(),
             max_background_due_per_tick: default_max_background_due_per_tick(),
             agent_install_approval_policy: AgentInstallApprovalPolicy::default(),
+            schema_enforcement: SchemaEnforcementConfig::default(),
         }
     }
 }
