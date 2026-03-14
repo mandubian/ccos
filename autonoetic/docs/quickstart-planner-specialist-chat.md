@@ -292,7 +292,15 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway app
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals reject <request_id> --reason "Out of scope"
 ```
 
-**Effect on install:** For `agent_install`-type requests, the gateway does not run the install when you approve. The **caller** (e.g. specialized_builder) must retry `agent.install` with the **same payload** and `promotion_gate.install_approval_ref` set to the approved `request_id`. After that, the install proceeds. Rejected requests are not retried; the caller sees the rejection and should report to the user.
+**Effect on install:** For `agent_install`-type requests, the gateway does not run the install when you approve. The gateway automatically stores the original install payload when approval is requested. When the caller retries with `promotion_gate.install_approval_ref` set to the approved `request_id`, the gateway uses the stored payload (ensuring fingerprint match). The caller does not need to recreate the exact same payload - the gateway handles this automatically.
+
+**Payload storage details:**
+- Stored at: `.gateway/scheduler/approvals/pending/<request_id>_payload.json`
+- Persists across gateway restarts
+- Cleaned up automatically after successful install
+- Enables deterministic retry even if the LLM generates a different payload
+
+**Rejected requests** are not retried; the caller sees the rejection and should report to the user.
 
 **Machine-readable list:** Use `--json` for JSON output:
 
