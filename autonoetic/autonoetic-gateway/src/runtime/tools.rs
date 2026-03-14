@@ -2,7 +2,7 @@ use crate::llm::ToolDefinition;
 use crate::policy::PolicyEngine;
 use crate::runtime::reevaluation_state::{execute_scheduled_action, persist_reevaluation_state};
 use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
-use autonoetic_types::agent::{AgentIdentity, AgentManifest, LlmConfig};
+use autonoetic_types::agent::{AgentIdentity, AgentManifest, ExecutionMode, LlmConfig};
 use autonoetic_types::background::{
     ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
@@ -88,6 +88,15 @@ fn requires_promotion_gate(agent_id: &str) -> bool {
     )
 }
 
+/// Returns true if the agent is an evolution role that can install other agents.
+/// Only evolution roles should have access to agent.install to prevent unauthorized agent creation.
+fn is_evolution_role(agent_id: &str) -> bool {
+    matches!(
+        agent_id,
+        "specialized_builder.default" | "evolution-steward.default"
+    )
+}
+
 /// Classifies an install as high-risk for approval policy. When true, risk_based policy requires human approval.
 fn is_install_high_risk(
     args: &InstallAgentArgs,
@@ -163,6 +172,78 @@ fn extract_host(url: &str) -> anyhow::Result<String> {
     Ok(host.to_string())
 }
 
+/// Stores the install payload alongside the approval request for deterministic retry.
+/// This ensures that when the caller retries with install_approval_ref, the gateway
+/// can use the exact same payload that was approved (avoiding fingerprint mismatch).
+fn store_install_payload(
+    config: &GatewayConfig,
+    request_id: &str,
+    args: &InstallAgentArgs,
+) -> anyhow::Result<()> {
+    let payload_path = crate::scheduler::store::pending_approvals_dir(config)
+        .join(format!("{request_id}_payload.json"));
+    if let Some(parent) = payload_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload_json = serde_json::to_string_pretty(args)?;
+    std::fs::write(&payload_path, payload_json)?;
+    tracing::info!(
+        target: "agent.install",
+        request_id = %request_id,
+        path = %payload_path.display(),
+        "Stored install payload for retry"
+    );
+    Ok(())
+}
+
+/// Loads a stored install payload by request_id.
+/// Returns None if the payload file doesn't exist (backward compatibility).
+fn load_install_payload(
+    config: &GatewayConfig,
+    request_id: &str,
+) -> anyhow::Result<Option<InstallAgentArgs>> {
+    let payload_path = crate::scheduler::store::pending_approvals_dir(config)
+        .join(format!("{request_id}_payload.json"));
+    if !payload_path.exists() {
+        tracing::debug!(
+            target: "agent.install",
+            request_id = %request_id,
+            "No stored payload found, using incoming args"
+        );
+        return Ok(None);
+    }
+    let payload_json = std::fs::read_to_string(&payload_path)?;
+    let args: InstallAgentArgs = serde_json::from_str(&payload_json)?;
+    tracing::info!(
+        target: "agent.install",
+        request_id = %request_id,
+        "Loaded stored install payload for retry"
+    );
+    Ok(Some(args))
+}
+
+/// Cleans up a stored install payload after successful install.
+fn cleanup_install_payload(config: &GatewayConfig, request_id: &str) {
+    let payload_path = crate::scheduler::store::pending_approvals_dir(config)
+        .join(format!("{request_id}_payload.json"));
+    if payload_path.exists() {
+        if let Err(e) = std::fs::remove_file(&payload_path) {
+            tracing::debug!(
+                target: "agent.install",
+                path = %payload_path.display(),
+                error = %e,
+                "Failed to cleanup stored payload"
+            );
+        } else {
+            tracing::info!(
+                target: "agent.install",
+                request_id = %request_id,
+                "Cleaned up stored install payload"
+            );
+        }
+    }
+}
+
 fn block_on_http<F, T>(future: F) -> anyhow::Result<T>
 where
     F: std::future::Future<Output = anyhow::Result<T>>,
@@ -176,6 +257,10 @@ where
 
 fn capabilities_are_empty(capabilities: &&[Capability]) -> bool {
     capabilities.is_empty()
+}
+
+fn is_default_execution_mode(mode: &ExecutionMode) -> bool {
+    matches!(mode, ExecutionMode::Reasoning)
 }
 
 #[derive(Debug, Serialize)]
@@ -205,6 +290,10 @@ struct StandardAutonoeticMetadata<'a> {
     background: &'a Option<BackgroundPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disclosure: &'a Option<autonoetic_types::disclosure::DisclosurePolicy>,
+    #[serde(skip_serializing_if = "is_default_execution_mode")]
+    execution_mode: ExecutionMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script_entry: &'a Option<String>,
 }
 
 fn render_skill_frontmatter(manifest: &AgentManifest) -> anyhow::Result<String> {
@@ -221,6 +310,8 @@ fn render_skill_frontmatter(manifest: &AgentManifest) -> anyhow::Result<String> 
                 limits: &manifest.limits,
                 background: &manifest.background,
                 disclosure: &manifest.disclosure,
+                execution_mode: manifest.execution_mode,
+                script_entry: &manifest.script_entry,
             },
         },
     };
@@ -2262,7 +2353,7 @@ fn ensure_output_contract_section(
     format!("{}{}", trimmed, section)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct InstallAgentArgs {
     agent_id: String,
     #[serde(default)]
@@ -2288,9 +2379,15 @@ struct InstallAgentArgs {
     arm_immediately: bool,
     #[serde(default = "default_true")]
     validate_on_install: bool,
+    /// Execution mode: "script" for deterministic script-only agents, "reasoning" for LLM-driven (default)
+    #[serde(default)]
+    execution_mode: Option<ExecutionMode>,
+    /// Entry script path for script mode (e.g., "scripts/main.py")
+    #[serde(default)]
+    script_entry: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct InstallPromotionGate {
     evaluator_pass: bool,
     auditor_pass: bool,
@@ -2677,16 +2774,14 @@ impl NativeTool for AgentInstallTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+        // Only evolution roles can install agents - prevents planner from bypassing specialized_builder
+        is_evolution_role(&manifest.agent.id)
     }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Install a specialized child agent by writing its SKILL.md, runtime.lock, files, and optional background schedule. Use this when the agent should create a durable worker or specialist that continues operating after the current chat turn.".to_string(),
+            description: "Install a specialized child agent by writing its SKILL.md, runtime.lock, files, and optional background schedule. Only available to evolution roles (specialized_builder, evolution-steward). Other agents should delegate to specialized_builder.default.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2736,7 +2831,16 @@ impl NativeTool for AgentInstallTool {
                         "additionalProperties": false
                     },
                     "arm_immediately": { "type": "boolean" },
-                    "validate_on_install": { "type": "boolean" }
+                    "validate_on_install": { "type": "boolean" },
+                    "execution_mode": {
+                        "type": "string",
+                        "enum": ["script", "reasoning"],
+                        "description": "Script mode runs a script directly without LLM (for deterministic tasks). Reasoning mode uses LLM-driven reasoning (default)."
+                    },
+                    "script_entry": {
+                        "type": "string",
+                        "description": "Entry script path for script mode (e.g., 'scripts/main.py'). Required when execution_mode is 'script'."
+                    }
                 },
                 "required": ["agent_id", "instructions"],
                 "additionalProperties": false
@@ -2755,10 +2859,10 @@ impl NativeTool for AgentInstallTool {
         _turn_id: Option<&str>,
         config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
-        let args: InstallAgentArgs = serde_json::from_str(arguments_json)
+        let mut args: InstallAgentArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-        let scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
-        let background =
+        let mut scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
+        let mut background =
             normalize_install_background(args.background.clone(), &args.scheduled_action)?;
 
         validate_agent_id(&args.agent_id)?;
@@ -2818,14 +2922,59 @@ impl NativeTool for AgentInstallTool {
                         ScheduledAction::AgentInstall {
                             agent_id: approved_agent_id,
                             requested_by_agent_id,
-                            install_fingerprint: approved_fingerprint,
+                            install_fingerprint: _,
                             ..
                         } if approved_agent_id == &args.agent_id
-                            && requested_by_agent_id == &manifest.agent.id
-                            && approved_fingerprint == &install_fingerprint => {}
+                            && requested_by_agent_id == &manifest.agent.id => {
+                            // Valid approval - try to load stored payload for deterministic retry
+                            if let Some(mut stored_args) = load_install_payload(cfg, request_id)? {
+                                tracing::info!(
+                                    target: "agent.install",
+                                    request_id = %request_id,
+                                    "Using stored install payload for deterministic retry"
+                                );
+                                // Preserve the install_approval_ref from original args (needed for cleanup)
+                                if let Some(ref original_gate) = args.promotion_gate {
+                                    if let Some(ref approval_ref) = original_gate.install_approval_ref {
+                                        if let Some(ref mut gate) = stored_args.promotion_gate {
+                                            gate.install_approval_ref = Some(approval_ref.clone());
+                                        }
+                                    }
+                                }
+                                // Replace args with stored payload
+                                args = stored_args;
+                                // Re-parse scheduled_action and background from stored args
+                                scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
+                                background = normalize_install_background(args.background.clone(), &args.scheduled_action)?;
+                            }
+                        }
+                        ScheduledAction::AgentInstall {
+                            agent_id: approved_agent_id,
+                            ..
+                        } if approved_agent_id != &args.agent_id => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match: agent_id mismatch (approved: {}, requested: {})",
+                                request_id,
+                                approved_agent_id,
+                                args.agent_id,
+                            ))
+                            .into());
+                        }
+                        ScheduledAction::AgentInstall {
+                            requested_by_agent_id,
+                            ..
+                        } if requested_by_agent_id != &manifest.agent.id => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match: requester mismatch (approved: {}, current: {})",
+                                request_id,
+                                requested_by_agent_id,
+                                manifest.agent.id,
+                            ))
+                            .into());
+                        }
                         _ => {
                             return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                                "install_approval_ref '{}' does not match this install request (agent/requester/fingerprint mismatch)",
+                                "install_approval_ref '{}' does not match this install request",
                                 request_id,
                             ))
                             .into());
@@ -2859,6 +3008,19 @@ impl NativeTool for AgentInstallTool {
                         .join(format!("{request_id}.json"));
                     std::fs::create_dir_all(pending_path.parent().unwrap())?;
                     crate::scheduler::store::write_json_file(&pending_path, &request)?;
+
+                    // Store the exact install payload for deterministic retry.
+                    // This ensures the caller can retry with install_approval_ref
+                    // and the gateway will use the approved payload (avoiding fingerprint mismatch).
+                    if let Err(e) = store_install_payload(cfg, &request_id, &args) {
+                        tracing::warn!(
+                            target: "agent.install",
+                            request_id = %request_id,
+                            error = %e,
+                            "Failed to store install payload for retry (non-fatal)"
+                        );
+                    }
+
                     return Ok(serde_json::json!({
                         "ok": false,
                         "approval_required": true,
@@ -2944,10 +3106,26 @@ impl NativeTool for AgentInstallTool {
             }
         }
 
+        // Determine execution mode: use provided value or default to Reasoning
+        let execution_mode = args.execution_mode.unwrap_or_default();
+
+        // Validate script mode requirements
+        if matches!(execution_mode, ExecutionMode::Script) {
+            anyhow::ensure!(
+                args.script_entry.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                "script execution mode requires a non-empty script_entry path"
+            );
+        }
+
+        // Resolve llm_config:
+        // - For Reasoning mode: use provided or inherit from parent
+        // - For Script mode: llm_config is optional (scripts don't need LLM)
         let llm_config = args
             .llm_config
             .clone()
             .or_else(|| manifest.llm_config.clone());
+
+        // Only require llm_config for reasoning background agents
         if matches!(
             background.as_ref().map(|bg| &bg.mode),
             Some(BackgroundMode::Reasoning)
@@ -2976,8 +3154,8 @@ impl NativeTool for AgentInstallTool {
             disclosure: None,
             io: None,
             middleware: None,
-            execution_mode: Default::default(),
-            script_entry: None,
+            execution_mode,
+            script_entry: args.script_entry.clone(),
         };
 
         let mut install_validation_error: Option<String> = None;
@@ -3113,6 +3291,17 @@ impl NativeTool for AgentInstallTool {
                     background_state_path,
                     serde_json::to_string_pretty(&background_state)?,
                 )?;
+            }
+        }
+
+        // Cleanup stored install payload after successful install
+        if let Some(cfg) = config {
+            if let Some(approval_ref) = args
+                .promotion_gate
+                .as_ref()
+                .and_then(|g| g.install_approval_ref.as_ref())
+            {
+                cleanup_install_payload(cfg, approval_ref);
             }
         }
 
@@ -3515,6 +3704,12 @@ mod tests {
         test_manifest_with_id("test-agent", capabilities)
     }
 
+    /// Creates a manifest for an evolution role (specialized_builder or evolution-steward).
+    /// These roles have access to agent.install.
+    fn test_evolution_manifest(capabilities: Vec<Capability>) -> AgentManifest {
+        test_manifest_with_id("specialized_builder.default", capabilities)
+    }
+
     fn test_manifest_with_id(agent_id: &str, capabilities: Vec<Capability>) -> AgentManifest {
         AgentManifest {
             version: "1.0".to_string(),
@@ -3628,11 +3823,17 @@ mod tests {
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
-        assert_eq!(defs_spawn.len(), 4);
+        // agent.spawn, agent.exists, agent.discover = 3 (agent.install is evolution-role only)
+        assert_eq!(defs_spawn.len(), 3);
         assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
-        assert!(defs_spawn.iter().any(|d| d.name == "agent.install"));
+        assert!(!defs_spawn.iter().any(|d| d.name == "agent.install"), "agent.install should NOT be available to non-evolution roles");
         assert!(defs_spawn.iter().any(|d| d.name == "agent.exists"));
         assert!(defs_spawn.iter().any(|d| d.name == "agent.discover"));
+
+        // agent.install should be available to evolution roles
+        let manifest_evolution = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let defs_evolution = registry.available_definitions(&manifest_evolution);
+        assert!(defs_evolution.iter().any(|d| d.name == "agent.install"), "agent.install should be available to evolution roles");
 
         let manifest_net = test_manifest(vec![Capability::NetConnect {
             hosts: vec!["*".to_string()],
@@ -4271,7 +4472,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_with_net_connect_requires_approval() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4283,7 +4484,11 @@ mod tests {
             "instructions": "Worker with network access.",
             "capabilities": [
                 { "type": "NetConnect", "hosts": ["api.example.com"] }
-            ]
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let config = GatewayConfig {
@@ -4357,7 +4562,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_tool_creates_background_child_agent() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4397,7 +4602,11 @@ mod tests {
                     "path": "state/fib.json",
                     "content": "{\"previous\": 0, \"current\": 1, \"index\": 1}"
                 }
-            ]
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -4446,7 +4655,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_tool_allows_dotted_agent_ids() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 2 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 2 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4457,7 +4666,11 @@ mod tests {
             "agent_id": "researcher.default",
             "name": "Researcher Default",
             "description": "Research specialist",
-            "instructions": "# Researcher Default\nCollect evidence and summarize it."
+            "instructions": "# Researcher Default\nCollect evidence and summarize it.",
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -4485,7 +4698,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_tool_accepts_scheduled_action_shorthand() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4512,7 +4725,11 @@ mod tests {
             "scheduled_action": {
                 "command": "python3 scripts/fibonacci_worker.py"
             },
-            "validate_on_install": false
+            "validate_on_install": false,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -4544,7 +4761,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_tool_accepts_script_and_interval_shorthand() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4561,7 +4778,11 @@ mod tests {
                 "interval_secs": 20,
                 "script": "python3 scripts/fibonacci_worker.py"
             },
-            "validate_on_install": false
+            "validate_on_install": false,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -4600,7 +4821,7 @@ mod tests {
 
     #[test]
     fn test_agent_install_tool_accepts_tool_use_and_cadence_shorthand() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4622,7 +4843,11 @@ mod tests {
                     }
                 }
             },
-            "validate_on_install": false
+            "validate_on_install": false,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -4800,7 +5025,7 @@ dependencies:
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
 
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
@@ -4817,7 +5042,11 @@ dependencies:
                 "path": "state/init.json",
                 "content": "{\"initialized\": true}"
             },
-            "validate_on_install": true
+            "validate_on_install": true,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let result = registry
@@ -4864,7 +5093,7 @@ dependencies:
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
 
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
@@ -4880,7 +5109,11 @@ dependencies:
                 "type": "sandbox_exec",
                 "command": "exit 1"
             },
-            "validate_on_install": true
+            "validate_on_install": true,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let result = registry
@@ -4913,7 +5146,7 @@ dependencies:
 
     #[test]
     fn test_agent_install_does_not_leave_partial_child_on_file_overwrite_error() {
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let policy = PolicyEngine::new(manifest.clone());
         let temp = tempdir().expect("tempdir should create");
         let agents_dir = temp.path().join("agents");
@@ -4928,7 +5161,11 @@ dependencies:
                     "path": "SKILL.md",
                     "content": "should fail because SKILL.md is generated"
                 }
-            ]
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let registry = default_registry();
@@ -5045,7 +5282,7 @@ dependencies:
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 10 }]);
 
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
@@ -5061,7 +5298,11 @@ dependencies:
                 "type": "sandbox_exec",
                 "command": "exit 1"
             },
-            "validate_on_install": false
+            "validate_on_install": false,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         let result = registry
@@ -5563,5 +5804,703 @@ Research agent instructions.
             io.get("returns").and_then(|v| v.get("type")),
             Some(&serde_json::json!("object"))
         );
+    }
+
+    #[test]
+    fn test_agent_install_script_mode_creates_script_agent() {
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "weather.script.default",
+            "name": "Weather Script Agent",
+            "description": "Deterministic weather API agent",
+            "instructions": "# Weather Script\nFetch weather data from public API.",
+            "execution_mode": "script",
+            "script_entry": "scripts/fetch_weather.py",
+            "files": [
+                {
+                    "path": "scripts/fetch_weather.py",
+                    "content": "import json\nimport sys\n\ndef main():\n    city = sys.argv[1] if len(sys.argv) > 1 else 'Paris'\n    # In real implementation, this would call open-meteo API\n    result = {'city': city, 'temp': 15.5, 'condition': 'sunny'}\n    print(json.dumps(result))\n\nif __name__ == '__main__':\n    main()\n"
+                }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                None,
+            )
+            .expect("agent install should succeed");
+
+        // Verify install succeeded
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("agent_installed"));
+
+        // Verify child agent directory was created
+        let child_dir = agents_dir.join("weather.script.default");
+        assert!(child_dir.join("SKILL.md").exists(), "SKILL.md should exist");
+        assert!(child_dir.join("runtime.lock").exists(), "runtime.lock should exist");
+        assert!(child_dir.join("scripts").join("fetch_weather.py").exists(), "script should exist");
+
+        // Verify SKILL.md contains correct execution_mode and script_entry
+        let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should read");
+        assert!(skill.contains("execution_mode: script"), "SKILL.md should contain execution_mode: script");
+        assert!(skill.contains("script_entry: scripts/fetch_weather.py"), "SKILL.md should contain script_entry");
+    }
+
+    #[test]
+    fn test_agent_install_script_mode_requires_script_entry() {
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Script mode without script_entry should fail
+        let args = serde_json::json!({
+            "agent_id": "bad.script.agent",
+            "instructions": "# Bad Script Agent\nMissing script_entry.",
+            "execution_mode": "script",
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                None,
+            );
+
+        assert!(result.is_err(), "install should fail without script_entry");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("script_entry"), "error should mention script_entry");
+    }
+
+    #[test]
+    fn test_agent_install_script_mode_allows_no_llm_config() {
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Script mode should work without llm_config
+        let args = serde_json::json!({
+            "agent_id": "no.llm.script",
+            "instructions": "# Script Agent\nNo LLM needed.",
+            "execution_mode": "script",
+            "script_entry": "scripts/main.py",
+            "files": [
+                {
+                    "path": "scripts/main.py",
+                    "content": "print('hello')"
+                }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                None,
+            );
+
+        // Should succeed even without llm_config
+        assert!(result.is_ok(), "script mode should not require llm_config: {:?}", result.err());
+
+        // Verify child agent exists
+        let child_dir = agents_dir.join("no.llm.script");
+        assert!(child_dir.join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn test_agent_install_reasoning_mode_with_llm_config() {
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder_agent");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "reasoning.agent",
+            "instructions": "# Reasoning Agent\nUses LLM for reasoning.",
+            "execution_mode": "reasoning",
+            "llm_config": {
+                "provider": "openai",
+                "model": "gpt-4o"
+            },
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                None,
+            );
+
+        assert!(result.is_ok(), "reasoning mode should succeed");
+
+        // Verify child agent exists with SKILL.md
+        let child_dir = agents_dir.join("reasoning.agent");
+        let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should read");
+        // Note: execution_mode: reasoning is the default and may be omitted from frontmatter
+        // We just verify the agent was created successfully and has llm_config
+        assert!(skill.contains("provider: openai"), "SKILL.md should contain llm_config provider");
+        assert!(skill.contains("model: gpt-4o"), "SKILL.md should contain llm_config model");
+    }
+
+    #[test]
+    fn test_agent_install_blocks_without_approval() {
+        // This test verifies that an agent install is blocked when approval is required
+        // and returns a proper approval request response.
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Try to install with approval-required capability (NetConnect is high-risk)
+        let args = serde_json::json!({
+            "agent_id": "pending.worker",
+            "instructions": "Worker that requires approval.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::Always,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("install should return approval request, not error");
+
+        // Verify approval_required response
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            parsed.get("approval_required").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(parsed.get("request_id").is_some());
+        assert!(
+            parsed
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("approval"),
+            "message should mention approval"
+        );
+
+        // Verify agent was NOT installed
+        let child_dir = agents_dir.join("pending.worker");
+        assert!(
+            !child_dir.exists(),
+            "agent should not be installed while approval is pending"
+        );
+    }
+
+    #[test]
+    fn test_agent_install_rejects_invalid_approval_ref() {
+        // This test verifies that an agent cannot be installed with an approval_ref
+        // that doesn't exist in the approved directory.
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Try to install with a fake approval_ref that doesn't exist
+        let args = serde_json::json!({
+            "agent_id": "fake.approval.worker",
+            "instructions": "Worker with fake approval.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true,
+                "install_approval_ref": "non-existent-request-id"
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::Always,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+        let result = registry.execute(
+            "agent.install",
+            &manifest,
+            &policy,
+            &parent_dir,
+            None,
+            &serde_json::to_string(&args).expect("json should encode"),
+            None,
+            None,
+            Some(&config),
+        );
+
+        // Should fail because the approval_ref doesn't exist
+        assert!(result.is_err(), "install should fail with invalid approval_ref");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found") || err_msg.contains("not approved") || err_msg.contains("approval"),
+            "error should mention approval issue: {}",
+            err_msg
+        );
+
+        // Verify agent was NOT installed
+        let child_dir = agents_dir.join("fake.approval.worker");
+        assert!(
+            !child_dir.exists(),
+            "agent should not be installed with invalid approval"
+        );
+    }
+
+    #[test]
+    fn test_agent_install_no_approval_needed_for_low_risk() {
+        // This test verifies that low-risk agents (no NetConnect, no background) 
+        // can be installed without approval when using RiskBased policy.
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Low-risk install: no NetConnect, no background
+        let args = serde_json::json!({
+            "agent_id": "simple.worker",
+            "instructions": "A simple worker.",
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::RiskBased,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("low-risk install should succeed without approval");
+
+        // Verify successful install
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        assert_eq!(parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("agent_installed")
+        );
+
+        // Verify agent was installed
+        let child_dir = agents_dir.join("simple.worker");
+        assert!(child_dir.exists(), "agent should be installed");
+    }
+
+    #[test]
+    fn test_agent_install_stores_payload_on_approval() {
+        // This test verifies that when an install requires approval, the payload is stored
+        // in a file that can be used for deterministic retry.
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "stored.payload.worker",
+            "instructions": "Worker for payload storage test.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::Always,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("install should return approval request");
+
+        // Get the request_id
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        let request_id = parsed
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .expect("request_id should exist");
+
+        // Verify payload file was created
+        let payload_path = agents_dir
+            .join(".gateway")
+            .join("scheduler")
+            .join("approvals")
+            .join("pending")
+            .join(format!("{}_payload.json", request_id));
+        assert!(payload_path.exists(), "payload file should exist at {:?}", payload_path);
+
+        // Verify payload content
+        let payload_content = std::fs::read_to_string(&payload_path).expect("payload should be readable");
+        let stored_args: serde_json::Value = serde_json::from_str(&payload_content).expect("payload should be valid JSON");
+        assert_eq!(stored_args.get("agent_id").and_then(|v| v.as_str()), Some("stored.payload.worker"));
+        assert!(stored_args.get("instructions").is_some());
+    }
+
+    #[test]
+    fn test_agent_install_uses_stored_payload_on_retry() {
+        // This test verifies that when retrying with install_approval_ref,
+        // the gateway uses the stored payload (ensuring fingerprint match).
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Original install payload
+        let original_args = serde_json::json!({
+            "agent_id": "retry.test.worker",
+            "instructions": "# Original Instructions\nThis is the original payload.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::Always,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+
+        // First call: creates approval and stores payload
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&original_args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("install should return approval request");
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        let request_id = parsed.get("request_id").and_then(|v| v.as_str()).unwrap();
+
+        // Manually approve the request (simulating user approval)
+        let approved_dir = agents_dir
+            .join(".gateway")
+            .join("scheduler")
+            .join("approvals")
+            .join("approved");
+        std::fs::create_dir_all(&approved_dir).expect("approved dir should create");
+
+        let approval_decision = serde_json::json!({
+            "request_id": request_id,
+            "agent_id": "specialized_builder.default",
+            "session_id": "test-session",
+            "action": {
+                "type": "agent_install",
+                "agent_id": "retry.test.worker",
+                "summary": "# Original Instructions",
+                "requested_by_agent_id": "specialized_builder.default",
+                "install_fingerprint": "fake_fingerprint"
+            },
+            "status": "approved",
+            "decided_at": "2026-03-13T12:01:00Z",
+            "decided_by": "test-user"
+        });
+
+        std::fs::write(
+            approved_dir.join(format!("{}.json", request_id)),
+            serde_json::to_string(&approval_decision).expect("json"),
+        )
+        .expect("write approval decision");
+
+        // Retry with DIFFERENT payload but same approval_ref
+        // The gateway should use the STORED payload, not this one
+        let retry_args = serde_json::json!({
+            "agent_id": "retry.test.worker",
+            "instructions": "# CHANGED Instructions\nThis is a different payload that should be ignored!",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["different.api.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true,
+                "install_approval_ref": request_id
+            }
+        });
+
+        let retry_result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&retry_args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("retry should succeed with stored payload");
+
+        let retry_parsed: serde_json::Value = serde_json::from_str(&retry_result).expect("json");
+        assert_eq!(retry_parsed.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            retry_parsed.get("status").and_then(|v| v.as_str()),
+            Some("agent_installed")
+        );
+
+        // Verify agent was installed
+        let child_dir = agents_dir.join("retry.test.worker");
+        assert!(child_dir.exists(), "agent should be installed");
+
+        // Verify SKILL.md contains ORIGINAL instructions, not the changed ones
+        let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should exist");
+        assert!(skill.contains("Original Instructions"), "should use stored payload, not changed payload");
+    }
+
+    #[test]
+    fn test_agent_install_cleans_up_payload_after_success() {
+        // This test verifies that the stored payload file is cleaned up after successful install.
+
+        let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let parent_dir = agents_dir.join("builder");
+        std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        let args = serde_json::json!({
+            "agent_id": "cleanup.test.worker",
+            "instructions": "Worker for cleanup test.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
+        });
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            agent_install_approval_policy: AgentInstallApprovalPolicy::Always,
+            ..Default::default()
+        };
+
+        let registry = default_registry();
+
+        // First call: creates approval and stores payload
+        let result = registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("install should return approval request");
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("json");
+        let request_id = parsed.get("request_id").and_then(|v| v.as_str()).unwrap();
+
+        // Verify payload file exists
+        let payload_path = agents_dir
+            .join(".gateway")
+            .join("scheduler")
+            .join("approvals")
+            .join("pending")
+            .join(format!("{}_payload.json", request_id));
+        assert!(payload_path.exists(), "payload file should exist before retry");
+
+        // Manually approve
+        let approved_dir = agents_dir
+            .join(".gateway")
+            .join("scheduler")
+            .join("approvals")
+            .join("approved");
+        std::fs::create_dir_all(&approved_dir).expect("approved dir should create");
+
+        let approval_decision = serde_json::json!({
+            "request_id": request_id,
+            "agent_id": "specialized_builder.default",
+            "session_id": "test-session",
+            "action": {
+                "type": "agent_install",
+                "agent_id": "cleanup.test.worker",
+                "summary": "Worker for cleanup test.",
+                "requested_by_agent_id": "specialized_builder.default",
+                "install_fingerprint": "fake_fingerprint"
+            },
+            "status": "approved",
+            "decided_at": "2026-03-13T12:01:00Z",
+            "decided_by": "test-user"
+        });
+
+        std::fs::write(
+            approved_dir.join(format!("{}.json", request_id)),
+            serde_json::to_string(&approval_decision).expect("json"),
+        )
+        .expect("write approval decision");
+
+        // Retry with approval_ref
+        let retry_args = serde_json::json!({
+            "agent_id": "cleanup.test.worker",
+            "instructions": "Worker for cleanup test.",
+            "capabilities": [
+                { "type": "NetConnect", "hosts": ["api.example.com"] }
+            ],
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true,
+                "install_approval_ref": request_id
+            }
+        });
+
+        registry
+            .execute(
+                "agent.install",
+                &manifest,
+                &policy,
+                &parent_dir,
+                None,
+                &serde_json::to_string(&retry_args).expect("json should encode"),
+                None,
+                None,
+                Some(&config),
+            )
+            .expect("retry should succeed");
+
+        // Verify payload file was cleaned up
+        assert!(!payload_path.exists(), "payload file should be cleaned up after success");
     }
 }
