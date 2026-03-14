@@ -598,14 +598,47 @@ impl AgentExecutor {
     }
 }
 
+/// Extracts JSON from markdown-wrapped content.
+/// Handles common LLM output formats:
+/// - ```json ... ``` (code block with json language hint)
+/// - ``` ... ``` (plain code block)
+/// - Plain JSON without markdown wrapping
+fn extract_json_from_markdown(input: &str) -> String {
+    let trimmed = input.trim();
+
+    // Try to find ```json ... ``` or ``` ... ``` blocks
+    if let Some(start) = trimmed.find("```") {
+        let after_first_block = &trimmed[start + 3..];
+
+        // Skip language hint (e.g., "json\n" -> "\n")
+        let content_start = after_first_block
+            .find('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let content = &after_first_block[content_start..];
+
+        // Find closing ```
+        if let Some(end) = content.find("```") {
+            return content[..end].trim().to_string();
+        }
+    }
+
+    // No markdown wrapping found, return original
+    input.to_string()
+}
+
 /// Lightweight schema validation: checks required fields and basic type hints.
+/// Extracts JSON from markdown-wrapped content before validation.
 fn validate_against_schema(input: &str, schema: &serde_json::Value) -> SchemaValidation {
     let mut validation = SchemaValidation {
         valid: true,
         messages: Vec::new(),
     };
 
-    let parsed_input: serde_json::Value = match serde_json::from_str(input) {
+    // Extract JSON from markdown if present
+    let json_input = extract_json_from_markdown(input);
+
+    let parsed_input: serde_json::Value = match serde_json::from_str(&json_input) {
         Ok(v) => v,
         Err(_) => {
             validation.valid = false;
@@ -816,6 +849,52 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_json_from_markdown_plain_json() {
+        let input = r#"{"findings":["fact1"],"summary":"ok"}"#;
+        let extracted = extract_json_from_markdown(input);
+        assert_eq!(extracted, input);
+    }
+
+    #[test]
+    fn test_extract_json_from_markdown_json_code_block() {
+        let input = r#"Here is the result:
+```json
+{"findings":["fact1"],"summary":"ok"}
+```
+Hope this helps!"#;
+        let extracted = extract_json_from_markdown(input);
+        let expected = r#"{"findings":["fact1"],"summary":"ok"}"#;
+        assert_eq!(extracted, expected);
+    }
+
+    #[test]
+    fn test_extract_json_from_markdown_plain_code_block() {
+        let input = r#"Result:
+```
+{"findings":["fact1"],"summary":"ok"}
+```"#;
+        let extracted = extract_json_from_markdown(input);
+        let expected = r#"{"findings":["fact1"],"summary":"ok"}"#;
+        assert_eq!(extracted, expected);
+    }
+
+    #[test]
+    fn test_extract_json_from_markdown_multiline_json() {
+        let input = r#"```json
+{
+  "findings": ["fact1", "fact2"],
+  "summary": "ok"
+}
+```"#;
+        let extracted = extract_json_from_markdown(input);
+        let expected = r#"{
+  "findings": ["fact1", "fact2"],
+  "summary": "ok"
+}"#;
+        assert_eq!(extracted, expected);
+    }
+
+    #[test]
     fn test_validate_output_schema_valid_json_input() {
         let schema = serde_json::json!({
             "type": "object",
@@ -837,6 +916,21 @@ mod tests {
         let result = validate_against_schema(output, &schema);
         assert!(!result.valid);
         assert!(result.messages.iter().any(|m| m.contains("not valid JSON")));
+    }
+
+    #[test]
+    fn test_validate_output_schema_accepts_markdown_wrapped_json() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["findings", "summary"]
+        });
+        let output = r#"Here is the result:
+```json
+{"findings":["fact1"],"summary":"ok"}
+```
+Hope this helps!"#;
+        let result = validate_against_schema(output, &schema);
+        assert!(result.valid, "Should accept markdown-wrapped JSON: {:?}", result.messages);
     }
 
     #[tokio::test]
