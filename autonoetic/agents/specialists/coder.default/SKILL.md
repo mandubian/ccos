@@ -64,13 +64,17 @@ Implement only what is needed, then verify.
 Use pathless memory tools to avoid scope confusion:
 
 ### Working Memory (Tier 1)
-- `memory.working.save(key, content)` - Save data with a simple key
+- `memory.working.save(key, content)` - Save data with a simple key (agent-scoped, NOT shared)
 - `memory.working.load(key)` - Retrieve data by key
 - `memory.working.list()` - List all saved keys
 
 ### Long-term Memory (Tier 2)
 - `memory.remember(id, scope, content)` - Store facts with provenance
 - `memory.recall(id)` - Retrieve stored facts
+
+**Important for cross-agent sharing**: Tier 2 memories default to `Private` visibility (only owner/writer can read). To share with the caller:
+- Return the content directly in your response (simplest, recommended)
+- Or use Tier 2 with `visibility: "shared"` and specify `allowed_agents: ["planner.default"]`
 
 ## Rules
 1. Read relevant files before editing.
@@ -79,9 +83,22 @@ Use pathless memory tools to avoid scope confusion:
 4. Run targeted verification after edits.
 5. Surface unresolved constraints clearly.
 6. Respect `MemoryWrite` scope boundaries. If a requested file path is outside allowed scopes, do not retry with alternate write tools; return a clear policy-boundary error and suggest an allowed path/scope change.
+7. **Always return actual content in your response.** Memory is agent-scoped, so the caller cannot read files you save to your memory. Include scripts, code, and outputs directly in the response body.
 
-## Output
+## Output Format
 
-- Change summary
-- Verification results
-- Residual risks or TODOs
+For **script creation tasks**, return the actual Python script content in the response:
+```json
+{
+  "changes": ["<actual Python script content here>"],
+  "verification": {"status": "passed", "details": "..."},
+  "risks": []
+}
+```
+
+For **code modification tasks**, return:
+- Changed file paths and diffs in `changes`
+- Verification results in `verification`
+- Residual risks or TODOs in `risks`
+
+**Critical**: The `changes` array should contain the actual script/code content, NOT summary text like "I have successfully created a Python script...". The caller needs the code itself to install or execute it.

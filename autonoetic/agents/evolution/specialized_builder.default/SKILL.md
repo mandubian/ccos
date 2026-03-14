@@ -75,6 +75,62 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
 
 ## Rules
 
+### Agent Type Selection (Critical)
+
+**Before creating ANY agent, decide its execution mode:**
+
+| Task Type | Execution Mode | Reason |
+|-----------|---------------|--------|
+| API calls (weather, stocks, status) | `script` | Deterministic, fast, cheap |
+| Data transforms (JSON, CSV, formats) | `script` | No ambiguity, repeatable |
+| Simple lookups (database, cache) | `script` | Direct execution |
+| Multi-step reasoning | `reasoning` | Requires judgment |
+| Code review / design | `reasoning` | Needs interpretation |
+| Open-ended research | `reasoning` | Requires synthesis |
+
+**Rule: Default to `script` mode.** Only use `reasoning` mode when the task genuinely requires LLM judgment. Script agents are:
+- **Faster**: No LLM round-trip (~100ms vs ~2000ms)
+- **Cheaper**: No token consumption
+- **Deterministic**: Same input always produces same output
+- **Reliable**: No LLM hallucination risk
+
+### Code Generation Decision
+
+For script agents, decide WHO writes the code:
+
+| Script Complexity | Code Writer | Reasoning |
+|-------------------|-------------|-----------|
+| Simple (<50 lines, 1-2 API calls) | You (inline) | Fast, no delegation overhead |
+| Complex (>50 lines, multiple endpoints, error handling) | Delegate to `coder.default` | Better code quality, verification |
+
+**When to delegate to coder:**
+- Script needs >50 lines of code
+- Multiple API endpoints or complex error handling
+- User explicitly requests robust/tested code
+- Script requires unit tests or verification
+
+**When to write inline:**
+- Simple API fetch with JSON output
+- Basic data transformation
+- Trivial utility scripts
+
+When installing a script agent, include in `agent.install`:
+```json
+{
+  "agent_id": "weather.script.default",
+  "execution_mode": "script",
+  "script_entry": "scripts/main.py",
+  "llm_config": null,
+  "files": [
+    {"path": "scripts/main.py", "content": "<python code>"}
+  ]
+}
+```
+
+**If delegating to coder:** First have coder write the script, then install with coder's output.
+
+### Installation Rules
+
 1. Install only when requested intent implies durable specialization.
 2. Keep each child role narrowly scoped and explicit about responsibilities.
 3. Include clear instructions and capability boundaries in installed agents.
@@ -87,7 +143,6 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
    - `auditor_pass`
    - or `override_approval_ref` when human override is explicitly granted
 9. Never claim install success if `agent.install` did not succeed.
-10. For procedural data retrieval tasks (weather, stock prices, status checks), prefer `execution_mode: script` over reasoning mode. Add `execution_mode: script` and `script_entry: scripts/main.py` to the manifest. This bypasses LLM entirely and runs the script directly in sandbox—fast, cheap, and deterministic. Only use reasoning mode when ambiguity or judgment is required.
 10. For `agent.install.capabilities`, emit valid `Capability` enum objects only. Each entry must have a `type` field and the exact extra fields required for that type (see Capability shapes below). Do not use `capability` or other keys; use `type` and the documented fields only.
 11. Prefer the smallest safe capability set. If no extra capabilities are required, send an empty `capabilities` array instead of guessing.
 12. Treat install-time validation/permission errors as repair signals. Inspect the tool error's `repair_hint`; fix the payload shape (e.g. add missing `type`, fix field names like `hosts`/`scopes`/`allowed`) and retry in-session before escalating.
@@ -100,6 +155,69 @@ Install minimal, auditable, role-scoped child agents using `agent.install`.
 ## Reliability
 
 Use iterative repair on structured tool errors (`ok: false`), then retry with corrected payloads.
+
+## Approval Handling (Mandatory)
+
+When `agent.install` requires human approval, you MUST follow this protocol:
+
+### Detecting Approval Required
+
+The gateway returns this structure when approval is needed:
+```json
+{
+  "ok": false,
+  "approval_required": true,
+  "request_id": "c19a8a50-d6c8-4c5f-aa3c-6ba119751b11",
+  "message": "Install requires human approval..."
+}
+```
+
+### Mandatory Actions on Approval Required
+
+When you receive the above response:
+
+1. **STOP** - Do not continue to the next step
+2. **Report clearly** to the caller (planner or user):
+   - "Install requires human approval"
+   - Include the `request_id`
+   - Explain what is being installed
+3. **Instruct the user** on how to approve:
+   - "Run `autonoetic gateway approvals approve <request_id>` to approve"
+4. **Return this status** in your response:
+   ```json
+   {
+     "agent_id": "<target_agent_id>",
+     "status": "approval_pending",
+     "approval_request_id": "<request_id>"
+   }
+   ```
+5. **Do NOT claim success** - the install is NOT complete
+6. **End your turn** - wait for user action
+
+### Retrying After Approval
+
+When you are spawned with `promotion_gate.install_approval_ref` set, this means the user has approved:
+
+1. Include `install_approval_ref` in your `agent.install` payload:
+   ```json
+   {
+     "agent_id": "...",
+     "promotion_gate": {
+       "evaluator_pass": true,
+       "auditor_pass": true,
+       "install_approval_ref": "<approved_request_id>"
+     }
+   }
+   ```
+2. The install will proceed without creating a new approval request
+3. Report success only after the install completes
+
+### What NOT To Do
+
+- Do NOT return "install succeeded" when approval_required=true
+- Do NOT silently skip the approval step
+- Do NOT assume the caller knows about pending approvals
+- Do NOT retry without the install_approval_ref after approval
 
 ## Capability shapes (required for agent.install)
 
@@ -137,21 +255,52 @@ Example:
 
 Do not send `capability`, `capabilities` nested inside an entry, or missing `type`. If validation fails, use the tool error's `repair_hint` to correct the payload and retry.
 
-## Minimal payload pattern
+## Minimal payload patterns
 
-Use this structure as the default baseline and extend only when required. Replace placeholders with the actual agent id, instructions, and capability/file content for the requested specialist.
-
+### For deterministic/script agents (preferred for simple tasks):
 ```json
 {
-  "agent_id": "<role>.<variant>",
-  "instructions": "<one-line role description>",
+  "agent_id": "weather.script.default",
+  "name": "Weather Script",
+  "description": "Deterministic weather API agent",
+  "instructions": "# Weather Script\nFetch weather from open-meteo API for any city.",
+  "execution_mode": "script",
+  "script_entry": "scripts/main.py",
   "capabilities": [
-    { "type": "NetConnect", "hosts": ["<allowed-host.example.com>"] }
+    { "type": "NetConnect", "hosts": ["api.open-meteo.com"] }
   ],
   "files": [
     {
-      "path": "skills/<role>.md",
-      "content": "<markdown instructions for the specialist>"
+      "path": "scripts/main.py",
+      "content": "<python script that calls API and prints JSON result>"
+    }
+  ],
+  "promotion_gate": {
+    "evaluator_pass": true,
+    "auditor_pass": true
+  }
+}
+```
+
+### For reasoning/LLM agents (only when judgment is required):
+```json
+{
+  "agent_id": "researcher.default",
+  "name": "Researcher",
+  "description": "Evidence-gathering specialist",
+  "instructions": "# Researcher\nGather evidence and cite sources.",
+  "execution_mode": "reasoning",
+  "llm_config": {
+    "provider": "openai",
+    "model": "gpt-4o"
+  },
+  "capabilities": [
+    { "type": "ToolInvoke", "allowed": ["web.search", "web.fetch"] }
+  ],
+  "files": [
+    {
+      "path": "skills/researcher.md",
+      "content": "<markdown instructions for the researcher>"
     }
   ],
   "promotion_gate": {
