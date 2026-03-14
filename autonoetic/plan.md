@@ -924,13 +924,6 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - Created `docs/cli-reference.md` covering all CLI commands: gateway, agent, chat, trace, skill, federate, mcp
 - Documented all subcommands, arguments, and options
 - Added examples for common workflows
-- [ ] Define a minimal textual state-machine convention for agents:
-  - `state/task.md` for active checklist and next action
-  - `state/scratchpad.md` for ephemeral reasoning notes
-  - `state/handoff.md` for compact transfer status and blockers
-- [ ] Add guidance on when to persist to textual state versus Tier2 memory (`memory.db`) to avoid overlap and drift.
-- [ ] Update foundation/planner/builder guidance to prefer these state files for long multi-step tasks that benefit from explicit checklists.
-- [ ] Evaluate stronger lazy loading as an optional optimization track (not mandatory): keep current behavior as default until profiling justifies added complexity.
 
 ### Pluggable schema enforcement hook
 
@@ -962,3 +955,942 @@ Goal: allow agents that only run scripts/APIs to execute without consuming LLM r
 - Enforcement logs transformations via tracing at `schema_enforcement` target
 - Added `schema_enforcement_integration.rs` with 2 tests verifying hook is in place
 - All 210+ tests pass
+
+---
+
+## Demo-Session-1 Issue Fixes (2026-03-13)
+
+Analysis of demo-session-1 under `/tmp/autonoetic-demo` identified four root causes of workflow failures. This section tracks concrete fixes.
+
+### Issue 1: InstallAgentArgs Missing Script Agent Support
+
+**Problem:** `InstallAgentArgs` struct in `autonoetic-gateway/src/runtime/tools.rs` lacks `execution_mode` and `script_entry` fields. The agent.install handler hardcodes `execution_mode: Default::default()` (Reasoning) and `script_entry: None` when building child manifests. This makes it impossible to install script-only agents via agent.install, despite SKILL docs documenting this capability.
+
+**Impact:** Specialized_builder cannot create weather.script.default or any deterministic script agent through the normal install flow.
+
+**Fix tasks:**
+
+- [x] Add `execution_mode: Option<ExecutionMode>` and `script_entry: Option<String>` to `InstallAgentArgs` struct (line ~2266)
+- [x] Update agent.install `input_schema` JSON to include `execution_mode` (enum: "script", "reasoning") and `script_entry` (string) properties
+- [x] Update manifest creation block (line ~2961-2981) to use `args.execution_mode.unwrap_or_default()` and `args.script_entry` instead of hardcoded values
+- [x] Add validation: when `execution_mode == Script`, require `script_entry` is non-empty
+- [x] Relax `llm_config` requirement: when `execution_mode == Script`, allow `llm_config: None` (script agents don't need an LLM)
+- [x] Update `render_skill_frontmatter` to include `execution_mode` and `script_entry` in SKILL.md output
+- [x] Add unit test: install a script agent with `execution_mode: "script"` and `script_entry: "scripts/main.py"`, verify child manifest has correct fields
+- [x] Add unit test: install a script agent without `llm_config`, verify success (no provider/model required)
+- [x] Add unit test: script mode without `script_entry` fails with validation error
+
+**Implementation notes (2026-03-13):**
+- `ExecutionMode` enum already exists in `autonoetic-types/src/agent.rs:86-94`
+- `AgentManifest` already has `execution_mode` and `script_entry` fields
+- Added `execution_mode` and `script_entry` to `InstallAgentArgs` struct with serde defaults
+- Updated `input_schema` JSON with `execution_mode` (enum: script/reasoning) and `script_entry` (string)
+- Added validation: Script mode requires non-empty `script_entry`
+- Added `StandardAutonoeticMetadata` fields for `execution_mode` and `script_entry` with skip-if-default serialization
+- Added helper `is_default_execution_mode()` to skip serializing Reasoning (default) mode
+- 4 new unit tests added: script agent install, script mode requires entry, script mode allows no llm_config, reasoning mode with llm_config
+- All 156 lib tests pass, 5 integration tests pass
+
+---
+
+### Issue 2: Researcher JSON Schema Validation Failures
+
+**Problem:** The researcher LLM (nvidia/nemotron-3-super-120b-a12b) returns markdown instead of JSON when the output schema declares JSON structure. The output schema validation in `runtime/lifecycle.rs:614` emits "Output is not valid JSON" errors, triggering retry loops that inflate tool call counts (8 tool calls instead of the expected 2-3).
+
+**Impact:** Researcher sessions consume 2-4x more LLM turns and tool calls than necessary.
+
+**Decision: Keep strict validation but add JSON extraction**
+
+We keep strict schema enforcement (ensures contracts) but add tolerance for markdown-wrapped JSON (common LLM behavior).
+
+**Completed fixes:**
+
+- [x] Added `extract_json_from_markdown()` function to lifecycle.rs:
+  - Extracts JSON from ` ```json ... ``` ` blocks
+  - Extracts JSON from plain ` ``` ... ``` ` blocks
+  - Returns original if no markdown wrapping found
+- [x] Updated `validate_against_schema()` to use extraction before parsing
+- [x] Added 4 unit tests for JSON extraction (plain, json code block, plain code block, multiline)
+- [x] Added 1 integration test: `test_validate_output_schema_accepts_markdown_wrapped_json`
+- [x] Updated `agents/specialists/researcher.default/SKILL.md`:
+  - Added "JSON Output Format (Required)" section
+  - Explicit rules: no markdown wrapping, valid JSON only, all required fields
+  - Common mistakes to avoid
+- [x] All 161 tests pass
+
+**Remaining (optional):**
+
+- [ ] Add foundation instruction about JSON output compliance for all agents with `io.returns` schema
+- [ ] Consider adding a post-process script `scripts/format_output.py` as additional safety net
+
+---
+
+### Issue 3: Specialized Builder Not Handling Approval Required
+
+**Problem:** When `agent.install` returns `approval_required: true` with a `request_id`, the specialized_builder ends the turn with a natural-language summary instead of:
+1. Explicitly asking the user to approve
+2. Reporting the pending request_id
+3. Preparing to retry after approval
+
+The approval request (example: `c19a8a50-d6c8-4c5f-aa3c-6ba119751b11`) remains pending with no workflow to resolve it.
+
+**Impact:** Installs requiring approval hang indefinitely. The planner never receives clear signal that approval is pending.
+
+**Completed fixes:**
+
+- [x] Added "Approval Handling (Mandatory)" section to `specialized_builder.default/SKILL.md`:
+  - Detecting approval_required responses
+  - Mandatory STOP protocol
+  - Return "approval_pending" status
+  - Retry protocol with install_approval_ref
+  - What NOT To Do list
+- [x] Added "Install Flow and Approval Handling" section to `planner.default/SKILL.md`:
+  - Mandatory approval handling
+  - Re-spawn with install_approval_ref after approval
+- [x] SKILL.md changes deployed to agents/evolution/specialized_builder.default/SKILL.md
+
+**Remaining:**
+
+- [ ] Add integration test: specialized_builder receives approval_required, returns approval_pending, planner reports to user, approval granted, retry succeeds
+
+---
+
+### Issue 4: Planner Calling agent.install Directly
+
+**Problem:** Despite guardrail #134 ("Do not call agent.install directly for normal task completion. Use specialized_builder.default"), the planner attempts agent.install directly with malformed payloads:
+- NetConnect sent as `{"type":"NetConnect","value":"..."}` instead of `{"type":"NetConnect","hosts":["..."]}`
+- llm_config sent with `execution_mode` field that doesn't exist in `LlmConfig` struct
+
+**Impact:** Multiple failed attempts trigger LoopGuard after 5 cycles.
+
+**Fix tasks:**
+
+- [x] Strengthen planner guardrail #2 to explicitly state: "Never call agent.install. The tool should not be available to you."
+- [x] Removed `agent.install` from planner's available tool list - only exposed to evolution roles (specialized_builder.default, evolution-steward.default)
+- [x] Update planner SKILL.md to document the correct install flow:
+  ```
+  Install Flow:
+  1. Check agent.discover for existing agents
+  2. If none found, spawn specialized_builder.default with the request
+  3. If specialized_builder returns approval_pending, report to user
+  4. After user approves, re-spawn specialized_builder with install_approval_ref
+  ```
+- [x] Add test: planner attempts agent.install directly, receives structured error directing to use specialized_builder
+
+---
+
+### Issue 5: Approval Must Be Respected (User Confirmation Gate)
+
+**Problem:** The system does not enforce a "ask before continue" pattern. When approval is required:
+- specialized_builder ends turn without asking user
+- planner doesn't know to wait for user action
+- No clear signal that human intervention is required
+
+**Goal:** When any agent.install requires approval, the agent MUST pause and ask the user to explicitly approve before continuing. This is a hard gate, not optional.
+
+**Completed fixes:**
+
+- [x] Added "Approval Handling (Mandatory)" section to specialized_builder SKILL.md with:
+  - Detection of approval_required responses
+  - Mandatory STOP protocol
+  - Return status "approval_pending" (not success)
+  - Retry protocol with install_approval_ref
+- [x] Added "Install Flow and Approval Handling" section to planner SKILL.md with:
+  - Mandatory approval handling rules
+  - Clear instruction to WAIT for user action
+  - Re-spawn protocol with install_approval_ref
+- [x] Updated foundation instructions with approval handling rules
+
+**Completed tests:**
+
+- [x] Added `test_agent_install_blocks_without_approval`: verifies install is blocked and returns approval_required response
+- [x] Added `test_agent_install_rejects_invalid_approval_ref`: verifies install with fake/nonexistent approval_ref fails
+- [x] Added `test_agent_install_no_approval_needed_for_low_risk`: verifies low-risk agents can install without approval (RiskBased policy)
+
+**Completed enforcement:**
+
+- [x] Gateway-level enforcement already in place via approval gate (tools.rs:2836-2845):
+  - Validates install_approval_ref exists in approved directory
+  - Validates action fields match (agent_id, requester, fingerprint)
+  - Rejects invalid/nonexistent approval_ref with clear error
+
+**Completed CLI feedback:**
+
+- [x] Added approval detection in `autonoetic/src/cli/chat.rs`:
+  - `extract_approval_request_id()` parses UUID from approval messages
+  - `display_approval_notification()` shows formatted box with:
+    ```
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ ⚠️  INSTALL REQUIRES YOUR APPROVAL                              │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ Request ID:  <uuid>                                             │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ To approve, run in another terminal:                            │
+    │   autonoetic gateway approvals approve <uuid>                   │
+    │                                                                 │
+    │ After approval, continue the conversation - the agent will      │
+    │ automatically use the approved reference.                       │
+    └─────────────────────────────────────────────────────────────────┘
+    ```
+- [x] CLI parses assistant_reply for UUID patterns after approval keywords
+- [x] Works with any agent that returns approval info (specialized_builder, planner, etc.)
+
+**Completed auto-resume after approval:**
+
+- [x] Added `resume_session_after_approval()` in `scheduler/approval.rs`:
+  - Called after approve/reject for `agent_install` actions
+  - Sends `event.ingest` to caller's session with `approval_resolved` message
+  - Gateway connects to itself via JSON-RPC to deliver the resume message
+  - User approval now automatically triggers planner continuation
+
+- [x] Updated planner SKILL.md:
+  - Added "Handling Approval Resumed Messages" section
+  - Planner knows to expect `approval_resolved` message
+  - Retry with `install_approval_ref` after approval
+
+**Acceptance criteria:**
+- [x] No agent can call agent.install directly (planner guardrail)
+- [x] specialized_builder SKILL has mandatory approval pause rules
+- [x] planner SKILL has mandatory approval handling rules
+- [x] Install blocks without approval and returns structured approval_required response
+- [x] Invalid approval_ref is rejected with clear error message
+- [x] Low-risk agents can install without approval (RiskBased policy)
+- [x] User always sees a clear approval request with actionable instructions (CLI feedback)
+- [x] Gateway auto-resumes planner session after approval (no need to type "approved")
+
+---
+
+### Issue 6: Approval Payload Storage for Deterministic Retry (COMPLETED)
+
+**Problem:** When specialized_builder retries after approval, the LLM may generate a different payload than the original, causing fingerprint mismatch. Demo-session-2 showed 3 failed retry attempts.
+
+**Solution:** Store the exact install payload when approval is created, use stored payload on retry.
+
+**Implementation tasks (all completed):**
+
+- [x] Added `store_install_payload()` helper function (~tools.rs:176)
+- [x] Added `load_install_payload()` helper function (~tools.rs:189)
+- [x] Added `cleanup_install_payload()` helper function (~tools.rs:204)
+- [x] Added `Serialize` to `InstallAgentArgs` and `InstallPromotionGate`
+- [x] Store payload when approval created (~tools.rs:2970-2980)
+- [x] Use stored payload on retry, preserving approval_ref for cleanup (~tools.rs:2927-2945)
+- [x] Cleanup stored payload after successful install (~tools.rs:3290-3298)
+- [x] Added 3 unit tests:
+  - `test_agent_install_stores_payload_on_approval`
+  - `test_agent_install_uses_stored_payload_on_retry`
+  - `test_agent_install_cleans_up_payload_after_success`
+
+**Documentation tasks (all completed):**
+
+- [x] Updated `docs/quickstart-planner-specialist-chat.md` with payload storage explanation
+- [x] Created `docs/agent-install-approval-retry.md` with full documentation
+
+**Test results:** 167 tests pass (3 new tests added)
+
+---
+
+### Issue 7: Approval Auto-Resume (COMPLETED)
+
+**Problem:** User had to type "approved" in chat after running `gateway approvals approve`. This was redundant - the gateway already knows approval was granted.
+
+**Solution:** Gateway automatically resumes the caller's session after approval.
+
+**Implementation:**
+
+- [x] Added `resume_session_after_approval()` in `scheduler/approval.rs`:
+  ```rust
+  fn resume_session_after_approval(config, decision) -> anyhow::Result<()>
+  ```
+  - Checks if action is `AgentInstall` (has a waiting caller)
+  - Sends `event.ingest` JSON-RPC to gateway with `approval_resolved` message
+  - Includes `request_id`, `agent_id`, `status` (approved/rejected)
+  - Runs in background thread with 5-second timeout
+
+- [x] Updated planner SKILL.md:
+  - Added "Handling Approval Resumed Messages" section
+  - Planner parses `approval_resolved` messages and retries with `install_approval_ref`
+
+**Complete flow now:**
+```
+1. specialized_builder → agent.install → approval_required (stores payload)
+2. specialized_builder → returns "approval_pending" + request_id to planner
+3. Planner → reports to user with approval instructions
+4. User → `autonoetic gateway approvals approve <request_id>`
+5. Gateway → stores approval + sends event.ingest to planner session
+6. Planner → receives approval_resolved, re-spawns specialized_builder
+7. specialized_builder → retries with install_approval_ref (uses stored payload)
+8. Install succeeds with matching fingerprint
+```
+
+---
+
+### Documentation Index
+
+| Document | Description |
+|----------|-------------|
+| `docs/quickstart-planner-specialist-chat.md` | Quickstart guide with approval flow |
+| `docs/agent-install-approval-retry.md` | Detailed payload storage mechanism documentation |
+| `docs/agent_routing_and_roles.md` | Agent roles and evolution flow |
+| `docs/cli-reference.md` | CLI commands including `gateway approvals` |
+
+---
+
+## Session Checkpointing & Forking
+
+**Depends on:** Content Storage & Simplified Agent Data Model
+
+**Problem:** Conversation history (`Vec<Message>`) is in-memory only and never persisted. There is no way to fork an existing session from a checkpoint and continue with an alternative branch. This prevents debugging, exploration of alternative reasoning paths, A/B testing, and rollback.
+
+**Goal:** Enable saving a session snapshot (full conversation history + session context) and forking a new session from any snapshot, with lineage tracked in the causal chain. Uses content storage for persistence (works locally and remotely).
+
+**Architecture notes:**
+- `Vec<Message>` is `Serialize + Deserialize` — trivial to snapshot
+- `SessionContext` already has `load()`/`save()` — copyable
+- `sdk_checkpoint.json` is opt-in (only if agent called `sdk.state.checkpoint()`) — optional
+- `execute_with_history()` already accepts pre-built `&mut Vec<Message>` — fork just loads and continues
+- Causal chain is append-only — fork writes a `session.forked` lineage entry
+- **New:** History and snapshots stored as content objects via `content.write/persist/read`
+
+### Storage Model (Content-based)
+
+```
+History storage:
+  content.write("session_history", serialized_history) → handle
+  content.persist(handle) → survives session cleanup
+
+Snapshot storage:
+  session.snapshot → content.persist(history_handle)
+  Returns handle for later retrieval
+
+Fork operation:
+  content.read(history_handle) → get history
+  content.write("session_history", history) → new content for forked session
+```
+
+**Benefits over file-based storage:**
+- Works for remote agents (gateway API)
+- Content-addressed integrity (SHA-256)
+- Natural deduplication (same history = same handle)
+- Content.persist makes snapshots permanent
+
+### Implementation tasks
+
+- [ ] Add `SessionSnapshot` struct in `autonoetic-gateway/src/runtime/session_snapshot.rs`:
+  - Fields: `source_session_id`, `turn_count`, `created_at`, `history: Vec<Message>`, `session_context: SessionContext`, `sdk_checkpoint: Option<serde_json::Value>`, `content_handle: Option<String>`
+  - `SessionSnapshot::capture(session_id, history, turn_count)` — serializes history, stores via `content.write`, returns snapshot with handle
+  - `SessionSnapshot::load(handle)` — reads from content store via `content.read(handle)`
+  - `SessionSnapshot::persist()` — calls `content.persist(handle)` for permanent storage
+- [ ] Persist conversation history at hibernate points in `lifecycle.rs`:
+  - After `log_hibernate()`, serialize `history` to JSON
+  - Store via `content.write("session_history", history_json)`
+  - Store handle in session manifest for later retrieval
+  - Keep it simple: overwrite on each hibernate (latest state is sufficient)
+- [ ] Add `session.snapshot` native tool in `runtime/tools.rs`:
+  - Explicit snapshot capture at any point during execution
+  - Serializes current history + session context
+  - Stores via `content.write` then `content.persist` (makes permanent)
+  - Returns content handle to the agent (not file path)
+- [ ] Add `session.fork` JSON-RPC method in `router.rs`:
+  - Params: `source_session_id`, `branch_message` (optional), `new_session_id` (optional, auto-generated if missing)
+  - Loads history via `content.read(handle)` from source session manifest
+  - Creates new session with copied history via `content.write`
+  - Copies `SessionContext` under new session_id
+  - Copies `sdk_checkpoint.json` if it exists
+  - Logs `session.forked` lineage entry in causal chain (with `source_session_id`, `fork_turn`, `history_handle`)
+  - Spawns agent with loaded history + optional branch message appended
+- [ ] Add `autonoetic trace fork <session_id>` CLI command:
+  - `--at-turn <N>` — fork from specific turn (default: latest)
+  - `--message <text>` — branch prompt (e.g. "try a different approach")
+  - `--agent <id>` — optional: fork into a different agent
+  - Displays new session_id and content handle
+  - Starts interactive continuation
+- [ ] Add lineage tracking in causal chain:
+  - New entry type: `session.forked` with `source_session_id`, `fork_turn`, `branch_message_sha256`, `history_handle`
+  - New entry type: `history.persisted` logged on each hibernate with `message_count`, `content_handle`
+- [ ] Add `autonoetic trace history <session_id>` CLI command:
+  - Reads history handle from session manifest
+  - Fetches via `content.read(handle)` through gateway API
+  - `--json` flag for raw output
+  - Works for remote sessions too (uses gateway API)
+- [ ] Integration tests:
+  - `test_session_history_persisted_on_hibernate`: run agent, hibernate, verify history stored via content.write, verify handle in manifest
+  - `test_session_fork_creates_new_session`: snapshot session A via content.persist, fork to session B, verify B has copied history via content handles
+  - `test_session_fork_with_branch_message`: fork with alternative prompt, verify branch message is appended to history
+  - `test_session_fork_lineage_in_causal_chain`: verify `session.forked` entry links source and forked sessions with history handles
+  - `test_session_fork_without_sdk_checkpoint`: verify fork works when no `sdk_checkpoint.json` exists
+  - `test_session_fork_copies_session_context`: verify known_facts and open_threads are preserved
+  - `test_session_snapshot_content_handle`: verify snapshot returns valid content handle, can be read back
+
+### Acceptance criteria
+- [ ] Conversation history is persisted via content.write on every hibernate
+- [ ] History handle stored in session manifest for retrieval
+- [ ] Any session can be forked via content.read/write (works remotely)
+- [ ] Fork lineage is tracked in the causal chain with content handles
+- [ ] Snapshots use content.persist for permanent storage
+- [ ] CLI trace commands use gateway API (content.read) not file paths
+- [ ] Works for remote agents (all operations via gateway API)
+- [ ] All existing tests still pass
+
+---
+
+## Content Storage & Simplified Agent Data Model
+
+**Problem:** The current memory model is confusing for LLMs and breaks for remote agents:
+- Tier 1 (working memory) is agent-scoped → specialists save files that planners can't read
+- Tier 2 (long-term memory) is complex with visibility ACLs → LLMs struggle to use correctly
+- File paths are local → remote agents can't access files on other machines
+- Multi-file projects (Python UV project) can't be returned in a single response
+- LLMs keep trying to load from memory after `agent.spawn` returns, even though the response contains the content
+
+**Root cause:** Memory coordination is an LLM-facing concern when it should be a system concern. File paths assume local filesystem.
+
+**Goal:** Content-addressable gateway storage that works locally and remotely. Agents write content; gateway handles sharing, storage, and integrity. LLM interface is 3 simple tools.
+
+### Architecture Overview
+
+```
+Gateway Storage (content-addressed, works local + remote):
+├── .gateway/content/              ← SHA-256 blob store
+│   └── sha256/ab/c123...         ← immutable content blobs
+├── .gateway/sessions/
+│   └── <session_id>/
+│       ├── manifest.json          ← maps content names → handles
+│       └── artifacts.json         ← artifact metadata
+└── .gateway/knowledge.db          ← Tier 2 facts (renamed from memory.db)
+
+Gateway API (all agents use this, local or remote):
+├── content.write(name, content) → handle
+├── content.read(handle_or_name) → content
+├── content.persist(handle) → permanent
+└── content.exec(handle, input) → execute (configurable: agent-side or gateway-side)
+
+Knowledge (durable facts, renamed Tier 2):
+├── knowledge.store(id, content, tags) → persist fact
+├── knowledge.recall(id) → retrieve fact
+└── knowledge.search(query) → search facts
+```
+
+### Three Simple Tools for LLMs
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `content.write(name, content)` | Write content to session | `content.write("main.py", script)` → returns `sha256:abc123` |
+| `content.read(handle_or_name)` | Read content | `content.read("main.py")` or `content.read("sha256:abc123")` |
+| `knowledge.store/recall/search` | Durable facts with provenance | `knowledge.store("weather-api", "open-meteo", ["api"])` |
+
+**Why 3 tools are enough:**
+- `content.write` = "I made something, save it"
+- `content.read` = "I need that thing" (by name in session, or by handle)
+- `knowledge.store/recall` = "I learned something, remember it" (cross-session)
+
+### Agent Artifacts: SKILL.md (not MANIFEST.json)
+
+**Key insight**: LLMs are bad at generating consistent structured JSON. SKILL.md uses YAML frontmatter (forgiving) + markdown body (natural language).
+
+Coder produces:
+```
+weather_agent/
+├── main.py           ← the script
+├── utils.py          ← helpers (optional)
+└── SKILL.md          ← usage docs + metadata
+```
+
+SKILL.md format:
+```yaml
+---
+name: "weather.script.default"
+description: "Retrieves weather from Open-Meteo API"
+script_entry: "main.py"
+io:
+  accepts:
+    type: object
+    required: [latitude, longitude]
+    properties:
+      latitude: {type: number, minimum: -90, maximum: 90}
+      longitude: {type: number, minimum: -180, maximum: 180}
+      date: {type: string, format: date}
+  returns:
+    type: object
+    properties:
+      ok: {type: boolean}
+      data: {type: object}
+---
+# Weather Script Agent
+
+Retrieves current or forecast weather from Open-Meteo API.
+
+## Usage
+```bash
+python main.py < input.json
+```
+
+## Example
+```json
+{"latitude": 48.8566, "longitude": 2.3522}
+```
+```
+
+**Why SKILL.md over structured JSON:**
+- LLMs write natural language well (markdown body)
+- YAML frontmatter is forgiving (comments, flexible quoting)
+- Aligns with existing Autonoetic patterns (all agents use SKILL.md)
+- Other LLMs read it naturally (planner, specialized_builder)
+
+### Remote Agent Support
+
+All operations go through gateway API (HTTP/JSON-RPC). Agent doesn't care where it runs:
+
+| Operation | Local Agent | Remote Agent |
+|-----------|-------------|--------------|
+| `content.write("main.py", script)` | Gateway API → local storage | Gateway API → same central storage |
+| `content.read("sha256:abc123")` | Gateway API → returns content | Gateway API → same content |
+| SKILL.md transfer | Just another content object | Same API call, works identically |
+| Discovery (`agent.discover`) | Gateway API | Gateway API |
+
+**Remote agent needs:**
+- Network access to gateway (HTTP endpoint)
+- Local sandbox OR gateway-side execution capability
+- Same tool interface as local agents
+
+### Configurable Sandbox Execution
+
+| Agent capability | Where code runs | Use case |
+|------------------|----------------|----------|
+| Agent has local sandbox | Agent-side | Autonomous, distributed |
+| Agent has no sandbox | Gateway-side | Simple, controlled |
+| `execution_mode: script` | Gateway fast path | Deterministic, no LLM |
+
+Gateway decides based on agent manifest capabilities and config.
+
+### Content Lifecycle
+
+**Write flow:**
+```
+Agent: content.write("main.py", script)
+Gateway: 1. Compute SHA-256
+         2. Store at .gateway/content/sha256/ab/c123...
+         3. Update session manifest: {"main.py": "sha256:abc123"}
+         4. Return handle to agent
+```
+
+**Read flow:**
+```
+Agent: content.read("main.py") or content.read("sha256:abc123")
+Gateway: 1. Resolve name → handle from session manifest (if name)
+         2. Fetch from content store
+         3. Return content
+```
+
+**Artifact creation (automatic on agent.spawn):**
+```
+1. Coder writes files → content.write() calls
+2. Coder writes SKILL.md → content.write("SKILL.md", ...)
+3. Gateway detects SKILL.md in session manifest
+4. Gateway creates artifact:
+   - Bundles all session content
+   - Extracts metadata from SKILL.md frontmatter
+   - Adds to spawn response as structured artifacts field
+5. Planner receives:
+   {
+     "assistant_reply": "Weather script implemented...",
+     "artifacts": [{
+       "id": "sha256:abc123",
+       "name": "weather.script.default",
+       "files": ["main.py", "utils.py", "SKILL.md"],
+       "entry_point": "main.py",
+       "io_schema": {...}  ← from SKILL.md frontmatter
+     }]
+   }
+```
+
+**Agent installation flow:**
+```
+1. Planner passes artifact handles to specialized_builder
+2. Specialized_builder reads SKILL.md via content.read()
+3. Specialized_builder creates agent directory:
+   - Copies files from content store
+   - SKILL.md becomes agent manifest
+   - Registers in AgentRepository
+4. New agent is available for discovery and spawning
+```
+
+**Persistence for reuse:**
+```
+content.persist("sha256:abc123") → makes content permanent
+Future sessions can discover and reuse via agent.discover
+```
+
+### Design Decisions
+
+| Current | New | Rationale |
+|---------|-----|-----------|
+| `memory.working.save/load` | `content.write/read` | Works locally + remotely |
+| File paths (local only) | Content handles (SHA-256) | Remote agent compatible |
+| Agent returns content in response | Gateway creates artifacts automatically | Multi-file support |
+| MANIFEST.json (structured JSON) | SKILL.md (YAML + markdown) | LLM-friendly, existing pattern |
+| Fixed local sandbox | Configurable execution | Agent-side or gateway-side |
+| LLM coordinates memory sharing | System handles automatically | LLMs are bad at coordination |
+
+### Implementation Tasks
+
+#### 1. Content-addressable storage infrastructure
+
+- [ ] Create `ContentStore` struct in gateway:
+  - Storage path: `.gateway/content/sha256/ab/c123...`
+  - `write(name, content) -> Handle` - compute SHA-256, store, return handle
+  - `read(handle) -> Content` - fetch from store by hash
+  - `read_by_name(session_id, name) -> Content` - resolve name → handle → content
+  - `persist(handle) -> ()` - mark content as permanent (no session cleanup)
+- [ ] Add `content.write`, `content.read`, `content.persist` native tools:
+  - `content.write(name, content)` - stores content, returns handle
+  - `content.read(handle_or_name)` - reads by handle or session-relative name
+  - `content.persist(handle)` - marks content for cross-session persistence
+  - All tools work via gateway API (local socket or HTTP for remote)
+- [ ] Session manifest management:
+  - `.gateway/sessions/<session_id>/manifest.json` - maps names → handles
+  - Updated on every content.write
+  - Gateway manages automatically
+
+#### 2. Artifact creation from SKILL.md
+
+- [ ] Gateway detects SKILL.md in session content:
+  - When agent writes SKILL.md, gateway parses YAML frontmatter
+  - Extracts: name, description, script_entry, io schema
+  - Stores artifact metadata in session artifacts.json
+- [ ] Auto-create artifact on agent.spawn completion:
+  - Bundle all session content into artifact
+  - Include SKILL.md frontmatter metadata
+  - Add structured `artifacts` field to spawn response
+- [ ] Artifact response format:
+  ```json
+  {
+    "id": "sha256:abc123",
+    "name": "weather.script.default",
+    "description": "Retrieves weather from Open-Meteo API",
+    "files": ["main.py", "utils.py", "SKILL.md"],
+    "entry_point": "main.py",
+    "io": {"accepts": {...}, "returns": {...}}
+  }
+  ```
+
+#### 3. Remove Tier 1 memory (working memory)
+
+- [ ] Deprecate `memory.working.save/load/list` tools:
+  - Keep tools operational for backward compatibility
+  - Add deprecation warning in tool description
+  - Redirect to `content.write/read` in foundation instructions
+- [ ] Update foundation instructions:
+  - Replace Tier 1 memory guidance with content tools
+  - "Use `content.write` for files/scripts/data"
+  - "Use `content.read` to retrieve by name or handle"
+  - "Content is automatically session-scoped and accessible to all session agents"
+- [ ] Update all SKILL.md files:
+  - planner: use `content.write("design.json", ...)` instead of `memory.working.save`
+  - architect: write schemas via `content.write`
+  - coder: write scripts via `content.write`, include SKILL.md
+  - Remove all memory coordination instructions (no more "return content in response")
+- [ ] Migration path:
+  - Existing `state/` directories continue to work
+  - Gateway can optionally migrate `state/*.json` to content store
+
+#### 4. Rename Tier 2 to "knowledge"
+
+- [ ] Rename tools:
+  - `memory.remember` → `knowledge.store`
+  - `memory.recall` → `knowledge.recall`
+  - `memory.search` → `knowledge.search`
+  - `memory.share` → `knowledge.share`
+- [ ] Keep existing implementation (SQLite + provenance)
+  - Same `MemoryObject` schema
+  - Same ACL/visibility controls
+  - Just rename the tool interface
+- [ ] Update foundation instructions:
+  - "Use `knowledge.store` for durable facts you want to persist across sessions"
+  - "Use `content.write` for working files within a session"
+  - Clear distinction: content = files/data, knowledge = facts with provenance
+- [ ] Update SKILL.md files:
+  - Remove memory.remember/recall references
+  - Add knowledge.store/recall references
+
+#### 5. Remote agent support via gateway API
+
+- [ ] Ensure all content tools work via HTTP API:
+  - `content.write` → POST /api/content/write
+  - `content.read` → GET /api/content/{handle}
+  - Same tool interface, different transport
+- [ ] Remote agent configuration:
+  - Gateway URL in agent config
+  - Authentication token for remote agents
+  - Same capability checks apply
+- [ ] Sandbox execution for remote agents:
+  - If agent has local sandbox → execute agent-side
+  - If agent has no sandbox → gateway executes centrally
+  - Configurable via agent manifest capabilities
+
+#### 6. SKILL.md guidance for specialists
+
+- [ ] Coder SKILL.md update:
+  - "Write all code files using `content.write(filename, content)`"
+  - "Write SKILL.md with YAML frontmatter containing name, description, script_entry, io schema"
+  - "SKILL.md body should include usage instructions in natural language"
+  - "Do NOT return file contents in response - just write them via content.write"
+- [ ] Architect SKILL.md update:
+  - "Write design documents using `content.write(filename, content)`"
+  - "Include I/O contracts in the design"
+- [ ] Planner SKILL.md update:
+  - "After spawning coder/architect, check response `artifacts` field"
+  - "Pass artifact handles to specialized_builder for installation"
+  - "Do NOT try to load from memory - use content.read with handles from artifacts"
+
+### Acceptance Criteria
+
+- [ ] Planner can read files written by architect/coder without memory coordination
+- [ ] Multi-file projects (UV project) can be shared between agents
+- [ ] Remote agents can read/write content via gateway API
+- [ ] SKILL.md is used for all agent artifacts (not MANIFEST.json)
+- [ ] Gateway auto-creates artifacts from SKILL.md in session content
+- [ ] Content is addressable by SHA-256 handle (works locally + remotely)
+- [ ] LLM has 3 simple tools: content.write, content.read, knowledge.store/recall
+- [ ] No more "return content in response" or "don't load from memory" rules
+- [ ] Demo-session-6 type scenario works without looping
+- [ ] All existing tests pass with new content tools
+
+### Test Scenarios
+
+1. **Basic content sharing**: Architect writes design.json via content.write, planner reads via content.read
+2. **Multi-file project**: Coder creates Python project with SKILL.md, specialized_builder installs via artifact handles
+3. **Remote agent**: Remote coder writes content, local planner reads it
+4. **SKILL.md artifact**: Gateway parses SKILL.md frontmatter, creates structured artifact
+5. **Knowledge persistence**: Agent stores fact via knowledge.store, different session recalls it
+6. **Content persistence**: Agent persists content, later session discovers and reuses
+7. **Sandbox execution**: Script agent executes via agent-side or gateway-side sandbox based on capabilities
+
+---
+
+## Integration Test: Coder Real LLM Content Generation & Reuse
+
+**Depends on:** Content Storage & Simplified Agent Data Model (above)
+
+**Goal:** End-to-end integration test proving that a real LLM (via openrouter) can generate files with SKILL.md, gateway handles the content correctly, and another agent can reuse it.
+
+**Why this matters:** Validates the full content lifecycle with real LLM behavior (not stubs). Ensures the simple 3-tool interface works with actual model output.
+
+### Test Flow
+
+```
+1. Start gateway with temp config + openrouter provider (nvidia/nemotron-3-super-120b-a12b:free)
+2. Spawn coder agent with task: "Write a Python script that fetches weather data"
+3. Verify coder generates:
+   - main.py (or weather.py) - actual Python code
+   - SKILL.md - with YAML frontmatter (name, description, script_entry, io schema)
+4. Verify gateway captures content:
+   - content.write calls logged to causal chain
+   - Content stored in content-addressable store
+   - Session manifest updated with file handles
+5. Verify gateway creates artifact:
+   - SKILL.md parsed for frontmatter metadata
+   - Artifact response includes structured metadata (name, description, io)
+6. Spawn specialized_builder with artifact handles
+7. Verify specialized_builder can:
+   - Read SKILL.md via content.read
+   - Read script file via content.read
+   - Install agent using extracted metadata
+8. Verify new agent is registered and discoverable via agent.discover
+
+### Test Implementation
+
+#### Test file: `autonoetic-gateway/tests/coder_content_generation_integration.rs`
+
+- [ ] Create test harness:
+  - Temp directory for agents, content store, sessions
+  - Gateway config with openrouter provider
+  - API key from env var (OPENROUTER_API_KEY)
+  - Skip test if API key not set
+
+- [ ] Test: `test_coder_generates_files_with_skill_md`:
+  - Spawn coder with prompt: "Write a Python script that fetches current weather from Open-Meteo API for a given latitude/longitude. Include a SKILL.md describing usage."
+  - Wait for completion
+  - Assert response contains artifacts field
+  - Assert artifacts contain at least main script file
+  - Assert artifacts contain SKILL.md
+  - Assert SKILL.md has valid YAML frontmatter with name, description
+  - Assert io schema is present in frontmatter
+
+- [ ] Test: `test_gateway_stores_content_correctly`:
+  - After coder completes, verify content store has files
+  - Read content by handle → matches original
+  - Read content by name → matches original
+  - Session manifest has correct mappings
+
+- [ ] Test: `test_specialized_builder_reuses_coder_content`:
+  - Get artifact handles from coder response
+  - Spawn specialized_builder with install request referencing handles
+  - Specialized_builder reads SKILL.md → extracts metadata
+  - Specialized_builder reads script → installs agent
+  - Verify agent is registered in AgentRepository
+  - Verify agent is discoverable via agent.discover
+
+- [ ] Test: `test_full_lifecycle_planner_coder_builder`:
+  - Spawn planner with user goal: "I need a weather checking agent"
+  - Planner spawns architect (if needed) → design
+  - Planner spawns coder → implementation with SKILL.md
+  - Planner spawns specialized_builder → install
+  - Verify end-to-end works without memory coordination issues
+  - Verify no looping (planner extracts from artifacts, not memory)
+
+### Required Infrastructure
+
+- [ ] Ensure coder agent SKILL.md instructs content.write usage
+- [ ] Ensure coder agent SKILL.md instructs SKILL.md creation with YAML frontmatter
+- [ ] Ensure gateway auto-creates artifacts from SKILL.md in session content
+- [ ] Ensure content.write/read tools are available in test environment
+- [ ] Ensure artifact handles are passed correctly in spawn response
+
+### Acceptance Criteria
+
+- [ ] Test passes with real LLM (nvidia/nemotron-3-super-120b-a12b:free via openrouter)
+- [ ] Coder generates at least 1 Python file + SKILL.md
+- [ ] SKILL.md has valid YAML frontmatter with name, description, io schema
+- [ ] Gateway stores content and creates artifacts automatically
+- [ ] Specialized_builder can read files via content.read handles
+- [ ] Specialized_builder can install agent using SKILL.md metadata
+- [ ] New agent is discoverable via agent.discover
+- [ ] Full lifecycle works without memory coordination or looping
+- [ ] Test is skippable when OPENROUTER_API_KEY not set
+
+---
+
+## Specialist SKILL.md Updates: Fuzzy Content + Two-Tier Validation
+
+**Depends on:** Content Storage & Simplified Agent Data Model
+
+**Goal:** Update all specialist agents to use content storage and adopt fuzzy content approach for LLM agents, strict schema for script agents.
+
+**Design principle:** LLMs are inherently fuzzy. Don't fight this - let them produce natural content. Gateway stores it as-is. Strict schema only for deterministic/script agents.
+
+### Two-Tier Validation
+
+| Agent Type | Validation Mode | Schema Behavior |
+|------------|----------------|-----------------|
+| LLM agents (reasoning) | `validation: "soft"` (default) | `io` schema is guidance, not enforced |
+| Script agents (deterministic) | `validation: "strict"` | `io` schema enforced at boundaries |
+
+### SKILL.md Frontmatter Changes
+
+Add optional `validation` field to all agents:
+```yaml
+---
+io:
+  accepts: {...}    # guidance for LLM agents, enforced for script agents
+  returns: {...}    # guidance for LLM agents, enforced for script agents
+validation: "soft"  # default for reasoning agents
+---
+```
+
+### Agent-by-Agent Changes
+
+#### 1. Researcher (`researcher.default/SKILL.md`)
+
+- [ ] Remove "JSON Output Format (Required)" section
+- [ ] Remove strict JSON validation requirements
+- [ ] Add `content.write("findings.md", research_content)` for storing full research
+- [ ] Change output guidance: "Write findings to content.write, return natural summary"
+- [ ] Update `io.returns` to be guidance only (add `validation: "soft"`)
+- [ ] Remove "Common Mistakes to Avoid" section about JSON formatting
+- [ ] Add guidance: "Include sources, data, confidence naturally in your response"
+
+#### 2. Architect (`architect.default/SKILL.md`)
+
+- [ ] Add `content.write("design.md", design_document)` for storing designs
+- [ ] Remove "return in response" pattern - use content.write instead
+- [ ] Add guidance: "Write I/O contracts and design decisions to content.write"
+- [ ] Add guidance: "Include SKILL.md frontmatter hints for downstream agents"
+- [ ] Update memory tools section to reference content.write/read
+
+#### 3. Coder (`coder.default/SKILL.md`)
+
+- [ ] Update to use `content.write` for all code files
+- [ ] Update to write SKILL.md with YAML frontmatter for metadata
+- [ ] Remove "return code in response" pattern
+- [ ] Add guidance: "Write SKILL.md with name, description, script_entry, io schema"
+- [ ] Update Output Format section to reference content.write
+- [ ] Already partially updated - needs refinement
+
+#### 4. Evaluator (`evaluator.default/SKILL.md`)
+
+- [ ] Update to read artifacts via `content.read` instead of memory
+- [ ] For script agents: validate against strict schema
+- [ ] For LLM agents: validate loosely, accept natural output
+- [ ] Add guidance: "Check if output meets intent, not just schema compliance"
+
+#### 5. Debugger (`debugger.default/SKILL.md`)
+
+- [ ] Update to read code via `content.read` handles
+- [ ] Write fixes via `content.write`
+- [ ] Remove memory.working references
+
+#### 6. Auditor (`auditor.default/SKILL.md`)
+
+- [ ] Update to read artifacts via `content.read` handles
+- [ ] Write audit reports via `content.write`
+- [ ] Remove memory.working references
+
+#### 7. Specialized Builder (`specialized_builder.default/SKILL.md`)
+
+- [ ] Update to read SKILL.md from artifacts via `content.read`
+- [ ] Update to read script files from artifacts via `content.read`
+- [ ] Update agent.install flow to use content handles
+- [ ] Remove file path assumptions (content handles work remotely)
+- [ ] Update "File shapes" section to reference content handles
+- [ ] Already has content - needs updates for content storage
+
+#### 8. Agent Adapter (`agent-adapter.default/SKILL.md`)
+
+- [ ] Change from schema-diff to content-transform approach
+- [ ] Remove `schema_diff.py` script dependency (or make optional)
+- [ ] Add guidance: "Transform content at consumption time, not production time"
+- [ ] Update to read base agent content via `content.read`
+- [ ] Write wrapper via `content.write`
+- [ ] Add `validation: "soft"` for LLM-to-LLM adaptation
+- [ ] Add `validation: "strict"` for LLM-to-script adaptation
+
+#### 9. Planner (`planner.default/SKILL.md`)
+
+- [ ] Already updated for content storage (artifacts field)
+- [ ] Minor: remove remaining memory.working references
+- [ ] Minor: update to use content.read for accessing specialist outputs
+
+#### 10. Memory Curator (`memory-curator.default/SKILL.md`)
+
+- [ ] Update from `memory.remember` to `knowledge.store`
+- [ ] Update from `memory.recall` to `knowledge.recall`
+- [ ] Update from `memory.search` to `knowledge.search`
+- [ ] Remove Tier 1/Tier 2 references
+- [ ] Add guidance: "Use knowledge.store for durable facts with provenance"
+
+#### 11. Evolution Steward (`evolution-steward.default/SKILL.md`)
+
+- [ ] Update to use `content.persist` for promoting artifacts
+- [ ] Update to use `knowledge.store` for durable learnings
+- [ ] Remove memory.working references
+
+### Foundation Instructions Update
+
+- [ ] Update `foundation_instructions.md`:
+  - Add content.write/read tools documentation
+  - Add knowledge.store/recall tools documentation
+  - Add two-tier validation explanation
+  - Remove memory.working references
+  - Add guidance: "LLM agents produce natural content, gateway handles storage"
+
+### Acceptance Criteria
+
+- [ ] All LLM agents have `validation: "soft"` (or omit, default is soft)
+- [ ] All script agents have `validation: "strict"`
+- [ ] No agent has strict JSON output requirements (except script agents)
+- [ ] All agents use content.write for producing artifacts
+- [ ] All agents use content.read for consuming artifacts
+- [ ] Memory tools renamed: knowledge.store/recall/search
+- [ ] Agent adapter uses content-transform, not schema-diff
+- [ ] Foundation instructions explain fuzzy content + two-tier validation
+- [ ] All existing tests pass
