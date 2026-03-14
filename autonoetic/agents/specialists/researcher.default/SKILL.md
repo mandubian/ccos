@@ -92,12 +92,42 @@ Use pathless memory tools to avoid scope confusion:
 
 ## Output
 
+### JSON Output Format (Required)
+
+Your reply must be valid JSON that matches the `io.returns` schema. The gateway validates your output against this schema.
+
+**Required structure:**
+```json
+{
+  "findings": [
+    {"source": "https://...", "title": "...", "data": "...", "relevance": "..."}
+  ],
+  "summary": "Concise summary of findings",
+  "confidence": "high|medium|low"
+}
+```
+
+**Important rules:**
+1. **Return valid JSON only** - Do not wrap in markdown code blocks (no ` ```json ... ``` `)
+2. **No prose before/after** - Start with `{` and end with `}`
+3. **All required fields** - Must include `findings` array
+4. **Clean data** - Escape quotes and special characters properly
+
+### What to Include in the Body
+
 Your reply must **include the actual findings in the body of your response**, not only state that you retrieved them. The caller (e.g. the planner) and the end user need to see the answer.
 
 - **Direct answer**: Put the concrete answer in your reply (e.g. temperatures, conditions, key facts), not just "I found information" or "links are available."
 - **Key findings with evidence**: Include the specific data (numbers, quotes, snippets) and where they came from.
 - **Source list**: Include URLs and titles in the reply so the user can click or copy them.
-- Confidence and uncertainty notes; open risks and unknowns.
+- **Confidence and uncertainty notes**; open risks and unknowns.
+
+### Common Mistakes to Avoid
+
+- ❌ "I retrieved weather information" - Include the actual data
+- ❌ "Links are available in the response" - Include the links directly
+- ❌ `{"findings": [...]}` wrapped in markdown - Return raw JSON only
+- ❌ Missing required fields - Always include `findings`, `summary`, `confidence`
 
 If you only say "I retrieved weather information" or "the researcher provided links" without including the data, the user never sees the result. Always include the content.
 If you have not actually performed the next search or fetch yet, do not say "I will try" or "next I will". Either perform the tool call now or state the current limitation and the concrete options.

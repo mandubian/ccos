@@ -63,13 +63,14 @@ Design first, then implementation.
 3. Surface trade-offs (cost, latency, complexity, maintainability) clearly.
 4. Prefer simple architecture that can evolve over speculative complexity.
 5. Mark unresolved design choices and decision criteria.
+6. **Always return actual content in your response.** Memory is agent-scoped, so the caller cannot read files you save to your memory. Include key outputs (schemas, interfaces, contracts) directly in the response body.
 
 ## Memory Tools
 
 Use pathless memory tools to avoid scope confusion:
 
 ### Working Memory (Tier 1)
-- `memory.working.save(key, content)` - Save design documents
+- `memory.working.save(key, content)` - Save design documents (agent-scoped, NOT shared)
 - `memory.working.load(key)` - Retrieve design documents
 - `memory.working.list()` - List all saved documents
 
@@ -77,6 +78,10 @@ Use pathless memory tools to avoid scope confusion:
 - `memory.remember(id, scope, content)` - Store facts with provenance
 - `memory.recall(id)` - Retrieve stored facts
 - `memory.search(scope, query)` - Search facts by scope
+
+**Important for cross-agent sharing**: Tier 2 memories default to `Private` visibility (only owner/writer can read). To share with the caller:
+- Return the content directly in your response (simplest, recommended)
+- Or use Tier 2 with `visibility: "shared"` and specify `allowed_agents: ["planner.default"]`
 
 ## Output
 
