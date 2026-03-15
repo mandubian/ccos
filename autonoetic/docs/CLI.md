@@ -77,16 +77,43 @@ autonoetic gateway approvals reject <request_id> [--reason TEXT]
 
 ### `autonoetic agent init`
 
-Scaffold a new agent directory.
+Scaffold a new agent directory with role-specific LLM configuration.
 
 ```bash
-autonoetic agent init <name> [--template quickstart|planner|script]
+autonoetic agent init <name> [OPTIONS]
+
+Options:
+  --template <TEMPLATE>   Template (planner, researcher, coder, auditor, generic)
+  --preset <PRESET>       Named LLM preset from config (e.g., agentic, coding, fast)
+  --provider <PROVIDER>   LLM provider override (openai, anthropic, gemini, openrouter)
+  --model <MODEL>         LLM model override (gpt-4o, claude-sonnet-4-20250514)
+```
+
+**Examples:**
+
+```bash
+# Use template-specific default LLM (planner → claude, coder → claude)
+autonoetic agent init my_coder --template coder
+
+# Use a named preset from config
+autonoetic agent init my_agent --preset coding
+
+# Override LLM directly
+autonoetic agent init my_agent --provider anthropic --model claude-sonnet-4-20250514
 ```
 
 Creates:
-- `SKILL.md` with manifest frontmatter
+- `SKILL.md` with manifest frontmatter and LLM config
 - `runtime.lock` with dependencies
 - `state/`, `history/`, `skills/`, `scripts/` directories
+
+### `autonoetic agent presets`
+
+List available LLM presets and template mappings.
+
+```bash
+autonoetic agent presets
+```
 
 ### `autonoetic agent run`
 
