@@ -15,9 +15,9 @@ pub struct LlmPreset {
     pub fallback_provider: Option<String>,
     #[serde(default)]
     pub fallback_model: Option<String>,
-    /// Set to true if the provider doesn't support tool_choice parameter
+    /// Set to true if the provider only supports basic chat (no tools at all)
     #[serde(default)]
-    pub disable_tool_choice: Option<bool>,
+    pub chat_only: Option<bool>,
 }
 
 /// When `agent.install` requires human approval before proceeding.

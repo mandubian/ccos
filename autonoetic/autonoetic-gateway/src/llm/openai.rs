@@ -97,7 +97,8 @@ impl OpenAiDriver {
             }
         }
 
-        if !req.tools.is_empty() {
+        // Only include tools if provider supports them
+        if !req.tools.is_empty() && self.provider.capabilities.supports_tools {
             body["tools"] = json!(req
                 .tools
                 .iter()
@@ -111,7 +112,6 @@ impl OpenAiDriver {
                 }))
                 .collect::<Vec<_>>());
             // Only include tool_choice if provider supports it
-            // Some providers (Z.AI/GLM, etc.) return 400 for unknown parameters
             if self.provider.capabilities.supports_tool_choice {
                 body["tool_choice"] = json!("auto");
             }

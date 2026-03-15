@@ -12,7 +12,7 @@ pub struct LlmTemplateConfig {
     pub provider: String,
     pub model: String,
     pub temperature: f64,
-    pub disable_tool_choice: bool,
+    pub chat_only: bool,
 }
 
 /// Resolve LLM config from CLI flags, presets, or defaults
@@ -29,7 +29,7 @@ pub fn resolve_llm_config(
             provider: p.to_string(),
             model: model.unwrap_or("gpt-4o").to_string(),
             temperature: 0.2,
-            disable_tool_choice: false,
+            chat_only: false,
         };
     }
 
@@ -39,7 +39,7 @@ pub fn resolve_llm_config(
             provider: preset.provider.clone(),
             model: preset.model.clone(),
             temperature: preset.temperature.unwrap_or(0.2),
-            disable_tool_choice: preset.disable_tool_choice.unwrap_or(false),
+            chat_only: preset.chat_only.unwrap_or(false),
         }
     }
 
@@ -65,25 +65,25 @@ pub fn resolve_llm_config(
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             temperature: 0.2,
-            disable_tool_choice: false,
+            chat_only: false,
         },
         "coder" => LlmTemplateConfig {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             temperature: 0.1,
-            disable_tool_choice: false,
+            chat_only: false,
         },
         "researcher" => LlmTemplateConfig {
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             temperature: 0.3,
-            disable_tool_choice: false,
+            chat_only: false,
         },
         _ => LlmTemplateConfig {
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             temperature: 0.2,
-            disable_tool_choice: false,
+            chat_only: false,
         },
     }
 }
@@ -160,6 +160,12 @@ pub fn render_skill_template(agent_id: &str, template: Option<&str>, llm_config:
             "You are an autonomous agent. Plan clearly and execute safely.",
         ),
     };
+    let chat_only_line = if llm_config.chat_only {
+        "\n      chat_only: true"
+    } else {
+        ""
+    };
+    
     format!(
         r#"---
 name: "{agent_id}"
@@ -181,7 +187,7 @@ metadata:
     llm_config:
       provider: "{provider}"
       model: "{model}"
-      temperature: {temperature}
+      temperature: {temperature}{chat_only}
 ---
 # {agent_id}
 
@@ -190,6 +196,7 @@ metadata:
         provider = llm_config.provider,
         model = llm_config.model,
         temperature = llm_config.temperature,
+        chat_only = chat_only_line,
     )
 }
 
@@ -469,8 +476,8 @@ fn apply_llm_preset_to_skill(
     // Check if current content already has the right LLM
     if content.contains(&format!("model: \"{}\"", llm.model))
         && content.contains(&format!("provider: \"{}\"", llm.provider)) {
-        // Even if model/provider match, check disable_tool_choice
-        if !llm.disable_tool_choice || content.contains("disable_tool_choice") {
+        // Even if model/provider match, check chat_only
+        if !llm.chat_only || content.contains("chat_only") {
             return None; // Already correct
         }
     }
@@ -485,20 +492,20 @@ fn apply_llm_preset_to_skill(
     updated = re_model.replace(&updated, format!("${{1}}\"{}\"", llm.model)).to_string();
     updated = re_temp.replace(&updated, format!("${{1}}{} ", llm.temperature)).to_string();
 
-    // Handle disable_tool_choice
-    if llm.disable_tool_choice {
-        // Check if disable_tool_choice already exists
-        if !updated.contains("disable_tool_choice") {
-            // Add disable_tool_choice after temperature line
+    // Handle chat_only
+    if llm.chat_only {
+        // Check if chat_only already exists
+        if !updated.contains("chat_only") {
+            // Add chat_only after temperature line
             let re_after_temp = regex::Regex::new(r#"(temperature:\s*[0-9.]+\s*\n)"#).ok()?;
             updated = re_after_temp.replace(
                 &updated, 
-                format!("${{1}}      disable_tool_choice: true\n")
+                format!("${{1}}      chat_only: true\n")
             ).to_string();
         } else {
-            // Update existing disable_tool_choice
-            let re_dtc = regex::Regex::new(r#"(disable_tool_choice:\s*)(true|false)"#).ok()?;
-            updated = re_dtc.replace(&updated, "${1}true").to_string();
+            // Update existing chat_only
+            let re_co = regex::Regex::new(r#"(chat_only:\s*)(true|false)"#).ok()?;
+            updated = re_co.replace(&updated, "${1}true").to_string();
         }
     }
 

@@ -16,6 +16,8 @@ pub struct ProviderCapabilities {
     pub supports_system_top_level: bool,
     /// Provider includes token usage counts in stream chunks.
     pub supports_usage_in_stream: bool,
+    /// Provider supports tool/function calling at all.
+    pub supports_tools: bool,
     /// Provider supports the tool_choice parameter (some OpenAI-compatible APIs don't).
     pub supports_tool_choice: bool,
 }
@@ -28,17 +30,19 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: true,
             supports_system_top_level: false,
             supports_usage_in_stream: false,
+            supports_tools: true,
             supports_tool_choice: true,
         }
     }
 
-    /// OpenAI-compatible but without tool_choice (some Chinese models via OpenRouter)
-    pub fn openai_compatible_no_tool_choice() -> Self {
+    /// Basic chat-only provider (Z.AI GLM, some Chinese models via OpenRouter)
+    pub fn chat_only() -> Self {
         Self {
             supports_streaming: true,
-            supports_tool_stream_deltas: true,
+            supports_tool_stream_deltas: false,
             supports_system_top_level: false,
             supports_usage_in_stream: false,
+            supports_tools: false,
             supports_tool_choice: false,
         }
     }
@@ -50,6 +54,7 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: true,
             supports_system_top_level: true,
             supports_usage_in_stream: true,
+            supports_tools: true,
             supports_tool_choice: true,
         }
     }
@@ -61,6 +66,7 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: false,
             supports_system_top_level: true,
             supports_usage_in_stream: false,
+            supports_tools: true,
             supports_tool_choice: false,
         }
     }
@@ -262,7 +268,7 @@ pub fn resolve(
     max_tokens: Option<u32>,
     base_url_override: Option<&str>,
     api_key_override: Option<&str>,
-    disable_tool_choice: bool,
+    chat_only: bool,
 ) -> anyhow::Result<ResolvedProvider> {
     let defaults = provider_defaults(provider);
 
@@ -286,9 +292,9 @@ pub fn resolve(
         );
     };
 
-    // Override tool_choice support if explicitly disabled
-    if disable_tool_choice {
-        capabilities.supports_tool_choice = false;
+    // Override to chat-only mode if explicitly set
+    if chat_only {
+        capabilities = ProviderCapabilities::chat_only();
     }
 
     // Resolve auth
