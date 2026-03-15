@@ -246,6 +246,84 @@ pub fn handle_agent_presets(config_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Autonoetic Gateway Configuration
+# See docs/quickstart-planner-specialist-chat.md for full documentation
+
+agents_dir: "./agents"
+port: 4000
+ofp_port: 4200
+tls: false
+default_lead_agent_id: "planner.default"
+max_concurrent_spawns: 4
+max_pending_spawns_per_agent: 4
+background_scheduler_enabled: false
+
+# Agent install approval policy: always, risk_based (default), or never
+# agent_install_approval_policy: risk_based
+
+# LLM presets for role-specific model selection
+# Presets are referenced by name in templates and agent init commands
+llm_presets:
+  agentic:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.2
+  coding:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.1
+  research:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.3
+  fallback:
+    provider: "openai"
+    model: "gpt-4o"
+    temperature: 0.2
+
+# Template → Preset mapping
+# Used during 'agent bootstrap' and 'agent init --template <name>'
+llm_preset_mapping:
+  planner: agentic
+  researcher: research
+  architect: agentic
+  coder: coding
+  debugger: coding
+  auditor: agentic
+  specialized_builder: agentic
+  default: agentic
+"#;
+
+pub fn handle_init_config(output: Option<&str>, overwrite: bool) -> anyhow::Result<()> {
+    let output_path = output.unwrap_or("config.yaml");
+    let path = std::path::Path::new(output_path);
+
+    if path.exists() && !overwrite {
+        anyhow::bail!(
+            "Config file already exists at {}. Use --overwrite to replace it.",
+            path.display()
+        );
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    std::fs::write(path, DEFAULT_CONFIG_TEMPLATE)?;
+    println!("Created config file at {}", path.display());
+    println!();
+    println!("Next steps:");
+    println!("  1. Edit the file to set your LLM provider and API keys");
+    println!("  2. Bootstrap agents: autonoetic agent bootstrap --config {}", path.display());
+    println!("  3. Start gateway: autonoetic gateway start --config {}", path.display());
+    println!();
+    println!("Tip: Use 'autonoetic agent presets --config {}' to list configured presets.", path.display());
+
+    Ok(())
+}
+
 pub async fn handle_agent_list(config_path: &Path) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
     let repo = autonoetic_gateway::AgentRepository::from_config(&config);

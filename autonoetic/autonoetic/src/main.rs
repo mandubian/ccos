@@ -51,6 +51,9 @@ async fn main() -> anyhow::Result<()> {
             cli::common::AgentCommands::Presets => {
                 cli::agent::handle_agent_presets(&config_path)?;
             }
+            cli::common::AgentCommands::InitConfig { output, overwrite } => {
+                cli::agent::handle_init_config(output.as_deref(), *overwrite)?;
+            }
             cli::common::AgentCommands::Run {
                 agent_id,
                 message,
