@@ -77,11 +77,12 @@ Manage Autonoetic agents.
 
 ### `autonoetic agent init`
 
-Scaffolds a new agent directory.
+Scaffolds a new agent directory with LLM configuration.
 
 ```bash
-autonoetic agent init my-agent
-autonoetic agent init researcher --template researcher
+autonoetic agent init my-agent --template coder
+autonoetic agent init my-agent --preset coding
+autonoetic agent init my-agent --provider anthropic --model claude-sonnet-4-20250514
 ```
 
 | Argument | Description |
@@ -90,7 +91,18 @@ autonoetic agent init researcher --template researcher
 
 | Option | Description |
 |--------|-------------|
-| `-t, --template` | Template to use (researcher, coder, auditor, etc.) |
+| `-t, --template` | Template (planner, researcher, coder, auditor, generic) |
+| `--preset` | Named LLM preset from config |
+| `--provider` | LLM provider override |
+| `--model` | LLM model override |
+
+### `autonoetic agent presets`
+
+Lists available LLM presets and template-to-preset mappings.
+
+```bash
+autonoetic agent presets
+```
 
 ### `autonoetic agent run`
 
