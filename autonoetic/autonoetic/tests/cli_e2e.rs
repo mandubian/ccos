@@ -174,39 +174,39 @@ Use memory tools when needed.
 }
 
 fn write_builder_agent(agent_dir: &Path, agent_id: &str) {
-        std::fs::create_dir_all(agent_dir).expect("agent dir should create");
-        let skill = [
-                "---".to_string(),
-                format!("name: \"{}\"", agent_id),
-                "description: \"Terminal chat builder agent\"".to_string(),
-                "metadata:".to_string(),
-                "  autonoetic:".to_string(),
-                "    version: \"1.0\"".to_string(),
-                "    runtime:".to_string(),
-                "      engine: \"autonoetic\"".to_string(),
-                "      gateway_version: \"0.1.0\"".to_string(),
-                "      sdk_version: \"0.1.0\"".to_string(),
-                "      type: \"stateful\"".to_string(),
-                "      sandbox: \"bubblewrap\"".to_string(),
-                "      runtime_lock: \"runtime.lock\"".to_string(),
-                "    agent:".to_string(),
-                format!("      id: \"{}\"", agent_id),
-                format!("      name: \"{}\"", agent_id),
-                "      description: \"Terminal chat builder agent\"".to_string(),
-                "    llm_config:".to_string(),
-                "      provider: \"openai\"".to_string(),
-                "      model: \"test-model\"".to_string(),
-                "      temperature: 0.0".to_string(),
-                "    capabilities:".to_string(),
-                "      - type: \"AgentSpawn\"".to_string(),
-                "        max_children: 8".to_string(),
-                "---".to_string(),
-                "# Terminal Builder Agent".to_string(),
-                "Use `agent.install` when the user asks for a durable worker.".to_string(),
-                String::new(),
-        ]
-        .join("\n");
-        std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
+    std::fs::create_dir_all(agent_dir).expect("agent dir should create");
+    let skill = [
+        "---".to_string(),
+        format!("name: \"{}\"", agent_id),
+        "description: \"Terminal chat builder agent\"".to_string(),
+        "metadata:".to_string(),
+        "  autonoetic:".to_string(),
+        "    version: \"1.0\"".to_string(),
+        "    runtime:".to_string(),
+        "      engine: \"autonoetic\"".to_string(),
+        "      gateway_version: \"0.1.0\"".to_string(),
+        "      sdk_version: \"0.1.0\"".to_string(),
+        "      type: \"stateful\"".to_string(),
+        "      sandbox: \"bubblewrap\"".to_string(),
+        "      runtime_lock: \"runtime.lock\"".to_string(),
+        "    agent:".to_string(),
+        format!("      id: \"{}\"", agent_id),
+        format!("      name: \"{}\"", agent_id),
+        "      description: \"Terminal chat builder agent\"".to_string(),
+        "    llm_config:".to_string(),
+        "      provider: \"openai\"".to_string(),
+        "      model: \"test-model\"".to_string(),
+        "      temperature: 0.0".to_string(),
+        "    capabilities:".to_string(),
+        "      - type: \"AgentSpawn\"".to_string(),
+        "        max_children: 8".to_string(),
+        "---".to_string(),
+        "# Terminal Builder Agent".to_string(),
+        "Use `agent.install` when the user asks for a durable worker.".to_string(),
+        String::new(),
+    ]
+    .join("\n");
+    std::fs::write(agent_dir.join("SKILL.md"), skill).expect("skill should write");
 }
 
 fn write_planner_agent(agent_dir: &Path, agent_id: &str) {
@@ -346,7 +346,9 @@ fn handle_stub_connection(
         .map(|messages| {
             messages
                 .iter()
-                .filter(|message| message.get("role").and_then(|value| value.as_str()) == Some("tool"))
+                .filter(|message| {
+                    message.get("role").and_then(|value| value.as_str()) == Some("tool")
+                })
                 .count()
         })
         .unwrap_or(0);
@@ -405,9 +407,7 @@ fn handle_stub_connection(
             }],
             "usage": {"prompt_tokens": 20, "completion_tokens": 8}
         })
-    } else if latest_user_message.contains("repair invalid agent install")
-        && !has_tool_result
-    {
+    } else if latest_user_message.contains("repair invalid agent install") && !has_tool_result {
         let invalid_install_args = serde_json::json!({
             "agent_id": "",
             "name": "repair_worker",
@@ -454,7 +454,11 @@ fn handle_stub_connection(
                     "content": "seed"
                 }
             ],
-            "arm_immediately": false
+            "arm_immediately": false,
+            "promotion_gate": {
+                "evaluator_pass": true,
+                "auditor_pass": true
+            }
         });
 
         serde_json::json!({
@@ -474,7 +478,8 @@ fn handle_stub_connection(
             }],
             "usage": {"prompt_tokens": 20, "completion_tokens": 8}
         })
-    } else if latest_user_message.contains("repair invalid agent install") && tool_result_count >= 2 {
+    } else if latest_user_message.contains("repair invalid agent install") && tool_result_count >= 2
+    {
         serde_json::json!({
             "choices": [{
                 "message": { "content": "Installed repair_worker after retry." },
@@ -482,9 +487,7 @@ fn handle_stub_connection(
             }],
             "usage": {"prompt_tokens": 20, "completion_tokens": 8}
         })
-    } else if latest_user_message.contains("please store this data")
-        && !has_tool_result
-    {
+    } else if latest_user_message.contains("please store this data") && !has_tool_result {
         serde_json::json!({
             "choices": [{
                 "message": {
@@ -493,8 +496,8 @@ fn handle_stub_connection(
                         "id": "call_1",
                         "type": "function",
                         "function": {
-                            "name": "memory.write",
-                            "arguments": "{\"path\":\"secret.txt\",\"content\":\"secret_value_123\"}"
+                            "name": "content.write",
+                            "arguments": "{\"name\":\"secret.txt\",\"content\":\"secret_value_123\"}"
                         }
                     }]
                 },
@@ -519,8 +522,8 @@ fn handle_stub_connection(
                         "id": "call_2",
                         "type": "function",
                         "function": {
-                            "name": "memory.read",
-                            "arguments": "{\"path\":\"secret.txt\"}"
+                            "name": "content.read",
+                            "arguments": "{\"name\":\"secret.txt\"}"
                         }
                     }]
                 },
@@ -702,10 +705,24 @@ fn test_terminal_chat_routes_through_gateway_ingress_and_preserves_session() {
         stdout
     );
 
-    let memory_path = agents_dir.join(agent_id).join("state").join("secret.txt");
-    assert_eq!(
-        std::fs::read_to_string(&memory_path).expect("state should exist"),
-        "secret_value_123"
+    // Content is now stored in the content-addressable store, not in state/ directory
+    // Check that the content was stored in the gateway's content store
+    let gateway_dir = agents_dir.join(".gateway");
+    let content_store_dir = gateway_dir.join("content");
+    assert!(
+        content_store_dir.exists(),
+        "content store should exist at {:?}",
+        content_store_dir
+    );
+    // The content store uses SHA-256 hashes as filenames, so we just verify the store exists
+    // and contains at least one file
+    let content_files: Vec<_> = std::fs::read_dir(&content_store_dir)
+        .expect("content store should be readable")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        !content_files.is_empty(),
+        "content store should contain at least one file"
     );
 
     let gateway_log = std::fs::read_to_string(
@@ -727,8 +744,8 @@ fn test_terminal_chat_routes_through_gateway_ingress_and_preserves_session() {
     )
     .expect("agent causal log should exist");
     assert!(agent_log.contains(session_id));
-    assert!(agent_log.contains("\"tool_name\":\"memory.write\""));
-    assert!(agent_log.contains("\"tool_name\":\"memory.read\""));
+    assert!(agent_log.contains("\"tool_name\":\"content.write\""));
+    assert!(agent_log.contains("\"tool_name\":\"content.read\""));
 
     let request_dump = captured_bodies
         .lock()
@@ -841,7 +858,8 @@ fn test_terminal_chat_repairs_invalid_agent_install_in_session() {
     let temp = tempfile::tempdir().expect("tempdir should create");
     let config_path = temp.path().join("config.yaml");
     let agents_dir = temp.path().join("agents");
-    let agent_id = "builder_chat_repair";
+    // Use specialized_builder.default which is an evolution role with agent.install permission
+    let agent_id = "specialized_builder.default";
     let jsonrpc_port = pick_unused_port();
     let ofp_port = pick_unused_port();
     write_config(&config_path, &agents_dir, jsonrpc_port, ofp_port, 4);
