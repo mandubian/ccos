@@ -38,12 +38,18 @@ async fn main() -> anyhow::Result<()> {
         },
 
         Commands::Agent(args) => match &args.command {
-            cli::common::AgentCommands::Init { agent_id, template } => {
+            cli::common::AgentCommands::Init { agent_id, template, preset, provider, model } => {
                 cli::agent::init_agent_scaffold(
                     &config_path,
                     agent_id,
                     template.as_deref(),
+                    preset.as_deref(),
+                    provider.as_deref(),
+                    model.as_deref(),
                 )?;
+            }
+            cli::common::AgentCommands::Presets => {
+                cli::agent::handle_agent_presets(&config_path)?;
             }
             cli::common::AgentCommands::Run {
                 agent_id,
