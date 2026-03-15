@@ -11,7 +11,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal crates
@@ -38,3 +38,7 @@ clap = { version = "4", features = ["derive"] }
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
