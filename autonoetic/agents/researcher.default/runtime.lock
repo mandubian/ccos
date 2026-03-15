@@ -1,0 +1,10 @@
+gateway:
+  artifact: "marketplace://gateway/autonoetic-gateway"
+  version: "0.1.0"
+  sha256: "unmanaged"
+sdk:
+  version: "0.1.0"
+sandbox:
+  backend: "bubblewrap"
+dependencies: []
+artifacts: []
