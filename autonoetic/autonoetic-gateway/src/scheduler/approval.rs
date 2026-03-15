@@ -8,7 +8,7 @@ use crate::execution::{gateway_actor_id, init_gateway_causal_logger};
 use crate::runtime::tools::{AgentInstallTool, NativeTool};
 use crate::policy::PolicyEngine;
 use crate::tracing::{EventScope, SessionId, TraceSession};
-use autonoetic_types::background::{ApprovalDecision, ApprovalRequest, ApprovalStatus};
+use autonoetic_types::background::{ApprovalDecision, ApprovalRequest, ApprovalStatus, ScheduledAction};
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::agent::AgentManifest;
 use std::sync::Arc;
@@ -36,14 +36,14 @@ pub fn approve_request(
         ApprovalStatus::Approved,
     )?;
 
-    // Directly execute the approved install instead of relying on agents to retry.
-    // This ensures the install completes even if the caller session has ended.
-    if let Err(e) = execute_approved_install(config, &decision) {
+    // Directly execute the approved action (install or write).
+    // This ensures the action completes even if the caller session has ended.
+    if let Err(e) = execute_approved_action(config, &decision) {
         tracing::warn!(
             target: "approval",
             request_id = %decision.request_id,
             error = %e,
-            "Failed to execute approved install directly; install may need manual retry"
+            "Failed to execute approved action directly; may need manual retry"
         );
         // Still send resume event as fallback so agents can retry manually
         resume_session_after_approval(config, &decision)?;
@@ -243,6 +243,103 @@ fn resume_session_after_approval(
         }
     });
     
+    Ok(())
+}
+
+/// Execute the approved action (agent.install or skill.draft/write).
+fn execute_approved_action(
+    config: &GatewayConfig,
+    decision: &ApprovalDecision,
+) -> anyhow::Result<()> {
+    match &decision.action {
+        autonoetic_types::background::ScheduledAction::AgentInstall { .. } => {
+            execute_approved_install(config, decision)
+        }
+        autonoetic_types::background::ScheduledAction::WriteFile { .. } => {
+            execute_approved_write(config, decision)
+        }
+        _ => {
+            tracing::warn!(
+                target: "approval",
+                request_id = %decision.request_id,
+                "Unsupported action type for auto-execute"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Execute an approved WriteFile action (from skill.draft).
+fn execute_approved_write(
+    config: &GatewayConfig,
+    decision: &ApprovalDecision,
+) -> anyhow::Result<()> {
+    let ScheduledAction::WriteFile { path, content, .. } = &decision.action else {
+        return Ok(());
+    };
+
+    // Load the stored payload (created when skill.draft was called)
+    let payload_path = pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
+    
+    let (write_path, write_content) = if payload_path.exists() {
+        // Use stored payload
+        let payload_json = std::fs::read_to_string(&payload_path)?;
+        let payload: serde_json::Value = serde_json::from_str(&payload_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse stored payload: {}", e))?;
+        
+        let p = payload.get("path").and_then(|v| v.as_str()).unwrap_or(path).to_string();
+        let c = payload.get("content").and_then(|v| v.as_str()).unwrap_or(content).to_string();
+        (p, c)
+    } else {
+        (path.clone(), content.clone())
+    };
+
+    // Find the agent directory from the request
+    let agent_dir = config.agents_dir.join(&decision.agent_id);
+    
+    tracing::info!(
+        target: "approval",
+        request_id = %decision.request_id,
+        path = %write_path,
+        agent_id = %decision.agent_id,
+        "Executing approved skill draft write"
+    );
+
+    // Write the skill file
+    let target_path = agent_dir.join(&write_path);
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target_path, &write_content)?;
+
+    // Log completion to causal chain
+    let causal_logger = init_gateway_causal_logger(config)?;
+    let mut trace_session = TraceSession::create_with_session_id(
+        SessionId::from_string(decision.session_id.clone()),
+        Arc::new(causal_logger),
+        gateway_actor_id(),
+        EventScope::Session,
+    );
+    let _ = trace_session.log_completed(
+        "skill.draft.completed",
+        Some("approved"),
+        Some(serde_json::json!({
+            "path": write_path,
+            "request_id": decision.request_id,
+            "executed_by": "gateway_auto_complete",
+        })),
+    );
+
+    // Cleanup payload
+    let _ = std::fs::remove_file(&payload_path);
+
+    tracing::info!(
+        target: "approval",
+        request_id = %decision.request_id,
+        path = %write_path,
+        "Successfully auto-completed approved skill draft"
+    );
+
     Ok(())
 }
 

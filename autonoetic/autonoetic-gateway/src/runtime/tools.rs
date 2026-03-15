@@ -2108,11 +2108,11 @@ impl NativeTool for SkillDraftTool {
         _manifest: &AgentManifest,
         policy: &PolicyEngine,
         agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
+        gateway_dir: Option<&Path>,
         arguments_json: &str,
-        _session_id: Option<&str>,
+        session_id: Option<&str>,
         _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -2134,20 +2134,64 @@ impl NativeTool for SkillDraftTool {
             "skill draft write denied by policy"
         );
 
-        persist_reevaluation_state(agent_dir, |state| {
-            state.pending_scheduled_action = Some(ScheduledAction::WriteFile {
-                path: args.path.clone(),
-                content: args.content.clone(),
-                requires_approval: true,
-                evidence_ref: args.evidence_ref,
+        // Create approval request directly (like agent.install)
+        let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let manifest = _manifest;
+        
+        let summary = format!("Draft skill: {}", args.path);
+        let action = ScheduledAction::WriteFile {
+            path: args.path.clone(),
+            content: args.content.clone(),
+            requires_approval: true,
+            evidence_ref: args.evidence_ref.clone(),
+        };
+
+        let request = ApprovalRequest {
+            request_id: request_id.clone(),
+            agent_id: manifest.agent.id.clone(),
+            session_id: session_id.unwrap_or("").to_string(),
+            action: action.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            reason: Some(summary),
+            evidence_ref: None,
+        };
+
+        // Write pending approval file
+        if let Some(cfg) = config {
+            let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
+                .join(format!("{request_id}.json"));
+            std::fs::create_dir_all(pending_path.parent().unwrap())?;
+            crate::scheduler::store::write_json_file(&pending_path, &request)?;
+
+            // Store payload for deterministic retry
+            let payload = serde_json::json!({
+                "path": args.path,
+                "content": args.content,
+                "evidence_ref": args.evidence_ref,
             });
-        })?;
+            let payload_path = crate::scheduler::store::pending_approvals_dir(cfg)
+                .join(format!("{request_id}_payload.json"));
+            crate::scheduler::store::write_json_file(&payload_path, &payload)?;
+
+            // Also store in reevaluation state for backward compatibility
+            let _ = persist_reevaluation_state(agent_dir, |state| {
+                state.pending_scheduled_action = Some(action.clone());
+                state.open_approval_request_ids.push(request_id.clone());
+            });
+        } else {
+            // Fallback: just store in reevaluation state (old behavior)
+            persist_reevaluation_state(agent_dir, |state| {
+                state.pending_scheduled_action = Some(action);
+            })?;
+        }
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "status": "Skill drafted and queued for approval",
+            "status": "Skill drafted and pending approval",
+            "request_id": request_id,
             "path": args.path,
             "bytes_proposed": args.content.len(),
+            "approval_required": true,
         }))
         .map_err(Into::into)
     }
