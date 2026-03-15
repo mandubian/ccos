@@ -290,6 +290,10 @@ struct StandardAutonoeticMetadata<'a> {
     background: &'a Option<BackgroundPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disclosure: &'a Option<autonoetic_types::disclosure::DisclosurePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    io: &'a Option<autonoetic_types::agent::AgentIO>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    middleware: &'a Option<autonoetic_types::agent::Middleware>,
     #[serde(skip_serializing_if = "is_default_execution_mode")]
     execution_mode: ExecutionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -310,6 +314,8 @@ fn render_skill_frontmatter(manifest: &AgentManifest) -> anyhow::Result<String> 
                 limits: &manifest.limits,
                 background: &manifest.background,
                 disclosure: &manifest.disclosure,
+                io: &manifest.io,
+                middleware: &manifest.middleware,
                 execution_mode: manifest.execution_mode,
                 script_entry: &manifest.script_entry,
             },
@@ -3011,7 +3017,8 @@ impl NativeTool for AgentInstallTool {
                     // Proceed with install.
                 } else {
                     // Create pending approval request and return structured response.
-                    let request_id = uuid::Uuid::new_v4().to_string();
+                    // Use short 8-char ID for human-friendliness (avoids LLM truncation issues)
+                    let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
                     let summary = args
                         .instructions
                         .lines()
