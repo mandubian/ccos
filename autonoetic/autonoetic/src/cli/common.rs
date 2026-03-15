@@ -145,9 +145,6 @@ pub enum AgentCommands {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Lists available LLM presets from config
-    Presets,
-    /// Boots an Agent and connects it to the Gateway
     /// Boots an Agent and connects it to the Gateway
     Run {
         /// Agent ID to run
@@ -169,6 +166,17 @@ pub enum AgentCommands {
         #[arg(long)]
         from: Option<String>,
         /// Overwrite existing target agent directories
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Shows available LLM presets and template mappings
+    Presets,
+    /// Creates a default config.yaml with LLM presets
+    InitConfig {
+        /// Output path for config.yaml (default: ./config.yaml)
+        #[arg(long)]
+        output: Option<String>,
+        /// Overwrite existing config file
         #[arg(long)]
         overwrite: bool,
     },
