@@ -115,6 +115,26 @@ List available LLM presets and template mappings.
 autonoetic agent presets
 ```
 
+### `autonoetic agent init-config`
+
+Creates a default `config.yaml` with LLM presets and template mappings.
+
+```bash
+# Create config.yaml in current directory
+autonoetic agent init-config
+
+# Create at specific location
+autonoetic agent init-config --output /path/to/config.yaml
+
+# Overwrite existing config
+autonoetic agent init-config --overwrite
+```
+
+The generated config includes:
+- Gateway settings (ports, limits)
+- LLM presets (agentic, coding, research, fallback)
+- Template-to-preset mappings for role-specific LLM selection
+
 ### `autonoetic agent run`
 
 Execute an agent directly (without gateway ingress).

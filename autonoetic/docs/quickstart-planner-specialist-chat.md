@@ -15,9 +15,21 @@ It also includes the required config-file step so `agent bootstrap` does not fal
 - Rust toolchain installed
 - OpenRouter key available in your environment (`OPENROUTER_API_KEY`)
 
-## 1) Create config (or use default)
+## 1) Create config (quick method)
 
-### Option A: Create custom config with LLM presets
+Use `agent init-config` to generate a config with LLM presets:
+
+```bash
+mkdir -p /tmp/autonoetic-demo
+cargo run -p autonoetic -- agent init-config --output /tmp/autonoetic-demo/config.yaml --overwrite
+```
+
+This creates a config with:
+- Gateway settings (ports, limits)
+- LLM presets (agentic, coding, research, fallback)
+- Template-to-preset mappings for automatic LLM selection
+
+### Alternative: Manual config
 
 ```bash
 mkdir -p /tmp/autonoetic-demo
@@ -45,12 +57,8 @@ llm_presets:
     provider: "openrouter"
     model: "google/gemini-2.5-flash-lite"
     temperature: 0.3
-  fallback:
-    provider: "openai"
-    model: "gpt-4o"
-    temperature: 0.2
 
-# Template → Preset mapping (used during bootstrap and init)
+# Template → Preset mapping
 llm_preset_mapping:
   planner: agentic
   researcher: research
@@ -60,22 +68,6 @@ llm_preset_mapping:
   auditor: agentic
   specialized_builder: agentic
   default: agentic
-EOF
-```
-
-### Option B: Use minimal config (presets configured after bootstrap)
-
-```bash
-mkdir -p /tmp/autonoetic-demo
-cat > /tmp/autonoetic-demo/config.yaml <<'EOF'
-agents_dir: "/tmp/autonoetic-demo/agents"
-port: 4000
-ofp_port: 4200
-tls: false
-default_lead_agent_id: "planner.default"
-max_concurrent_spawns: 4
-max_pending_spawns_per_agent: 4
-background_scheduler_enabled: false
 EOF
 ```
 
