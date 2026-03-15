@@ -33,18 +33,35 @@ Autonoetic is not trying to be a generic chatbot framework or a thin LLM wrapper
 
 Autonoetic now accepts AgentSkills-compliant top-level `SKILL.md` frontmatter (`name`, `description`, `metadata`) and stores Autonoetic-specific runtime fields under `metadata.autonoetic`.
 
-## Document Map
+## Documentation
 
-- [`concepts.md`](concepts.md): philosophy, agent model, memory model, evolution model
-- [`architecture_modules.md`](architecture_modules.md): Gateway, sandbox, artifact store, capsule manager
-- [`docs/agent_routing_and_roles.md`](docs/agent_routing_and_roles.md): default lead-agent routing, specialist roles, delegation, and evolution-oriented role selection
-- [`docs/quickstart-planner-specialist-chat.md`](docs/quickstart-planner-specialist-chat.md): end-to-end CLI quickstart for implicit planner routing and specialist delegation
-- [`docs/remote-agents-http-api.md`](docs/remote-agents-http-api.md): HTTP API for remote agents, SDK HTTP transport, authentication
-- [`protocols.md`](protocols.md): JSON-RPC methods, artifact/capsule transport, OFP interoperability
-- [`data_models.md`](data_models.md): `SKILL.md`, `runtime.lock`, artifact handles, capsule manifest
-- [`sandbox_sdk.md`](sandbox_sdk.md): `autonoetic_sdk` API surface
-- [`cli_interface.md`](cli_interface.md): `autonoetic` CLI shape
-- [`plan.md`](plan.md): implementation roadmap and MVP boundary
+### Comprehensive Guides
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): System architecture, design principles, security model, data flow
+- [`docs/MODULES.md`](docs/MODULES.md): Workspace structure, module reference, SKILL.md format, configuration
+- [`docs/AGENTS.md`](docs/AGENTS.md): Roles, routing, capabilities, agent lifecycle, building new agents
+- [`docs/CLI.md`](docs/CLI.md): Complete CLI command reference with examples
+
+### Specialized Docs
+
+- [`docs/quickstart-planner-specialist-chat.md`](docs/quickstart-planner-specialist-chat.md): End-to-end CLI quickstart tutorial
+- [`docs/remote-agents-http-api.md`](docs/remote-agents-http-api.md): HTTP API for remote agents, SDK transport, authentication
+- [`docs/agent-features.md`](docs/agent-features.md): Detailed agent manifest reference (capabilities, IO, disclosure)
+- [`docs/agent_routing_and_roles.md`](docs/agent_routing_and_roles.md): Role catalog, delegation patterns, learned routing
+- [`docs/iteration-repair-validation-runbook.md`](docs/iteration-repair-validation-runbook.md): Iterative repair validation steps
+- [`docs/schema-enforcement-hook.md`](docs/schema-enforcement-hook.md): Schema coercion for agent.spawn payloads
+
+### Design Docs
+
+- [`concepts.md`](concepts.md): Philosophy, agent model, evolution model
+- [`architecture_modules.md`](architecture_modules.md): Gateway, sandbox, artifact store
+- [`docs/architecture-summary.md`](docs/architecture-summary.md): What's kept vs externalized
+- [`docs/gateway-architecture-principles.md`](docs/gateway-architecture-principles.md): Gateway neutrality principles
+- [`docs/separation-of-powers.md`](docs/separation-of-powers.md): Agent vs gateway responsibilities
+
+### Planning
+
+- [`plan.md`](plan.md): Implementation roadmap
 
 ## Reference Agent Bundles
 
