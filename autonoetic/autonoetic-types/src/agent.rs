@@ -69,6 +69,12 @@ pub struct AgentManifest {
     /// Entry script for Script mode. Relative path from agent directory.
     #[serde(default)]
     pub script_entry: Option<String>,
+    /// Remote gateway URL for distributed agents. When set, SDK uses HTTP mode.
+    #[serde(default)]
+    pub gateway_url: Option<String>,
+    /// Authentication token for remote gateway (Bearer token).
+    #[serde(default)]
+    pub gateway_token: Option<String>,
 }
 
 /// Middleware hooks declared in the agent's own manifest (replaces overlay-based hooks).

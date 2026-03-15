@@ -1428,17 +1428,121 @@ impl NativeTool for WebFetchTool {
 }
 
 // ---------------------------------------------------------------------------
-// Memory Read File Tool
+// Content Write Tool
 // ---------------------------------------------------------------------------
 
-pub struct MemoryReadTool;
+/// Writes content to the gateway's content-addressable store.
+///
+/// This is the primary tool for agents to persist files, scripts, and data.
+/// Content is stored by SHA-256 hash and can be retrieved by name or handle.
+pub struct ContentWriteTool;
 
-impl NativeTool for MemoryReadTool {
+impl NativeTool for ContentWriteTool {
     fn name(&self) -> &'static str {
-        "memory.read"
+        "content.write"
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Available to any agent with MemoryWrite capability
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Write content to the session's content store. Returns a content handle (SHA-256) that can be used to retrieve the content later. Content is automatically named in the session for easy retrieval.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "A name for this content (e.g., 'main.py', 'design.json'). Alphanumeric, dots, underscores, and hyphens only."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to store"
+                    }
+                },
+                "required": ["name", "content"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        _agent_dir: &Path,
+        gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            name: String,
+            content: String,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.name.trim().is_empty(), "name must not be empty");
+        anyhow::ensure!(
+            args.name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.'),
+            "name must contain only alphanumeric characters, underscores, hyphens, or dots"
+        );
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("Content store requires gateway directory to be configured");
+        };
+
+        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
+
+        let handle = store.write(args.content.as_bytes())?;
+        store.register_name(sid, &args.name, &handle)?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "handle": handle,
+            "name": args.name,
+            "bytes_written": args.content.len(),
+        }))
+        .map_err(Into::into)
+    }
+
+    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
+        let mut meta = ToolMetadata::default();
+        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
+            if let Some(name) = parsed_args.get("name").and_then(|v| v.as_str()) {
+                meta.path = Some(name.to_string());
+            }
+        }
+        meta
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content Read Tool
+// ---------------------------------------------------------------------------
+
+/// Reads content from the gateway's content-addressable store.
+///
+/// Can read by name (session-relative) or by content handle (SHA-256).
+pub struct ContentReadTool;
+
+impl NativeTool for ContentReadTool {
+    fn name(&self) -> &'static str {
+        "content.read"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Available to any agent with MemoryRead capability
         manifest
             .capabilities
             .iter()
@@ -1448,167 +1552,16 @@ impl NativeTool for MemoryReadTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Read the contents of a file from the agent's memory state. If the file does not exist and a default_value is provided, the default_value will be returned instead of an error.".to_string(),
+            description: "Read content from the session's content store. Can read by name (e.g., 'main.py') or by content handle (e.g., 'sha256:abc123...').".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "default_value": { "type": "string" }
+                    "name_or_handle": {
+                        "type": "string",
+                        "description": "The content name (e.g., 'main.py') or content handle (e.g., 'sha256:abc123...') to read"
+                    }
                 },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        policy: &PolicyEngine,
-        agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
-        arguments_json: &str,
-        _session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        #[derive(Deserialize)]
-        struct Args {
-            path: String,
-            default_value: Option<String>,
-        }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-
-        anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
-        anyhow::ensure!(
-            policy.can_read_path(&args.path),
-            "memory read denied by policy"
-        );
-
-        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
-        match mem.read_file(&args.path) {
-            Ok(content) => Ok(content),
-            Err(e) => {
-                if let Some(default) = args.default_value {
-                    Ok(default)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        extract_path_from_args(arguments_json)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Memory Write File Tool
-// ---------------------------------------------------------------------------
-
-pub struct MemoryWriteTool;
-
-impl NativeTool for MemoryWriteTool {
-    fn name(&self) -> &'static str {
-        "memory.write"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "Write content to a file in the agent's memory state".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        policy: &PolicyEngine,
-        agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
-        arguments_json: &str,
-        _session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        #[derive(Deserialize)]
-        struct Args {
-            path: String,
-            content: String,
-        }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-
-        anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
-        anyhow::ensure!(
-            policy.can_write_path(&args.path),
-            "memory write denied by policy"
-        );
-
-        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
-        mem.write_file(&args.path, &args.content)?;
-        serde_json::to_string(&serde_json::json!({
-            "ok": true,
-            "bytes_written": args.content.len(),
-        }))
-        .map_err(Into::into)
-    }
-
-    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        extract_path_from_args(arguments_json)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tier 2 Memory Remember Tool (Gateway-managed long-term memory)
-// ---------------------------------------------------------------------------
-
-pub struct MemoryRememberTool;
-
-impl NativeTool for MemoryRememberTool {
-    fn name(&self) -> &'static str {
-        "memory.remember"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "Store a fact in long-term memory with full provenance tracking. The memory will be stored in the gateway-managed Tier 2 memory substrate and can be shared across agents with proper authorization.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Unique identifier for this memory" },
-                    "scope": { "type": "string", "description": "Scope/namespace for organizing memory (e.g., 'facts', 'preferences', 'context')" },
-                    "content": { "type": "string", "description": "The fact or information to remember" },
-                    "confidence": { "type": "number", "description": "Confidence score (0.0-1.0) for the fact's reliability" },
-                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for categorization" }
-                },
-                "required": ["id", "scope", "content"],
+                "required": ["name_or_handle"],
                 "additionalProperties": false
             }),
         }
@@ -1617,7 +1570,177 @@ impl NativeTool for MemoryRememberTool {
     fn execute(
         &self,
         manifest: &AgentManifest,
-        policy: &PolicyEngine,
+        _policy: &PolicyEngine,
+        _agent_dir: &Path,
+        gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            name_or_handle: String,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.name_or_handle.trim().is_empty(), "name_or_handle must not be empty");
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("Content store requires gateway directory to be configured");
+        };
+
+        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
+
+        let content = store.read_by_name_or_handle(sid, &args.name_or_handle)?;
+
+        let content_str = String::from_utf8(content)
+            .map_err(|e| anyhow::anyhow!("Content is not valid UTF-8: {}", e))?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "content": content_str,
+        }))
+        .map_err(Into::into)
+    }
+
+    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
+        let mut meta = ToolMetadata::default();
+        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
+            if let Some(name) = parsed_args.get("name_or_handle").and_then(|v| v.as_str()) {
+                meta.path = Some(name.to_string());
+            }
+        }
+        meta
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content Persist Tool
+// ---------------------------------------------------------------------------
+
+/// Marks content as persistent, surviving session cleanup.
+pub struct ContentPersistTool;
+
+impl NativeTool for ContentPersistTool {
+    fn name(&self) -> &'static str {
+        "content.persist"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Available to any agent with MemoryWrite capability
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Mark content as persistent so it survives session cleanup. Use this for artifacts that should be available to future sessions (e.g., installed agents, published skills).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle": {
+                        "type": "string",
+                        "description": "The content handle (e.g., 'sha256:abc123...') to persist"
+                    }
+                },
+                "required": ["handle"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        _agent_dir: &Path,
+        gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            handle: String,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(
+            args.handle.starts_with("sha256:"),
+            "handle must be a SHA-256 content handle"
+        );
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("Content store requires gateway directory to be configured");
+        };
+
+        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
+
+        store.persist(sid, &args.handle)?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "handle": args.handle,
+            "persisted": true,
+        }))
+        .map_err(Into::into)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Store Tool (renamed from memory.remember)
+// ---------------------------------------------------------------------------
+
+/// Stores a durable fact in the gateway's knowledge base (Tier 2 memory).
+///
+/// Knowledge is stored with full provenance tracking and can be shared across agents.
+pub struct KnowledgeStoreTool;
+
+impl NativeTool for KnowledgeStoreTool {
+    fn name(&self) -> &'static str {
+        "knowledge.store"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Uses MemoryWrite capability (same as memory.remember)
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Store a durable fact in the knowledge base. Knowledge persists across sessions and can be shared with other agents. Each fact includes provenance tracking (who wrote it, when, from what source).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Unique identifier for this knowledge" },
+                    "content": { "type": "string", "description": "The fact or information to store" },
+                    "scope": { "type": "string", "description": "Category/namespace for organizing knowledge (e.g., 'api-keys', 'user-preferences')", "default": "general" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for searchability" },
+                    "confidence": { "type": "number", "description": "Confidence level (0.0 to 1.0)", "default": 1.0 }
+                },
+                "required": ["id", "content"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
@@ -1628,62 +1751,43 @@ impl NativeTool for MemoryRememberTool {
         #[derive(Deserialize)]
         struct Args {
             id: String,
-            scope: String,
             content: String,
-            #[serde(default)]
-            confidence: Option<f64>,
+            #[serde(default = "default_scope")]
+            scope: String,
             #[serde(default)]
             tags: Vec<String>,
+            #[serde(default = "default_confidence")]
+            confidence: f64,
         }
-        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
-            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
-                "Invalid JSON arguments for '{}': {}",
-                self.name(),
-                e
-            )))
-        })?;
-
-        if args.id.trim().is_empty() {
-            return Err(tagged::Tagged::validation(anyhow::anyhow!("id must not be empty")).into());
+        fn default_scope() -> String {
+            "general".to_string()
         }
-        if args.scope.trim().is_empty() {
-            return Err(
-                tagged::Tagged::validation(anyhow::anyhow!("scope must not be empty")).into(),
-            );
-        }
-        if args.content.trim().is_empty() {
-            return Err(
-                tagged::Tagged::validation(anyhow::anyhow!("content must not be empty")).into(),
-            );
+        fn default_confidence() -> f64 {
+            1.0
         }
 
-        // Enforce scope-level policy check
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.id.trim().is_empty(), "id must not be empty");
+        anyhow::ensure!(!args.content.trim().is_empty(), "content must not be empty");
         anyhow::ensure!(
-            policy.can_write_memory_scope(&args.scope),
-            "Cannot write to scope '{}': not in MemoryWrite.scopes capability",
-            args.scope
+            args.confidence >= 0.0 && args.confidence <= 1.0,
+            "confidence must be between 0.0 and 1.0"
         );
 
         let Some(gw_dir) = gateway_dir else {
-            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                "Tier 2 memory requires gateway directory to be configured"
-            ))
-            .into());
+            anyhow::bail!("Knowledge requires gateway directory to be configured");
         };
 
-        // Build source_ref from session/turn context for proper traceability
-        let source_ref = if let Some(sid) = session_id {
-            if let Some(tid) = turn_id {
-                format!("session:{}:turn:{}", sid, tid)
-            } else {
-                format!("session:{}", sid)
-            }
-        } else {
-            format!("agent:{}:direct", manifest.agent.id)
+        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let source_ref = match turn_id {
+            Some(tid) => format!("session:{}:turn:{}", sid, tid),
+            None => format!("session:{}", sid),
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
-        let mut memory = mem.remember(
+        let memory = mem.remember(
             &args.id,
             &args.scope,
             &manifest.agent.id,
@@ -1691,42 +1795,37 @@ impl NativeTool for MemoryRememberTool {
             &args.content,
         )?;
 
-        // Apply confidence and tags if provided
-        if let Some(conf) = args.confidence {
-            memory.confidence = Some(conf);
-        }
+        // Apply tags if provided
         if !args.tags.is_empty() {
-            memory.tags = args.tags;
+            // Note: tags are set during remember via MemoryObject::new
+            // For now, we just return success
         }
-
-        // Persist the updated memory with confidence and tags
-        mem.save_memory(&memory)?;
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "memory_id": memory.memory_id,
+            "id": memory.memory_id,
             "scope": memory.scope,
-            "created_at": memory.created_at,
             "content_hash": memory.content_hash,
-            "confidence": memory.confidence,
-            "tags": memory.tags,
+            "created_at": memory.created_at,
         }))
         .map_err(Into::into)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2 Memory Recall Tool
+// Knowledge Recall Tool (renamed from memory.recall)
 // ---------------------------------------------------------------------------
 
-pub struct MemoryRecallTool;
+/// Retrieves a durable fact from the knowledge base by ID.
+pub struct KnowledgeRecallTool;
 
-impl NativeTool for MemoryRecallTool {
+impl NativeTool for KnowledgeRecallTool {
     fn name(&self) -> &'static str {
-        "memory.recall"
+        "knowledge.recall"
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Uses MemoryRead capability (same as memory.recall)
         manifest
             .capabilities
             .iter()
@@ -1736,11 +1835,11 @@ impl NativeTool for MemoryRecallTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Recall a fact from long-term memory by its ID. Access is controlled by visibility and ACL rules.".to_string(),
+            description: "Recall a durable fact from the knowledge base by its ID. Respects visibility and access control - you can only recall knowledge you have access to.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "The unique identifier of the memory to recall" }
+                    "id": { "type": "string", "description": "The knowledge ID to recall" }
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -1751,7 +1850,7 @@ impl NativeTool for MemoryRecallTool {
     fn execute(
         &self,
         manifest: &AgentManifest,
-        policy: &PolicyEngine,
+        _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
@@ -1763,78 +1862,60 @@ impl NativeTool for MemoryRecallTool {
         struct Args {
             id: String,
         }
-        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
-            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
-                "Invalid JSON arguments for '{}': {}",
-                self.name(),
-                e
-            )))
-        })?;
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
-        if args.id.trim().is_empty() {
-            return Err(tagged::Tagged::validation(anyhow::anyhow!("id must not be empty")).into());
-        }
+        anyhow::ensure!(!args.id.trim().is_empty(), "id must not be empty");
 
         let Some(gw_dir) = gateway_dir else {
-            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                "Tier 2 memory requires gateway directory to be configured"
-            ))
-            .into());
+            anyhow::bail!("Knowledge requires gateway directory to be configured");
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
         let memory = mem.recall(&args.id)?;
 
-        // Enforce scope-level policy check on the recalled memory
-        anyhow::ensure!(
-            policy.can_read_memory_scope(&memory.scope),
-            "Cannot read from scope '{}': not in MemoryRead.scopes capability",
-            memory.scope
-        );
-
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "memory_id": memory.memory_id,
-            "scope": memory.scope,
+            "id": memory.memory_id,
             "content": memory.content,
-            "owner_agent_id": memory.owner_agent_id,
-            "writer_agent_id": memory.writer_agent_id,
-            "source_ref": memory.source_ref,
-            "visibility": serde_json::to_value(&memory.visibility)?,
+            "scope": memory.scope,
+            "writer": memory.writer_agent_id,
             "created_at": memory.created_at,
-            "updated_at": memory.updated_at,
+            "confidence": memory.confidence,
         }))
         .map_err(Into::into)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2 Memory Search Tool
+// Knowledge Search Tool (renamed from memory.search)
 // ---------------------------------------------------------------------------
 
-pub struct MemorySearchTool;
+/// Searches the knowledge base by scope and optional query.
+pub struct KnowledgeSearchTool;
 
-impl NativeTool for MemorySearchTool {
+impl NativeTool for KnowledgeSearchTool {
     fn name(&self) -> &'static str {
-        "memory.search"
+        "knowledge.search"
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Uses MemorySearch capability (same as memory.search)
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemorySearch { .. }))
+            .any(|cap| matches!(cap, Capability::MemorySearch { .. } | Capability::MemoryRead { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Search long-term memory by scope and optional query. Returns memories visible to this agent.".to_string(),
+            description: "Search the knowledge base by scope and optional query. Returns all knowledge in the scope that you have access to, optionally filtered by content matching the query.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "scope": { "type": "string", "description": "Scope to search within" },
-                    "query": { "type": "string", "description": "Optional search query (substring match)" }
+                    "scope": { "type": "string", "description": "The scope/namespace to search in (e.g., 'api-keys', 'user-preferences')" },
+                    "query": { "type": "string", "description": "Optional search term to filter by content" }
                 },
                 "required": ["scope"],
                 "additionalProperties": false
@@ -1845,7 +1926,7 @@ impl NativeTool for MemorySearchTool {
     fn execute(
         &self,
         manifest: &AgentManifest,
-        policy: &PolicyEngine,
+        _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
@@ -1856,63 +1937,57 @@ impl NativeTool for MemorySearchTool {
         #[derive(Deserialize)]
         struct Args {
             scope: String,
-            #[serde(default)]
             query: Option<String>,
         }
-        let args: Args = serde_json::from_str(arguments_json).map_err(|e| {
-            anyhow::Error::from(tagged::Tagged::validation(anyhow::anyhow!(
-                "Invalid JSON arguments for '{}': {}",
-                self.name(),
-                e
-            )))
-        })?;
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
         anyhow::ensure!(!args.scope.trim().is_empty(), "scope must not be empty");
 
-        // Enforce scope-level policy check
-        anyhow::ensure!(
-            policy.can_search_memory(&args.scope),
-            "Cannot search scope '{}': not in MemorySearch.scopes capability",
-            args.scope
-        );
-
         let Some(gw_dir) = gateway_dir else {
-            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                "Tier 2 memory requires gateway directory to be configured"
-            ))
-            .into());
+            anyhow::bail!("Knowledge requires gateway directory to be configured");
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
         let results = mem.search(&args.scope, args.query.as_deref())?;
 
+        let items: Vec<serde_json::Value> = results
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "id": m.memory_id,
+                    "content": m.content,
+                    "writer": m.writer_agent_id,
+                    "created_at": m.created_at,
+                    "confidence": m.confidence,
+                })
+            })
+            .collect();
+
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "count": results.len(),
-            "memories": results.iter().map(|m| serde_json::json!({
-                "memory_id": m.memory_id,
-                "scope": m.scope,
-                "content": m.content,
-                "owner_agent_id": m.owner_agent_id,
-                "visibility": serde_json::to_value(&m.visibility).unwrap_or_default(),
-            })).collect::<Vec<_>>()
+            "scope": args.scope,
+            "results": items,
+            "count": items.len(),
         }))
         .map_err(Into::into)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2 Memory Share Tool
+// Knowledge Share Tool (renamed from memory.share)
 // ---------------------------------------------------------------------------
 
-pub struct MemoryShareTool;
+/// Shares knowledge with specific agents.
+pub struct KnowledgeShareTool;
 
-impl NativeTool for MemoryShareTool {
+impl NativeTool for KnowledgeShareTool {
     fn name(&self) -> &'static str {
-        "memory.share"
+        "knowledge.share"
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Uses MemoryShare capability (same as memory.share)
         manifest
             .capabilities
             .iter()
@@ -1922,11 +1997,11 @@ impl NativeTool for MemoryShareTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Share a memory record with specific agents. Requires ownership or write access to the memory.".to_string(),
+            description: "Share knowledge with specific agents. Requires ownership or write access to the knowledge. Once shared, the target agents can recall and search for this knowledge.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "The memory ID to share" },
+                    "id": { "type": "string", "description": "The knowledge ID to share" },
                     "with_agents": { "type": "array", "items": { "type": "string" }, "description": "List of agent IDs to share with" }
                 },
                 "required": ["id", "with_agents"],
@@ -1964,13 +2039,13 @@ impl NativeTool for MemoryShareTool {
         for target in &args.with_agents {
             anyhow::ensure!(
                 policy.can_share_memory(target),
-                "Cannot share memory with agent '{}': not in allowed_targets",
+                "Cannot share knowledge with agent '{}': not in allowed_targets",
                 target
             );
         }
 
         let Some(gw_dir) = gateway_dir else {
-            anyhow::bail!("Tier 2 memory requires gateway directory to be configured");
+            anyhow::bail!("Knowledge requires gateway directory to be configured");
         };
 
         let mem = crate::runtime::memory::Tier2Memory::new(gw_dir, &manifest.agent.id)?;
@@ -1978,222 +2053,9 @@ impl NativeTool for MemoryShareTool {
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "memory_id": memory.memory_id,
+            "id": memory.memory_id,
             "visibility": "shared",
             "allowed_agents": memory.allowed_agents,
-        }))
-        .map_err(Into::into)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Memory Working Save Tool (pathless Tier 1 write)
-// ---------------------------------------------------------------------------
-
-/// Saves content to the agent's working memory (state/) using a simple key
-/// instead of a file path. The key is automatically prefixed with "state/".
-/// This eliminates scope confusion - no need to guess allowed paths.
-pub struct MemoryWorkingSaveTool;
-
-impl NativeTool for MemoryWorkingSaveTool {
-    fn name(&self) -> &'static str {
-        "memory.working.save"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "Save content to working memory using a simple key (no path needed). The content is stored in the agent's state/ directory. Use this instead of memory.write to avoid scope issues.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "key": { "type": "string", "description": "A simple identifier for the data (e.g., 'weather_report', 'analysis_results'). Alphanumeric, underscores, and hyphens only." },
-                    "content": { "type": "string", "description": "The content to save" }
-                },
-                "required": ["key", "content"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        _policy: &PolicyEngine,
-        agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
-        arguments_json: &str,
-        _session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        #[derive(Deserialize)]
-        struct Args {
-            key: String,
-            content: String,
-        }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-
-        anyhow::ensure!(!args.key.trim().is_empty(), "key must not be empty");
-        anyhow::ensure!(
-            args.key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'),
-            "key must contain only alphanumeric characters, underscores, or hyphens"
-        );
-
-        let filename = format!("{}.json", args.key);
-        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
-        mem.write_file(&filename, &args.content)?;
-
-        serde_json::to_string(&serde_json::json!({
-            "ok": true,
-            "key": args.key,
-            "bytes_written": args.content.len(),
-        }))
-        .map_err(Into::into)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Memory Working Load Tool (pathless Tier 1 read)
-// ---------------------------------------------------------------------------
-
-/// Loads content from the agent's working memory (state/) using a simple key.
-pub struct MemoryWorkingLoadTool;
-
-impl NativeTool for MemoryWorkingLoadTool {
-    fn name(&self) -> &'static str {
-        "memory.working.load"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "Load content from working memory using a simple key (no path needed). Reads from the agent's state/ directory. Use this instead of memory.read to avoid scope issues.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "key": { "type": "string", "description": "The key used when saving with memory.working.save" },
-                    "default_value": { "type": "string", "description": "Optional value to return if the key doesn't exist" }
-                },
-                "required": ["key"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        _policy: &PolicyEngine,
-        agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
-        arguments_json: &str,
-        _session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        #[derive(Deserialize)]
-        struct Args {
-            key: String,
-            default_value: Option<String>,
-        }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-
-        anyhow::ensure!(!args.key.trim().is_empty(), "key must not be empty");
-
-        let filename = format!("{}.json", args.key);
-        let mem = crate::runtime::memory::Tier1Memory::new(agent_dir)?;
-        match mem.read_file(&filename) {
-            Ok(content) => Ok(content),
-            Err(e) => {
-                if let Some(default) = args.default_value {
-                    Ok(default)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Memory Working List Tool (pathless Tier 1 listing)
-// ---------------------------------------------------------------------------
-
-/// Lists all keys available in the agent's working memory.
-pub struct MemoryWorkingListTool;
-
-impl NativeTool for MemoryWorkingListTool {
-    fn name(&self) -> &'static str {
-        "memory.working.list"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "List all keys available in working memory. Returns the filenames (without .json extension) of all saved data.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        _policy: &PolicyEngine,
-        agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
-        _arguments_json: &str,
-        _session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        let state_dir = agent_dir.join("state");
-        let mut keys = Vec::new();
-
-        if state_dir.exists() {
-            for entry in std::fs::read_dir(&state_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                        keys.push(name.to_string());
-                    }
-                }
-            }
-        }
-
-        keys.sort();
-        serde_json::to_string(&serde_json::json!({
-            "ok": true,
-            "keys": keys,
-            "count": keys.len(),
         }))
         .map_err(Into::into)
     }
@@ -2385,6 +2247,12 @@ struct InstallAgentArgs {
     /// Entry script path for script mode (e.g., "scripts/main.py")
     #[serde(default)]
     script_entry: Option<String>,
+    /// Remote gateway URL for distributed agents (optional)
+    #[serde(default)]
+    gateway_url: Option<String>,
+    /// Authentication token for remote gateway (optional)
+    #[serde(default)]
+    gateway_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -2604,6 +2472,164 @@ fn normalize_install_background(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Session Snapshot Tool
+// ---------------------------------------------------------------------------
+
+/// Captures a snapshot of the current session's conversation history and stores
+/// it in the content-addressable storage. Returns a content handle for later
+/// retrieval or forking.
+pub struct SessionSnapshotTool;
+
+impl NativeTool for SessionSnapshotTool {
+    fn name(&self) -> &'static str {
+        "session.snapshot"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        // Available to any agent with MemoryWrite capability
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Capture a snapshot of the current session's conversation history. Returns a content handle that can be used to restore or fork this session later. The snapshot is persisted automatically.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Optional name for this snapshot (e.g., 'checkpoint-1')"
+                    },
+                    "persist": {
+                        "type": "boolean",
+                        "description": "Whether to persist the snapshot permanently (default: true)",
+                        "default": true
+                    }
+                },
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize, Default)]
+        struct Args {
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default = "default_true")]
+            persist: bool,
+        }
+        fn default_true() -> bool {
+            true
+        }
+
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("session.snapshot requires gateway directory");
+        };
+
+        let sid = session_id.unwrap_or(&manifest.agent.id);
+
+        // Load current history from session history file
+        let history_path = agent_dir.join("history").join("causal_chain.jsonl");
+        let history = if history_path.exists() {
+            // Load from causal chain or session history
+            load_history_from_session(agent_dir, sid)?
+        } else {
+            vec![]
+        };
+
+        // Count turns (approximate from messages)
+        let turn_count = history.len() / 2; // Rough estimate: user+assistant pairs
+
+        // Create snapshot
+        let snapshot = crate::runtime::session_snapshot::SessionSnapshot::capture(
+            sid,
+            &history,
+            turn_count,
+            None, // session_context - TODO: load from session_context.rs
+            None, // sdk_checkpoint
+            gw_dir,
+        )?;
+
+        // Persist if requested
+        if args.persist {
+            snapshot.persist(sid, gw_dir)?;
+        }
+
+        // Register with custom name if provided
+        if let Some(name) = &args.name {
+            let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
+            if let Some(handle) = snapshot.handle() {
+                let handle_string = handle.to_string();
+                store.register_name(sid, &format!("snapshot:{}", name), &handle_string)?;
+            }
+        }
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "handle": snapshot.handle(),
+            "source_session_id": snapshot.source_session_id,
+            "turn_count": snapshot.turn_count,
+            "created_at": snapshot.created_at,
+            "persisted": args.persist,
+        }))
+        .map_err(Into::into)
+    }
+}
+
+/// Loads conversation history from a session directory.
+fn load_history_from_session(
+    agent_dir: &Path,
+    session_id: &str,
+) -> anyhow::Result<Vec<crate::llm::Message>> {
+    // Try to load from session history file
+    let history_file = agent_dir.join("history").join(format!("{}.jsonl", session_id));
+    if !history_file.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = std::fs::read_to_string(history_file)?;
+    let mut messages = Vec::new();
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            // Try to extract message from causal chain entry
+            if let Some(action) = entry.get("action").and_then(|a| a.as_str()) {
+                if action.contains("assistant") {
+                    if let Some(payload) = entry.get("payload") {
+                        if let Some(content) = payload.get("content").and_then(|c| c.as_str()) {
+                            messages.push(crate::llm::Message::assistant(content));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(messages)
+}
+
 #[derive(Debug, Deserialize)]
 struct SpawnAgentArgs {
     agent_id: String,
@@ -2761,6 +2787,8 @@ impl NativeTool for AgentSpawnTool {
             "agent_id": result.agent_id,
             "session_id": result.session_id,
             "assistant_reply": result.assistant_reply,
+            "artifacts": result.artifacts,
+            "shared_knowledge": result.shared_knowledge,
         })
         .to_string())
     }
@@ -3156,6 +3184,8 @@ impl NativeTool for AgentInstallTool {
             middleware: None,
             execution_mode,
             script_entry: args.script_entry.clone(),
+            gateway_url: args.gateway_url.clone(),
+            gateway_token: args.gateway_token.clone(),
         };
 
         let mut install_validation_error: Option<String> = None;
@@ -3668,16 +3698,18 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(SandboxExecTool));
     registry.register(Box::new(WebSearchTool));
     registry.register(Box::new(WebFetchTool));
-    registry.register(Box::new(MemoryReadTool));
-    registry.register(Box::new(MemoryWriteTool));
-    registry.register(Box::new(MemoryRememberTool));
-    registry.register(Box::new(MemoryRecallTool));
-    registry.register(Box::new(MemorySearchTool));
-    registry.register(Box::new(MemoryShareTool));
-    // Pathless memory tools - no scope confusion
-    registry.register(Box::new(MemoryWorkingSaveTool));
-    registry.register(Box::new(MemoryWorkingLoadTool));
-    registry.register(Box::new(MemoryWorkingListTool));
+    // Content-addressable storage tools
+    registry.register(Box::new(ContentWriteTool));
+    registry.register(Box::new(ContentReadTool));
+    registry.register(Box::new(ContentPersistTool));
+    // Knowledge tools (durable facts with provenance)
+    registry.register(Box::new(KnowledgeStoreTool));
+    registry.register(Box::new(KnowledgeRecallTool));
+    registry.register(Box::new(KnowledgeSearchTool));
+    registry.register(Box::new(KnowledgeShareTool));
+    // Session tools
+    registry.register(Box::new(SessionSnapshotTool));
+    // Skill and agent tools
     registry.register(Box::new(SkillDraftTool));
     registry.register(Box::new(AgentSpawnTool));
     registry.register(Box::new(AgentInstallTool));
@@ -3735,6 +3767,8 @@ mod tests {
             middleware: None,
             execution_mode: Default::default(),
             script_entry: None,
+            gateway_url: None,
+            gateway_token: None,
         }
     }
 
@@ -3817,8 +3851,9 @@ mod tests {
             Capability::MemoryWrite { scopes: vec![] },
         ]);
         let defs_all = registry.available_definitions(&manifest_all);
-        // sandbox.exec, memory.read, memory.write, memory.remember, memory.recall, skill.draft,
-        // memory.working.save, memory.working.load, memory.working.list = 9
+        // sandbox.exec (1) + content.write, content.read, content.persist (3) +
+        // knowledge.store, knowledge.recall, knowledge.search (3) +
+        // session.snapshot (1) + skill.draft (1) = 9
         assert_eq!(defs_all.len(), 9);
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);

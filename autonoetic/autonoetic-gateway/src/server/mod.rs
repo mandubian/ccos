@@ -5,6 +5,7 @@ use autonoetic_types::config::GatewayConfig;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
+pub mod http;
 pub mod jsonrpc;
 pub mod ofp;
 pub mod registry;

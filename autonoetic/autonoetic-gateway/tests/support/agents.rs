@@ -36,6 +36,15 @@ pub fn install_memory_recall_agent(agent_dir: &Path, agent_id: &str) -> anyhow::
     )
 }
 
+pub fn install_content_agent(agent_dir: &Path, agent_id: &str) -> anyhow::Result<PathBuf> {
+    install_agent(
+        agent_dir,
+        &format!(
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"content_agent\"\n  description: \"Content store test agent\"\nllm_config:\n  provider: \"openai\"\n  model: \"gpt-4o\"\n  temperature: 0.0\ncapabilities:\n  - type: \"ToolInvoke\"\n    allowed: [\"content.read\", \"content.write\", \"content.persist\"]\n  - type: \"MemoryRead\"\n    scopes: [\"*\"]\n  - type: \"MemoryWrite\"\n    scopes: [\"*\"]\n---\n# Instructions\nYou are a content agent that reads and writes content.\n",
+        ),
+    )
+}
+
 pub fn install_generated_skill_learner_agent(
     agent_dir: &Path,
     agent_id: &str,

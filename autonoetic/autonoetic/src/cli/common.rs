@@ -252,6 +252,40 @@ pub enum TraceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Fork a session from a snapshot to explore alternative paths
+    Fork {
+        /// Source session ID to fork from
+        session_id: String,
+        /// Branch message to append (e.g., "Try a different approach")
+        #[arg(long)]
+        message: Option<String>,
+        /// New session ID (auto-generated if not provided)
+        #[arg(long)]
+        new_session_id: Option<String>,
+        /// Fork from specific turn number (default: latest)
+        #[arg(long)]
+        at_turn: Option<usize>,
+        /// Target agent ID (defaults to source agent)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Start interactive chat after forking
+        #[arg(long)]
+        interactive: bool,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show conversation history for a session
+    History {
+        /// Session identifier
+        session_id: String,
+        /// Restrict lookup to one agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit machine-readable JSON output
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

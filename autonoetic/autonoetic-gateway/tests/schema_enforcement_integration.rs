@@ -2,6 +2,8 @@
 //!
 //! Note: These tests verify the schema enforcement hook is in place.
 //! The actual enforcement requires the caller's payload to match the target's io.accepts schema.
+//!
+//! WARNING: Tests using EnvGuard must run serially to avoid environment variable races.
 
 mod support;
 
@@ -55,7 +57,9 @@ Reply with "Done".
     Ok(())
 }
 
+/// Tests using EnvGuard must run serially to avoid environment variable races.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_schema_enforcement_hook_in_place() -> anyhow::Result<()> {
     let workspace = TestWorkspace::new()?;
     
@@ -72,6 +76,7 @@ async fn test_schema_enforcement_hook_in_place() -> anyhow::Result<()> {
         })
     }).await?;
     
+    // Set environment BEFORE spawning gateway - child processes inherit at spawn time
     let _env = EnvGuard::set(LLM_BASE_URL_OVERRIDE_ENV, stub.completion_url());
     let _key = EnvGuard::set(LLM_API_KEY_OVERRIDE_ENV, "test-key");
 
@@ -79,6 +84,10 @@ async fn test_schema_enforcement_hook_in_place() -> anyhow::Result<()> {
         agents_dir: workspace.agents_dir.clone(),
         ..workspace.gateway_config()
     }).await?;
+    
+    // Give gateway time to fully start
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
     let mut client = JsonRpcClient::connect(server_addr).await?;
 
     let response = client
@@ -96,7 +105,9 @@ async fn test_schema_enforcement_hook_in_place() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Tests using EnvGuard must run serially to avoid environment variable races.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_schema_enforcement_with_disabled_mode() -> anyhow::Result<()> {
     let workspace = TestWorkspace::new()?;
     

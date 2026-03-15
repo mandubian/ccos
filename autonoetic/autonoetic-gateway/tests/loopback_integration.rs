@@ -2,11 +2,11 @@
 
 mod support;
 
-use support::agents::install_memory_recall_agent;
+use support::agents::install_content_agent;
 use support::{spawn_gateway_server, EnvGuard, JsonRpcClient, OpenAiStub, TestWorkspace};
 
 #[tokio::test]
-async fn test_loopback_memory_audit_and_negatives() {
+async fn test_loopback_content_audit_and_negatives() {
     let stub = OpenAiStub::spawn(|_, body_json| async move {
         let messages = body_json["messages"].as_array().cloned().unwrap_or_default();
         let latest_user_message = messages
@@ -36,7 +36,7 @@ async fn test_loopback_memory_audit_and_negatives() {
                 "model": "gpt-4o",
                 "choices": [{
                     "index": 0,
-                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "memory.write", "arguments": "{\"path\":\"secret.txt\",\"content\":\"secret_value_123\"}" } }] },
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "content.write", "arguments": "{\"name\":\"secret.txt\",\"content\":\"secret_value_123\"}" } }] },
                     "finish_reason": "tool_calls"
                 }],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
@@ -62,7 +62,7 @@ async fn test_loopback_memory_audit_and_negatives() {
                 "model": "gpt-4o",
                 "choices": [{
                     "index": 0,
-                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_2", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"secret.txt\"}" } }] },
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_2", "type": "function", "function": { "name": "content.read", "arguments": "{\"name_or_handle\":\"secret.txt\"}" } }] },
                     "finish_reason": "tool_calls"
                 }],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
@@ -88,7 +88,7 @@ async fn test_loopback_memory_audit_and_negatives() {
                 "model": "gpt-4o",
                 "choices": [{
                     "index": 0,
-                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_3", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing.txt\"}" } }] },
+                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_3", "type": "function", "function": { "name": "content.read", "arguments": "{\"name_or_handle\":\"missing.txt\"}" } }] },
                     "finish_reason": "tool_calls"
                 }],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
@@ -102,32 +102,6 @@ async fn test_loopback_memory_audit_and_negatives() {
                 "choices": [{
                     "index": 0,
                     "message": { "role": "assistant", "content": "File is missing" },
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-            })
-        } else if latest_user_message.contains("read default") && !has_tool_result_turn {
-            serde_json::json!({
-                "id": "chatcmpl-7",
-                "object": "chat.completion",
-                "created": 7,
-                "model": "gpt-4o",
-                "choices": [{
-                    "index": 0,
-                    "message": { "role": "assistant", "tool_calls": [{ "id": "call_4", "type": "function", "function": { "name": "memory.read", "arguments": "{\"path\":\"missing-default.txt\",\"default_value\":\"my_default_fallback\"}" } }] },
-                    "finish_reason": "tool_calls"
-                }],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-            })
-        } else if latest_user_message.contains("read default") && has_tool_result_turn {
-            serde_json::json!({
-                "id": "chatcmpl-8",
-                "object": "chat.completion",
-                "created": 8,
-                "model": "gpt-4o",
-                "choices": [{
-                    "index": 0,
-                    "message": { "role": "assistant", "content": "Fallback is my_default_fallback" },
                     "finish_reason": "stop"
                 }],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
@@ -155,11 +129,11 @@ async fn test_loopback_memory_audit_and_negatives() {
     let workspace = TestWorkspace::new().unwrap();
     let agents_dir = workspace.agents_dir.clone();
 
-    let agent_id = "memory_agent";
+    let agent_id = "content_agent";
     let agent_dir = agents_dir.join(agent_id);
     std::fs::create_dir_all(&agent_dir).unwrap();
 
-    install_memory_recall_agent(&agent_dir, agent_id).unwrap();
+    install_content_agent(&agent_dir, agent_id).unwrap();
 
     // Use small limits to easily trigger backpressure for negative tests
     let config = autonoetic_types::config::GatewayConfig {
@@ -176,7 +150,7 @@ async fn test_loopback_memory_audit_and_negatives() {
 
     let session_id = "test-session-123";
 
-    // --- Turn 1: Write to memory (Happy path) ---
+    // --- Turn 1: Write to content store (Happy path) ---
     let resp1 = client
         .event_ingest(
             "1",
@@ -190,15 +164,7 @@ async fn test_loopback_memory_audit_and_negatives() {
         .unwrap();
     assert!(resp1.error.is_none(), "Request 1 failed: {:?}", resp1.error);
 
-    // Check Tier1 memory substrate
-    let state_file = agent_dir.join("state").join("secret.txt");
-    assert!(state_file.exists(), "State file was not written!");
-    assert_eq!(
-        std::fs::read_to_string(&state_file).unwrap(),
-        "secret_value_123"
-    );
-
-    // --- Turn 2: Read from memory (Happy path) ---
+    // --- Turn 2: Read from content store (Happy path) ---
     let resp2 = client
         .event_ingest("2", agent_id, session_id, "chat", "what is the data?", None)
         .await
@@ -210,14 +176,13 @@ async fn test_loopback_memory_audit_and_negatives() {
         .to_string()
         .contains("The data is secret_value_123"));
 
-    // --- Turn 3: Negative Path - Missing memory key ---
+    // --- Turn 3: Negative Path - Missing content ---
     // The tool returns a structured error (not a gateway failure), and the agent continues.
-    // This is the desired iterative repair behavior: tool errors are visible to the agent.
     let resp3 = client
         .event_ingest("3", agent_id, session_id, "chat", "read missing", None)
         .await
         .unwrap();
-    // Gateway succeeds - the tool error is returned as a tool_result to the agent, not as a JSON-RPC error
+    // Gateway succeeds - the tool error is returned as a tool_result to the agent
     assert!(
         resp3.error.is_none(),
         "Gateway should succeed; tool error should be returned to agent for repair"
@@ -230,22 +195,6 @@ async fn test_loopback_memory_audit_and_negatives() {
         "Expected agent to report missing file, got: {}",
         result_str
     );
-
-    // --- Turn 3.5: Negative Path - Missing memory key with default_value ---
-    let resp3_5 = client
-        .event_ingest("3.5", agent_id, session_id, "chat", "read default", None)
-        .await
-        .unwrap();
-    assert!(
-        resp3_5.error.is_none(),
-        "Request 3.5 failed: {:?}",
-        resp3_5.error
-    );
-    assert!(resp3_5
-        .result
-        .unwrap()
-        .to_string()
-        .contains("Fallback is my_default_fallback"));
 
     // --- Turn 4: Negative Path - Outbound backpressure / rejection ---
     // First, spawn a background client connecting to send a long-running request.
@@ -310,18 +259,18 @@ async fn test_loopback_memory_audit_and_negatives() {
     let agent_history_file = agent_dir.join("history").join("causal_chain.jsonl");
     let agent_history = std::fs::read_to_string(&agent_history_file).unwrap();
 
-    let mut agent_mem_writes = 0;
-    let mut agent_mem_reads = 0;
+    let mut agent_content_writes = 0;
+    let mut agent_content_reads = 0;
     let mut agent_session_ends = 0;
 
     for line in agent_history.lines() {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
             if value["session_id"].as_str() == Some(session_id) {
                 if value["action"].as_str() == Some("requested") {
-                    if value["payload"]["tool_name"].as_str() == Some("memory.write") {
-                        agent_mem_writes += 1;
-                    } else if value["payload"]["tool_name"].as_str() == Some("memory.read") {
-                        agent_mem_reads += 1;
+                    if value["payload"]["tool_name"].as_str() == Some("content.write") {
+                        agent_content_writes += 1;
+                    } else if value["payload"]["tool_name"].as_str() == Some("content.read") {
+                        agent_content_reads += 1;
                     }
                 } else if value["category"].as_str() == Some("session")
                     && value["action"].as_str() == Some("end")
@@ -333,16 +282,16 @@ async fn test_loopback_memory_audit_and_negatives() {
     }
 
     assert_eq!(
-        agent_mem_writes, 1,
-        "Expected exactly 1 memory.write in agent history for session"
+        agent_content_writes, 1,
+        "Expected exactly 1 content.write in agent history for session"
     );
     assert_eq!(
-        agent_mem_reads, 3,
-        "Expected exactly 3 memory.read in agent history for session"
+        agent_content_reads, 2,
+        "Expected exactly 2 content.read in agent history for session"
     );
     assert_eq!(
-        agent_session_ends, 4,
-        "Expected exactly 4 session ends in agent history for session (write, read data, read missing, read default)"
+        agent_session_ends, 3,
+        "Expected exactly 3 session ends in agent history for session (write, read data, read missing)"
     );
 
     // Gateway-owned log
@@ -372,12 +321,12 @@ async fn test_loopback_memory_audit_and_negatives() {
     }
 
     assert_eq!(
-        gateway_requests, 4,
-        "Expected exactly 4 gateway ingest requests for session"
+        gateway_requests, 3,
+        "Expected exactly 3 gateway ingest requests for session"
     );
     assert_eq!(
-        gateway_completions, 4,
-        "Expected exactly 4 gateway ingest completions for session (all succeed; tool errors returned to agent)"
+        gateway_completions, 3,
+        "Expected exactly 3 gateway ingest completions for session (all succeed; tool errors returned to agent)"
     );
     assert_eq!(
         gateway_failures, 0,

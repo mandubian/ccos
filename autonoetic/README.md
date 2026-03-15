@@ -39,6 +39,7 @@ Autonoetic now accepts AgentSkills-compliant top-level `SKILL.md` frontmatter (`
 - [`architecture_modules.md`](architecture_modules.md): Gateway, sandbox, artifact store, capsule manager
 - [`docs/agent_routing_and_roles.md`](docs/agent_routing_and_roles.md): default lead-agent routing, specialist roles, delegation, and evolution-oriented role selection
 - [`docs/quickstart-planner-specialist-chat.md`](docs/quickstart-planner-specialist-chat.md): end-to-end CLI quickstart for implicit planner routing and specialist delegation
+- [`docs/remote-agents-http-api.md`](docs/remote-agents-http-api.md): HTTP API for remote agents, SDK HTTP transport, authentication
 - [`protocols.md`](protocols.md): JSON-RPC methods, artifact/capsule transport, OFP interoperability
 - [`data_models.md`](data_models.md): `SKILL.md`, `runtime.lock`, artifact handles, capsule manifest
 - [`sandbox_sdk.md`](sandbox_sdk.md): `autonoetic_sdk` API surface
@@ -76,7 +77,7 @@ To install these into your active runtime directory, run:
 
 The current MVP is intentionally narrow:
 
-- Gateway daemon
+- Gateway daemon with JSON-RPC and HTTP REST APIs
 - `SKILL.md` and `runtime.lock` parsing
 - Bubblewrap sandboxing
 - text-first Tier 1 memory
@@ -85,6 +86,32 @@ The current MVP is intentionally narrow:
 - hash-chain causal logging
 - OFP federation listener with HMAC handshake + extension negotiation
 - MCP client/server plumbing (registry, discovery, and agent exposure)
+
+## HTTP Content API (for Remote Agents)
+
+The gateway exposes REST endpoints for remote agents to access content. See [docs/remote-agents-http-api.md](docs/remote-agents-http-api.md) for full documentation.
+
+**Quick start for remote agents:**
+
+```python
+# On the remote agent machine
+export AUTONOETIC_HTTP_URL="http://gateway-host:8080"
+export AUTONOETIC_SHARED_SECRET="your-secret"
+
+from autonoetic_sdk import Client
+sdk = Client()  # Automatically uses HTTP mode
+sdk.files.write("main.py", "print(42)")
+```
+
+**Endpoints:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/content/write` | Write content (UTF-8 or base64) |
+| GET | `/api/content/read/{session_id}/{name}` | Read content by name/handle |
+| POST | `/api/content/read` | Read content (body params) |
+| POST | `/api/content/persist` | Mark content as persistent |
+| GET | `/api/content/names?session_id=X` | List content names with handles |
 
 More advanced features like full marketplace workflows, hermetic capsule replay, advanced memory substrate, and richer federation polish are deferred until the base runtime is proven.
 
@@ -127,6 +154,9 @@ You can inspect traces with:
 - `autonoetic trace sessions [--agent <agent_id>] [--json]`
 - `autonoetic trace show <session_id> [--agent <agent_id>] [--json]`
 - `autonoetic trace event <log_id> [--agent <agent_id>] [--json]`
+- `autonoetic trace follow <session_id> [--agent <agent_id>] [--json]`
+- `autonoetic trace fork <session_id> [--message <text>] [--at-turn N] [--interactive]`
+- `autonoetic trace history <session_id> [--agent <agent_id>] [--json]`
 
 ## Specialized Builder Example
 
@@ -145,3 +175,9 @@ schedule every 20sec next fibonacci series element from previous element compute
 ```
 
 and verifies that the spawned `fib_worker` runs its first scheduled tick and persists Fibonacci state/history under `agents/fib_worker/`.
+
+## License
+
+Autonoetic is licensed under the [Apache License 2.0](LICENSE).
+
+This license provides explicit patent protections for users and contributors, making it suitable for both open-source and commercial use.

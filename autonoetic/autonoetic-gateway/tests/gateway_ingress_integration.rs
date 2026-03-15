@@ -82,12 +82,27 @@ async fn test_event_ingest_live_jsonrpc_ingress_writes_gateway_and_agent_traces(
             .join("history")
             .join("causal_chain.jsonl"),
     )?;
-    assert!(gateway_entries.iter().any(|entry| {
-        entry.session_id == session_id && entry.action == "event.ingest.requested"
-    }));
-    assert!(gateway_entries.iter().any(|entry| {
-        entry.session_id == session_id && entry.action == "event.ingest.completed"
-    }));
+    
+    // Per-turn correlation: gateway entries should reference the session
+    let gateway_session_entries: Vec<_> = gateway_entries
+        .iter()
+        .filter(|e| e.session_id == session_id)
+        .collect();
+    
+    assert!(!gateway_session_entries.is_empty(), 
+        "Gateway should have entries for session {}", session_id);
+    assert!(gateway_session_entries.iter().any(|entry| entry.action == "event.ingest.requested"),
+        "Gateway should have event.ingest.requested for session");
+    assert!(gateway_session_entries.iter().any(|entry| entry.action == "event.ingest.completed"),
+        "Gateway should have event.ingest.completed for session");
+    
+    // Verify turn_id consistency - all gateway entries for this session should have matching turn_id
+    let turn_ids: std::collections::HashSet<_> = gateway_session_entries
+        .iter()
+        .filter_map(|e| e.turn_id.as_ref())
+        .collect();
+    assert!(turn_ids.len() <= 1, 
+        "All gateway entries for same session should share turn_id, found: {:?}", turn_ids);
 
     let agent_entries = read_causal_entries(
         &agents_dir
@@ -95,12 +110,26 @@ async fn test_event_ingest_live_jsonrpc_ingress_writes_gateway_and_agent_traces(
             .join("history")
             .join("causal_chain.jsonl"),
     )?;
-    assert!(agent_entries.iter().any(|entry| {
-        entry.session_id == session_id && entry.category == "session" && entry.action == "start"
-    }));
-    assert!(agent_entries.iter().any(|entry| {
-        entry.session_id == session_id && entry.category == "session" && entry.action == "end"
-    }));
+    
+    // Per-turn correlation: agent entries should match session AND turn
+    let agent_session_entries: Vec<_> = agent_entries
+        .iter()
+        .filter(|e| e.session_id == session_id)
+        .collect();
+    
+    assert!(agent_session_entries.iter().any(|entry| entry.category == "session" && entry.action == "start"),
+        "Agent should have session start for {}", session_id);
+    assert!(agent_session_entries.iter().any(|entry| entry.category == "session" && entry.action == "end"),
+        "Agent should have session end for {}", session_id);
+    
+    // Cross-source turn correlation: gateway and agent entries should share turn_id
+    if let (Some(gateway_turn), Some(agent_turn)) = (
+        gateway_session_entries.first().and_then(|e| e.turn_id.as_ref()),
+        agent_session_entries.first().and_then(|e| e.turn_id.as_ref()),
+    ) {
+        assert_eq!(gateway_turn, agent_turn,
+            "Gateway and agent should share turn_id for proper per-turn correlation");
+    }
 
     server.abort();
     Ok(())

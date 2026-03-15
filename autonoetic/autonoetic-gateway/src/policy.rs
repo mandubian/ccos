@@ -244,6 +244,8 @@ mod tests {
             middleware: None,
             execution_mode: Default::default(),
             script_entry: None,
+            gateway_url: None,
+            gateway_token: None,
         }
     }
 
