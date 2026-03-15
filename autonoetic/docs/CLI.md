@@ -67,6 +67,10 @@ autonoetic gateway approvals approve <request_id> [--reason TEXT]
 autonoetic gateway approvals reject <request_id> [--reason TEXT]
 ```
 
+**Approval ID format:** Short IDs like `apr-db51b7ad` (12 chars). LLMs won't truncate these.
+
+**Auto-execute:** After approval, the gateway automatically completes the install - no agent retry needed.
+
 ---
 
 ## Agent Commands

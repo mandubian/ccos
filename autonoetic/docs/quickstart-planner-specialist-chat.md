@@ -274,7 +274,7 @@ ls -1 /tmp/autonoetic-demo/agents
 
 ## Approvals (agent.install and scheduled actions)
 
-When `agent_install_approval_policy` is `always` or `risk_based` and an install is high-risk, `agent.install` returns `approval_required: true` and a `request_id`. The install does not proceed until an operator approves.
+When `agent_install_approval_policy` is `always` or `risk_based` and an install is high-risk, `agent.install` returns `approval_required: true` and a `request_id` (short ID format like `apr-db51b7ad`). The install does not proceed until an operator approves.
 
 **List pending approval requests:**
 
@@ -285,22 +285,28 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway app
 **Approve or reject a request:**
 
 ```bash
-# Approve (then the caller can retry agent.install with the same payload and promotion_gate.install_approval_ref set to this request_id)
-cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals approve <request_id> --reason "Reviewed; OK to install"
+# Approve - gateway auto-completes the install (no agent retry needed)
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals approve apr-db51b7ad --reason "Reviewed; OK to install"
 
 # Reject
-cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals reject <request_id> --reason "Out of scope"
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals reject apr-db51b7ad --reason "Out of scope"
 ```
 
-**Effect on install:** For `agent_install`-type requests, the gateway does not run the install when you approve. The gateway automatically stores the original install payload when approval is requested. When the caller retries with `promotion_gate.install_approval_ref` set to the approved `request_id`, the gateway uses the stored payload (ensuring fingerprint match). The caller does not need to recreate the exact same payload - the gateway handles this automatically.
+**Auto-execute (recommended flow):**
+1. `agent.install` returns `approval_required: true` with `request_id: "apr-db51b7ad"`
+2. Operator approves via CLI
+3. **Gateway automatically executes the install** using the stored payload
+4. Agent is installed immediately - no agent retry needed
 
 **Payload storage details:**
-- Stored at: `.gateway/scheduler/approvals/pending/<request_id>_payload.json`
+- Stored at: `.gateway/scheduler/approvals/pending/<id>_payload.json`
 - Persists across gateway restarts
 - Cleaned up automatically after successful install
-- Enables deterministic retry even if the LLM generates a different payload
+- Enables deterministic execution even if LLM output differs
 
 **Rejected requests** are not retried; the caller sees the rejection and should report to the user.
+
+**LLM truncation note:** Short approval IDs (`apr-XXXXXXXX`) are used to avoid truncation bugs in some LLMs (e.g., Gemini 3 Flash truncates UUIDs by one character).
 
 **Machine-readable list:** Use `--json` for JSON output:
 
