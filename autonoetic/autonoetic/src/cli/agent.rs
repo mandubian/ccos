@@ -428,20 +428,31 @@ fn resolve_reference_agents_dir(from: Option<&str>) -> anyhow::Result<std::path:
         }
     }
 
-    let mut candidates = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../agents")];
+    let cargo_manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut candidates = vec![
+        // From autonoetic/autonoetic/ -> ../../agents (workspace root agents/)
+        cargo_manifest.join("../../agents"),
+        // From autonoetic/autonoetic/ -> ../agents (autonoetic/agents)
+        cargo_manifest.join("../agents"),
+        // From autonoetic/autonoetic/ -> ../autonoetic/agents (same as above, explicit)
+        cargo_manifest.parent().and_then(|p| p.parent()).map(|p| p.join("agents")).unwrap_or_default(),
+    ];
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("agents"));
         candidates.push(cwd.join("../agents"));
+        candidates.push(cwd.join("../../agents"));
     }
 
-    for candidate in candidates {
+    for candidate in candidates.iter().filter(|c| !c.as_os_str().is_empty()) {
         if candidate.is_dir() {
-            return Ok(candidate);
+            return Ok(candidate.clone());
         }
     }
 
     anyhow::bail!(
-        "Could not auto-detect reference bundles directory. Provide --from <path> or set AUTONOETIC_REFERENCE_AGENTS_DIR."
+        "Could not auto-detect reference bundles directory. Provide --from <path> or set AUTONOETIC_REFERENCE_AGENTS_DIR.\n\
+        Searched: {:?}",
+        candidates.iter().map(|c| c.display().to_string()).collect::<Vec<_>>()
     )
 }
 
