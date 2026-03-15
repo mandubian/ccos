@@ -53,8 +53,8 @@ Autonoetic now accepts AgentSkills-compliant top-level `SKILL.md` frontmatter (`
 
 ### Design Docs
 
-- [`concepts.md`](concepts.md): Philosophy, agent model, evolution model
-- [`architecture_modules.md`](architecture_modules.md): Gateway, sandbox, artifact store
+- [`docs/design/concepts.md`](docs/design/concepts.md): Philosophy, agent model, evolution model
+- [`docs/design/architecture_modules.md`](docs/design/architecture_modules.md): Gateway, sandbox, artifact store
 - [`docs/architecture-summary.md`](docs/architecture-summary.md): What's kept vs externalized
 - [`docs/gateway-architecture-principles.md`](docs/gateway-architecture-principles.md): Gateway neutrality principles
 - [`docs/separation-of-powers.md`](docs/separation-of-powers.md): Agent vs gateway responsibilities
