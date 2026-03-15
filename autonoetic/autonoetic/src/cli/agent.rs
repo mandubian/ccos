@@ -374,6 +374,7 @@ pub fn handle_agent_bootstrap(
     let mut copied = 0_usize;
     let mut overwritten = 0_usize;
     let mut skipped = 0_usize;
+    let mut patched = 0_usize;
 
     for bundle in bundles {
         let agent_id = bundle
@@ -410,15 +411,70 @@ pub fn handle_agent_bootstrap(
         );
     }
 
+    // Apply LLM presets from config to all installed agents
+    if !config.llm_presets.is_empty() || !config.llm_preset_mapping.is_empty() {
+        for entry in std::fs::read_dir(&config.agents_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let skill_path = entry.path().join("SKILL.md");
+            if !skill_path.exists() {
+                continue;
+            }
+            let agent_dir_name = entry.file_name().to_string_lossy().to_string();
+
+            if let Ok(content) = std::fs::read_to_string(&skill_path) {
+                if let Some(updated) = apply_llm_preset_to_skill(&content, &config, &agent_dir_name) {
+                    std::fs::write(&skill_path, &updated)?;
+                    patched += 1;
+                    println!("  Patched LLM config for '{}'", agent_dir_name);
+                }
+            }
+        }
+    }
+
     println!(
-        "Bootstrap complete: {} installed, {} overwritten, {} skipped (target: {}).",
+        "Bootstrap complete: {} installed, {} overwritten, {} skipped, {} patched (target: {}).",
         copied,
         overwritten,
         skipped,
+        patched,
         config.agents_dir.display()
     );
 
     Ok(())
+}
+
+/// Apply LLM preset from config to a SKILL.md frontmatter
+fn apply_llm_preset_to_skill(
+    content: &str,
+    config: &GatewayConfig,
+    agent_id: &str,
+) -> Option<String> {
+    // Determine the template/role from agent_id
+    let template = agent_id.replace(".default", "").replace("_", "");
+
+    // Try to resolve LLM config: preset mapping → hardcoded defaults
+    let llm = resolve_llm_config(config, Some(&template), None, None, None);
+
+    // Check if current content already has the right LLM
+    if content.contains(&format!("model: \"{}\"", llm.model))
+        && content.contains(&format!("provider: \"{}\"", llm.provider)) {
+        return None; // Already correct
+    }
+
+    // Replace llm_config section
+    let re_provider = regex::Regex::new(r#"(provider:\s*)"[^"]*""#).ok()?;
+    let re_model = regex::Regex::new(r#"(model:\s*)"[^"]*""#).ok()?;
+    let re_temp = regex::Regex::new(r#"(temperature:\s*)[0-9.]+ "#).ok()?;
+
+    let mut updated = content.to_string();
+    updated = re_provider.replace(&updated, format!("${{1}}\"{}\"", llm.provider)).to_string();
+    updated = re_model.replace(&updated, format!("${{1}}\"{}\"", llm.model)).to_string();
+    updated = re_temp.replace(&updated, format!("${{1}}{} ", llm.temperature)).to_string();
+
+    Some(updated)
 }
 
 fn resolve_reference_agents_dir(from: Option<&str>) -> anyhow::Result<std::path::PathBuf> {

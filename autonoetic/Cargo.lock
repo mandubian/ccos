@@ -116,6 +116,7 @@ dependencies = [
  "autonoetic-types",
  "clap",
  "dirs",
+ "regex",
  "reqwest",
  "serde_json",
  "tempfile",
