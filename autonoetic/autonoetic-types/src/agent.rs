@@ -35,6 +35,10 @@ pub struct LlmConfig {
     pub temperature: f64,
     pub fallback_provider: Option<String>,
     pub fallback_model: Option<String>,
+    /// Set to true if the provider doesn't support tool_choice parameter
+    /// (e.g., Z.AI GLM models via OpenRouter)
+    #[serde(default)]
+    pub disable_tool_choice: bool,
 }
 
 /// Resource limits enforced by the Gateway.

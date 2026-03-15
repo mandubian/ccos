@@ -110,7 +110,11 @@ impl OpenAiDriver {
                     }
                 }))
                 .collect::<Vec<_>>());
-            body["tool_choice"] = json!("auto");
+            // Only include tool_choice if provider supports it
+            // Some providers (Z.AI/GLM, etc.) return 400 for unknown parameters
+            if self.provider.capabilities.supports_tool_choice {
+                body["tool_choice"] = json!("auto");
+            }
         }
 
         body

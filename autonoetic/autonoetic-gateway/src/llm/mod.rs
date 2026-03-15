@@ -295,6 +295,7 @@ pub fn build_driver(
         None, // max_tokens from request, not config
         base_url_override.as_deref(),
         api_key_override.as_deref(),
+        config.disable_tool_choice,
     )?;
 
     let driver: Arc<dyn LlmDriver> = match resolved.kind {

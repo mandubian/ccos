@@ -16,6 +16,8 @@ pub struct ProviderCapabilities {
     pub supports_system_top_level: bool,
     /// Provider includes token usage counts in stream chunks.
     pub supports_usage_in_stream: bool,
+    /// Provider supports the tool_choice parameter (some OpenAI-compatible APIs don't).
+    pub supports_tool_choice: bool,
 }
 
 impl ProviderCapabilities {
@@ -26,6 +28,18 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: true,
             supports_system_top_level: false,
             supports_usage_in_stream: false,
+            supports_tool_choice: true,
+        }
+    }
+
+    /// OpenAI-compatible but without tool_choice (some Chinese models via OpenRouter)
+    pub fn openai_compatible_no_tool_choice() -> Self {
+        Self {
+            supports_streaming: true,
+            supports_tool_stream_deltas: true,
+            supports_system_top_level: false,
+            supports_usage_in_stream: false,
+            supports_tool_choice: false,
         }
     }
 
@@ -36,6 +50,7 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: true,
             supports_system_top_level: true,
             supports_usage_in_stream: true,
+            supports_tool_choice: true,
         }
     }
 
@@ -46,6 +61,7 @@ impl ProviderCapabilities {
             supports_tool_stream_deltas: false,
             supports_system_top_level: true,
             supports_usage_in_stream: false,
+            supports_tool_choice: false,
         }
     }
 }
@@ -246,10 +262,11 @@ pub fn resolve(
     max_tokens: Option<u32>,
     base_url_override: Option<&str>,
     api_key_override: Option<&str>,
+    disable_tool_choice: bool,
 ) -> anyhow::Result<ResolvedProvider> {
     let defaults = provider_defaults(provider);
 
-    let (kind, base_url, capabilities) = if let Some(ref d) = defaults {
+    let (kind, base_url, mut capabilities) = if let Some(ref d) = defaults {
         (
             d.kind.clone(),
             base_url_override.unwrap_or(d.base_url).to_string(),
@@ -268,6 +285,11 @@ pub fn resolve(
             provider
         );
     };
+
+    // Override tool_choice support if explicitly disabled
+    if disable_tool_choice {
+        capabilities.supports_tool_choice = false;
+    }
 
     // Resolve auth
     let api_key = if let Some(k) = api_key_override {
