@@ -4,8 +4,8 @@
 
 ### Completed Documents
 
-- [x] **[concepts.md](concepts.md)** — Core philosophy & vision
-- [x] **[architecture_modules.md](architecture_modules.md)** — System topology, modules, security
+- [x] **[concepts.md](docs/design/concepts.md)** — Core philosophy & vision
+- [x] **[architecture_modules.md](docs/design/architecture_modules.md)** — System topology, modules, security
   - [x] Gateway (Vault, Route Engine, LLM Driver Abstraction)
   - [x] Agent Orchestrator (SKILL.md Manifest, Ed25519 Signing)
   - [x] Sandbox Workers (Bubblewrap, Docker, MicroVM, WASM)
@@ -14,16 +14,16 @@
   - [x] Capability-Based Security Model
   - [x] Agent Loop Stability (Loop Guard, Session Repair)
   - [x] Security Hardening (Taint Tracking, SSRF, Scanner)
-- [x] **[protocols.md](protocols.md)** — Communication standards
+- [x] **[protocols.md](docs/design/protocols.md)** — Communication standards
   - [x] Internal JSON-RPC (Gateway ↔ Agent)
   - [x] Sandbox Bridge (Agent ↔ Sandbox via Gateway)
   - [x] Artifact Handles & Capsule Transport
   - [x] MCP Client/Server integration
   - [x] OFP Federation (wire-compatible with OpenFang)
   - [x] Causal Chain with hash-chain audit trail
-- [x] **[sandbox_sdk.md](sandbox_sdk.md)** — SDK API surface
-- [x] **[data_models.md](data_models.md)** — Concrete schemas
-- [x] **[cli_interface.md](cli_interface.md)** — CLI surface
+- [x] **[sandbox_sdk.md](docs/design/sandbox_sdk.md)** — SDK API surface
+- [x] **[data_models.md](docs/design/data_models.md)** — Concrete schemas
+- [x] **[cli_interface.md](docs/design/cli_interface.md)** — CLI surface
 
 ### Key Design Decisions
 - **Agent = SKILL.md**: Unified format (YAML frontmatter + Markdown body)
