@@ -342,6 +342,39 @@ impl SessionTracer {
             Some(serde_json::json!({ "stop_reason": stop_reason })),
         );
     }
+
+    pub fn log_history_persisted(&mut self, message_count: usize, content_handle: &str) {
+        let _ = self.log_event(
+            "session",
+            "history.persisted",
+            EntryStatus::Success,
+            Some(serde_json::json!({
+                "message_count": message_count,
+                "content_handle": content_handle
+            })),
+        );
+    }
+
+    pub fn log_session_forked(
+        &mut self,
+        source_session_id: &str,
+        fork_turn: u64,
+        history_handle: &str,
+        branch_message: Option<&str>,
+    ) {
+        let payload = serde_json::json!({
+            "source_session_id": source_session_id,
+            "fork_turn": fork_turn,
+            "history_handle": history_handle,
+            "branch_message_sha256": branch_message.map(|m| {
+                use sha2::{Sha256, Digest};
+                let mut hasher = Sha256::new();
+                hasher.update(m.as_bytes());
+                format!("{:x}", hasher.finalize())
+            })
+        });
+        let _ = self.log_event("session", "forked", EntryStatus::Success, Some(payload));
+    }
 }
 
 fn init_causal_logger(agent_dir: &Path) -> anyhow::Result<CausalLogger> {
