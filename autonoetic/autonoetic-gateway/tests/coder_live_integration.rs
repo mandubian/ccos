@@ -28,6 +28,7 @@ fn make_openrouter_driver(model: &str) -> anyhow::Result<Arc<dyn LlmDriver>> {
         Some(2048),
         None,
         None,
+        false, // disable_tool_choice
     )?;
 
     Ok(Arc::new(llm::openai::OpenAiDriver::new(client, resolved)))
