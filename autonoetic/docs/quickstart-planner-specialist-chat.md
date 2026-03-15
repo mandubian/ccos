@@ -15,7 +15,55 @@ It also includes the required config-file step so `agent bootstrap` does not fal
 - Rust toolchain installed
 - OpenRouter key available in your environment (`OPENROUTER_API_KEY`)
 
-## 1) Create config first (required)
+## 1) Create config (or use default)
+
+### Option A: Create custom config with LLM presets
+
+```bash
+mkdir -p /tmp/autonoetic-demo
+cat > /tmp/autonoetic-demo/config.yaml <<'EOF'
+agents_dir: "/tmp/autonoetic-demo/agents"
+port: 4000
+ofp_port: 4200
+tls: false
+default_lead_agent_id: "planner.default"
+max_concurrent_spawns: 4
+max_pending_spawns_per_agent: 4
+background_scheduler_enabled: false
+
+# LLM presets for role-specific model selection
+llm_presets:
+  agentic:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.2
+  coding:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.1
+  research:
+    provider: "openrouter"
+    model: "google/gemini-2.5-flash-lite"
+    temperature: 0.3
+  fallback:
+    provider: "openai"
+    model: "gpt-4o"
+    temperature: 0.2
+
+# Template → Preset mapping (used during bootstrap and init)
+llm_preset_mapping:
+  planner: agentic
+  researcher: research
+  architect: agentic
+  coder: coding
+  debugger: coding
+  auditor: agentic
+  specialized_builder: agentic
+  default: agentic
+EOF
+```
+
+### Option B: Use minimal config (presets configured after bootstrap)
 
 ```bash
 mkdir -p /tmp/autonoetic-demo
@@ -39,6 +87,11 @@ From `autonoetic/`:
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap
 ```
 
+Bootstrap automatically applies LLM presets from config:
+- If `llm_preset_mapping` exists, each template uses its mapped preset
+- If no mapping, templates use role-specific defaults (planner → agentic, coder → coding, etc.)
+- Override with `--preset` flag when creating individual agents
+
 Optional:
 
 ```bash
@@ -49,7 +102,18 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent boots
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap --from /path/to/autonoetic/agents
 ```
 
-## 2b) Researcher and web search (required for "search today's weather" etc.)
+## 2b) Check LLM presets
+
+After bootstrap, verify the LLM configuration:
+
+```bash
+# List configured presets and template mappings
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent presets
+```
+
+This shows available presets and which template uses which preset.
+
+## 2c) Researcher and web search (required for "search today's weather" etc.)
 
 The researcher can use native `web.search` and `web.fetch` only if its runtime SKILL has a **NetConnect** capability that allows the target hosts (e.g. DuckDuckGo, or `*` for all).
 
@@ -73,7 +137,7 @@ The researcher can use native `web.search` and `web.fetch` only if its runtime S
   cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace show demo-session --agent researcher.default
   ```
 
-## 2c) Optional: add MCP web tools (native web tools already available)
+## 2d) Optional: add MCP web tools (native web tools already available)
 
 You can still add MCP web tools for richer provider-specific search/fetch behavior.
 
@@ -139,16 +203,35 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway sta
 
 If you want stricter network policy, narrow `researcher.default` `NetConnect.hosts` in your runtime agent bundle instead of using `["*"]`.
 
-## 3) Configure agents for OpenRouter + Gemini Flash Lite
+## 3) Create new agents with LLM presets
 
-After bootstrap, patch the runtime bundles in `/tmp/autonoetic-demo/agents`:
+After bootstrap, create additional agents with specific LLMs:
 
 ```bash
-for f in /tmp/autonoetic-demo/agents/*/SKILL.md; do
-  sed -i 's/provider: ".*"/provider: "openrouter"/' "$f"
-  sed -i 's/model: ".*"/model: "google\/gemini-2.5-flash-lite"/' "$f"
-done
+# Using preset name from config
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml \
+  agent init weather_agent --template coder --preset coding
+
+# Using direct provider/model override
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml \
+  agent init search_agent --template researcher \
+  --provider anthropic --model claude-sonnet-4-20250514
+
+# List available presets
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent presets
 ```
+
+### Agent Template Defaults
+
+When no preset is specified, each template uses a role-optimized default:
+
+| Template | Default Provider | Default Model | Why |
+|----------|-----------------|---------------|-----|
+| planner | anthropic | claude-sonnet-4-20250514 | Best agentic/tool-use capabilities |
+| researcher | openai | gpt-4o | Strong research and synthesis |
+| coder | anthropic | claude-sonnet-4-20250514 | Best code generation |
+| auditor | anthropic | claude-sonnet-4-20250514 | Careful analysis |
+| generic | openai | gpt-4o | Balanced capabilities |
 
 ## 4) Start gateway
 
