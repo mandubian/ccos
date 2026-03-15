@@ -1,7 +1,21 @@
 //! Gateway configuration types.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Named LLM preset that can be referenced by agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmPreset {
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub fallback_provider: Option<String>,
+    #[serde(default)]
+    pub fallback_model: Option<String>,
+}
 
 /// When `agent.install` requires human approval before proceeding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -112,6 +126,14 @@ pub struct GatewayConfig {
     /// Schema enforcement configuration for agent.spawn payloads.
     #[serde(default)]
     pub schema_enforcement: SchemaEnforcementConfig,
+
+    /// Named LLM presets for agent bootstrapping (e.g., "agentic" → claude-sonnet).
+    #[serde(default)]
+    pub llm_presets: HashMap<String, LlmPreset>,
+
+    /// Map role/template names to LLM presets (e.g., "planner" → "agentic", "coder" → "coding").
+    #[serde(default)]
+    pub llm_preset_mapping: HashMap<String, String>,
 }
 
 fn default_agents_dir() -> PathBuf {
@@ -166,6 +188,8 @@ impl Default for GatewayConfig {
             max_background_due_per_tick: default_max_background_due_per_tick(),
             agent_install_approval_policy: AgentInstallApprovalPolicy::default(),
             schema_enforcement: SchemaEnforcementConfig::default(),
+            llm_presets: HashMap::new(),
+            llm_preset_mapping: HashMap::new(),
         }
     }
 }

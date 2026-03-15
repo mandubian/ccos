@@ -3,12 +3,90 @@ use std::sync::Arc;
 use tracing::info;
 
 use autonoetic_gateway::llm::Message;
+use autonoetic_types::config::{GatewayConfig, LlmPreset};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// LLM configuration for template rendering
+#[derive(Debug, Clone, Default)]
+pub struct LlmTemplateConfig {
+    pub provider: String,
+    pub model: String,
+    pub temperature: f64,
+}
+
+/// Resolve LLM config from CLI flags, presets, or defaults
+pub fn resolve_llm_config(
+    config: &GatewayConfig,
+    template: Option<&str>,
+    preset_name: Option<&str>,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> LlmTemplateConfig {
+    // 1. Direct CLI override takes highest priority
+    if let Some(p) = provider {
+        return LlmTemplateConfig {
+            provider: p.to_string(),
+            model: model.unwrap_or("gpt-4o").to_string(),
+            temperature: 0.2,
+        };
+    }
+
+    // 2. Named preset from config
+    if let Some(preset_name) = preset_name {
+        if let Some(preset) = config.llm_presets.get(preset_name) {
+            return LlmTemplateConfig {
+                provider: preset.provider.clone(),
+                model: preset.model.clone(),
+                temperature: preset.temperature.unwrap_or(0.2),
+            };
+        }
+    }
+
+    // 3. Role-based preset mapping from config
+    if let Some(template_name) = template {
+        if let Some(mapped_preset_name) = config.llm_preset_mapping.get(template_name) {
+            if let Some(preset) = config.llm_presets.get(mapped_preset_name) {
+                return LlmTemplateConfig {
+                    provider: preset.provider.clone(),
+                    model: preset.model.clone(),
+                    temperature: preset.temperature.unwrap_or(0.2),
+                };
+            }
+        }
+    }
+
+    // 4. Hardcoded defaults per template (backward compatible)
+    match template.unwrap_or("generic") {
+        "planner" => LlmTemplateConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            temperature: 0.2,
+        },
+        "coder" => LlmTemplateConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            temperature: 0.1,
+        },
+        "researcher" => LlmTemplateConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            temperature: 0.3,
+        },
+        _ => LlmTemplateConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            temperature: 0.2,
+        },
+    }
+}
 
 pub fn init_agent_scaffold(
     config_path: &Path,
     agent_id: &str,
     template: Option<&str>,
+    preset: Option<&str>,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(!agent_id.trim().is_empty(), "agent_id must not be empty");
 
@@ -28,7 +106,8 @@ pub fn init_agent_scaffold(
     std::fs::create_dir_all(agent_dir.join("skills"))?;
     std::fs::create_dir_all(agent_dir.join("scripts"))?;
 
-    let skill_md = render_skill_template(agent_id, template);
+    let llm_config = resolve_llm_config(&config, template, preset, provider, model);
+    let skill_md = render_skill_template(agent_id, template, &llm_config);
     std::fs::write(agent_dir.join("SKILL.md"), skill_md)?;
     std::fs::write(
         agent_dir.join("runtime.lock"),
@@ -36,14 +115,16 @@ pub fn init_agent_scaffold(
     )?;
 
     println!(
-        "Initialized agent '{}' in {}",
+        "Initialized agent '{}' in {} (llm: {}/{})",
         agent_id,
-        agent_dir.display()
+        agent_dir.display(),
+        llm_config.provider,
+        llm_config.model,
     );
     Ok(())
 }
 
-pub fn render_skill_template(agent_id: &str, template: Option<&str>) -> String {
+pub fn render_skill_template(agent_id: &str, template: Option<&str>, llm_config: &LlmTemplateConfig) -> String {
     let (name_suffix, description, body) = match template.unwrap_or("generic") {
         "planner" => (
             "Planner",
@@ -90,14 +171,17 @@ metadata:
       name: "{agent_id} {name_suffix}"
       description: "{description}"
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
-      temperature: 0.2
+      provider: "{provider}"
+      model: "{model}"
+      temperature: {temperature}
 ---
 # {agent_id}
 
 {body}
-"#
+"#,
+        provider = llm_config.provider,
+        model = llm_config.model,
+        temperature = llm_config.temperature,
     )
 }
 
@@ -113,6 +197,53 @@ sandbox:
 dependencies: []
 artifacts: []
 "#
+}
+
+pub fn handle_agent_presets(config_path: &Path) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+
+    if config.llm_presets.is_empty() {
+        println!("No LLM presets configured. Add presets to config.yaml:");
+        println!();
+        println!("llm_presets:");
+        println!("  agentic:");
+        println!("    provider: anthropic");
+        println!("    model: claude-sonnet-4-20250514");
+        println!("    temperature: 0.2");
+        println!("  coding:");
+        println!("    provider: anthropic");
+        println!("    model: claude-sonnet-4-20250514");
+        println!("    temperature: 0.1");
+        println!();
+        println!("Then map templates to presets:");
+        println!();
+        println!("llm_preset_mapping:");
+        println!("  planner: agentic");
+        println!("  coder: coding");
+        println!("  researcher: agentic");
+        return Ok(());
+    }
+
+    println!("{:<20} {:<30} {:<15} {}", "PRESET", "PROVIDER", "MODEL", "TEMP");
+    println!("{}", "-".repeat(80));
+
+    for (name, preset) in &config.llm_presets {
+        let temp = preset.temperature.unwrap_or(0.0);
+        println!(
+            "{:<20} {:<30} {:<15} {:.1}",
+            name, preset.provider, preset.model, temp
+        );
+    }
+
+    if !config.llm_preset_mapping.is_empty() {
+        println!();
+        println!("Template → Preset mappings:");
+        for (template, preset_name) in &config.llm_preset_mapping {
+            println!("  {} → {}", template, preset_name);
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn handle_agent_list(config_path: &Path) -> anyhow::Result<()> {
@@ -545,7 +676,7 @@ Use tools when needed.
         );
         std::fs::write(&config_path, config_yaml).expect("config should write");
 
-        init_agent_scaffold(&config_path, "agent_bootstrap", Some("coder"))
+        init_agent_scaffold(&config_path, "agent_bootstrap", Some("coder"), None, None, None)
             .expect("scaffold should succeed");
 
         let agent_dir = agents_dir.join("agent_bootstrap");
@@ -561,10 +692,52 @@ Use tools when needed.
 
     #[test]
     fn test_render_skill_template_supports_planner_template() {
-        let skill = render_skill_template("planner.default", Some("planner"));
+        let llm = LlmTemplateConfig::default();
+        let skill = render_skill_template("planner.default", Some("planner"), &llm);
         assert!(skill.contains("agent:\n      id: \"planner.default\""));
         assert!(skill.contains("Front-door lead agent for ambiguous goals."));
         assert!(skill.contains("You are a planner agent."));
+    }
+
+    #[test]
+    fn test_resolve_llm_config_uses_hardcoded_defaults_for_templates() {
+        let config = GatewayConfig::default();
+
+        let llm = resolve_llm_config(&config, Some("coder"), None, None, None);
+        assert_eq!(llm.provider, "anthropic");
+        assert_eq!(llm.model, "claude-sonnet-4-20250514");
+        assert_eq!(llm.temperature, 0.1);
+
+        let llm = resolve_llm_config(&config, Some("planner"), None, None, None);
+        assert_eq!(llm.provider, "anthropic");
+        assert_eq!(llm.temperature, 0.2);
+    }
+
+    #[test]
+    fn test_resolve_llm_config_uses_presets_from_config() {
+        let mut config = GatewayConfig::default();
+        config.llm_presets.insert("fast".to_string(), autonoetic_types::config::LlmPreset {
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            temperature: Some(0.0),
+            fallback_provider: None,
+            fallback_model: None,
+        });
+        config.llm_preset_mapping.insert("coder".to_string(), "fast".to_string());
+
+        let llm = resolve_llm_config(&config, Some("coder"), None, None, None);
+        assert_eq!(llm.provider, "openai");
+        assert_eq!(llm.model, "gpt-4o-mini");
+        assert_eq!(llm.temperature, 0.0);
+    }
+
+    #[test]
+    fn test_resolve_llm_config_cli_override_wins() {
+        let config = GatewayConfig::default();
+
+        let llm = resolve_llm_config(&config, Some("coder"), None, Some("google"), Some("gemini-pro"));
+        assert_eq!(llm.provider, "google");
+        assert_eq!(llm.model, "gemini-pro");
     }
 
     fn write_reference_bundle(root: &std::path::Path, group: &str, agent_id: &str, marker: &str) {

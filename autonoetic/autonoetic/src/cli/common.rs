@@ -135,7 +135,19 @@ pub enum AgentCommands {
         /// Template to use (e.g., researcher, coder, auditor)
         #[arg(long)]
         template: Option<String>,
+        /// LLM preset name from config (e.g., agentic, coding, fast)
+        #[arg(long)]
+        preset: Option<String>,
+        /// LLM provider override (e.g., openai, anthropic, gemini, openrouter)
+        #[arg(long)]
+        provider: Option<String>,
+        /// LLM model override (e.g., gpt-4o, claude-sonnet-4-20250514)
+        #[arg(long)]
+        model: Option<String>,
     },
+    /// Lists available LLM presets from config
+    Presets,
+    /// Boots an Agent and connects it to the Gateway
     /// Boots an Agent and connects it to the Gateway
     Run {
         /// Agent ID to run
