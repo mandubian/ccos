@@ -249,7 +249,7 @@ pub fn handle_agent_presets(config_path: &Path) -> anyhow::Result<()> {
 const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Autonoetic Gateway Configuration
 # See docs/quickstart-planner-specialist-chat.md for full documentation
 
-agents_dir: "./agents"
+# agents_dir is set to absolute path based on config location
 port: 4000
 ofp_port: 4200
 tls: false
@@ -311,8 +311,19 @@ pub fn handle_init_config(output: Option<&str>, overwrite: bool) -> anyhow::Resu
         }
     }
 
-    std::fs::write(path, DEFAULT_CONFIG_TEMPLATE)?;
+    // Resolve absolute path for agents_dir
+    let config_dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let agents_dir = config_dir.join("agents");
+    let agents_dir_str = agents_dir.display().to_string();
+
+    let config_content = DEFAULT_CONFIG_TEMPLATE.replace(
+        "# agents_dir is set to absolute path based on config location",
+        &format!("agents_dir: \"{}\"", agents_dir_str)
+    );
+
+    std::fs::write(path, config_content)?;
     println!("Created config file at {}", path.display());
+    println!("  agents_dir: {}", agents_dir_str);
     println!();
     println!("Next steps:");
     println!("  1. Edit the file to set your LLM provider and API keys");
