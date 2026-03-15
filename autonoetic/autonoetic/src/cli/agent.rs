@@ -12,6 +12,7 @@ pub struct LlmTemplateConfig {
     pub provider: String,
     pub model: String,
     pub temperature: f64,
+    pub disable_tool_choice: bool,
 }
 
 /// Resolve LLM config from CLI flags, presets, or defaults
@@ -28,17 +29,24 @@ pub fn resolve_llm_config(
             provider: p.to_string(),
             model: model.unwrap_or("gpt-4o").to_string(),
             temperature: 0.2,
+            disable_tool_choice: false,
         };
+    }
+
+    // Helper to convert preset to template config
+    fn preset_to_config(preset: &autonoetic_types::config::LlmPreset) -> LlmTemplateConfig {
+        LlmTemplateConfig {
+            provider: preset.provider.clone(),
+            model: preset.model.clone(),
+            temperature: preset.temperature.unwrap_or(0.2),
+            disable_tool_choice: preset.disable_tool_choice.unwrap_or(false),
+        }
     }
 
     // 2. Named preset from config
     if let Some(preset_name) = preset_name {
         if let Some(preset) = config.llm_presets.get(preset_name) {
-            return LlmTemplateConfig {
-                provider: preset.provider.clone(),
-                model: preset.model.clone(),
-                temperature: preset.temperature.unwrap_or(0.2),
-            };
+            return preset_to_config(preset);
         }
     }
 
@@ -46,11 +54,7 @@ pub fn resolve_llm_config(
     if let Some(template_name) = template {
         if let Some(mapped_preset_name) = config.llm_preset_mapping.get(template_name) {
             if let Some(preset) = config.llm_presets.get(mapped_preset_name) {
-                return LlmTemplateConfig {
-                    provider: preset.provider.clone(),
-                    model: preset.model.clone(),
-                    temperature: preset.temperature.unwrap_or(0.2),
-                };
+                return preset_to_config(preset);
             }
         }
     }
@@ -61,21 +65,25 @@ pub fn resolve_llm_config(
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             temperature: 0.2,
+            disable_tool_choice: false,
         },
         "coder" => LlmTemplateConfig {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             temperature: 0.1,
+            disable_tool_choice: false,
         },
         "researcher" => LlmTemplateConfig {
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             temperature: 0.3,
+            disable_tool_choice: false,
         },
         _ => LlmTemplateConfig {
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
             temperature: 0.2,
+            disable_tool_choice: false,
         },
     }
 }
@@ -461,7 +469,10 @@ fn apply_llm_preset_to_skill(
     // Check if current content already has the right LLM
     if content.contains(&format!("model: \"{}\"", llm.model))
         && content.contains(&format!("provider: \"{}\"", llm.provider)) {
-        return None; // Already correct
+        // Even if model/provider match, check disable_tool_choice
+        if !llm.disable_tool_choice || content.contains("disable_tool_choice") {
+            return None; // Already correct
+        }
     }
 
     // Replace llm_config section
@@ -473,6 +484,23 @@ fn apply_llm_preset_to_skill(
     updated = re_provider.replace(&updated, format!("${{1}}\"{}\"", llm.provider)).to_string();
     updated = re_model.replace(&updated, format!("${{1}}\"{}\"", llm.model)).to_string();
     updated = re_temp.replace(&updated, format!("${{1}}{} ", llm.temperature)).to_string();
+
+    // Handle disable_tool_choice
+    if llm.disable_tool_choice {
+        // Check if disable_tool_choice already exists
+        if !updated.contains("disable_tool_choice") {
+            // Add disable_tool_choice after temperature line
+            let re_after_temp = regex::Regex::new(r#"(temperature:\s*[0-9.]+\s*\n)"#).ok()?;
+            updated = re_after_temp.replace(
+                &updated, 
+                format!("${{1}}      disable_tool_choice: true\n")
+            ).to_string();
+        } else {
+            // Update existing disable_tool_choice
+            let re_dtc = regex::Regex::new(r#"(disable_tool_choice:\s*)(true|false)"#).ok()?;
+            updated = re_dtc.replace(&updated, "${1}true").to_string();
+        }
+    }
 
     Some(updated)
 }
