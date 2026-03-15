@@ -121,6 +121,38 @@ async fn main() -> anyhow::Result<()> {
                     *json,
                 ).await?;
             }
+            cli::common::TraceCommands::Fork {
+                session_id,
+                message,
+                new_session_id,
+                at_turn,
+                agent,
+                interactive,
+                json,
+            } => {
+                cli::trace::handle_trace_fork(
+                    &config_path,
+                    session_id,
+                    message.as_deref(),
+                    new_session_id.as_deref(),
+                    *at_turn,
+                    agent.as_deref(),
+                    *interactive,
+                    *json,
+                ).await?;
+            }
+            cli::common::TraceCommands::History {
+                session_id,
+                agent,
+                json,
+            } => {
+                cli::trace::handle_trace_history(
+                    &config_path,
+                    session_id,
+                    agent.as_deref(),
+                    *json,
+                )?;
+            }
         },
 
         Commands::Skill(args) => match &args.command {

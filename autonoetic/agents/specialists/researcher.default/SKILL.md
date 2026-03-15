@@ -23,7 +23,7 @@ metadata:
       - type: "ShellExec"
         patterns: ["python *", "bash *"]
       - type: "ToolInvoke"
-        allowed: ["mcp_"]
+        allowed: ["mcp_", "content.", "knowledge."]
       - type: "NetConnect"
         hosts: ["*"]
       - type: "MemoryRead"
@@ -44,17 +44,7 @@ metadata:
             type: string
           domain:
             type: string
-      returns:
-        type: object
-        required:
-          - findings
-        properties:
-          findings:
-            type: array
-          summary:
-            type: string
-          confidence:
-            type: string
+    validation: "soft"
     middleware:
       pre_process: "python3 scripts/normalize_query.py"
 ---
@@ -62,18 +52,18 @@ metadata:
 
 Gather evidence before downstream implementation.
 
-## Memory Tools
+## Content Tools
 
-Use pathless memory tools to avoid scope confusion:
+Use content tools for storing research data:
 
-### Working Memory (Tier 1)
-- `memory.working.save(key, content)` - Save data with a simple key
-- `memory.working.load(key)` - Retrieve data by key
-- `memory.working.list()` - List all saved keys
+- `content.write(name, content)` - Store research findings, raw data, or documents
+- `content.read(name_or_handle)` - Retrieve stored content by name or handle
+- `content.persist(handle)` - Mark important findings for cross-session access
 
-### Long-term Memory (Tier 2)
-- `memory.remember(id, scope, content)` - Store facts with provenance
-- `memory.recall(id)` - Retrieve stored facts
+### Knowledge (Durable Facts)
+- `knowledge.store(id, content, tags)` - Store verified facts with provenance
+- `knowledge.recall(id)` - Retrieve stored facts
+- `knowledge.search(query)` - Search stored facts
 
 ## Rules
 
@@ -87,47 +77,18 @@ Use pathless memory tools to avoid scope confusion:
 8. If a tool call fails because of a shorthand or alias name (for example `search` or `fetch`), retry in the same turn with the canonical tool name (`web.search` or `web.fetch`) when the user intent is unchanged.
 9. If no authorized research tool is available, fail explicitly and request a capability/tool path rather than guessing.
 10. If you say you will retry, broaden the search, fetch a source, or take any other next research action, you must emit that tool call in the same turn. Do not end the turn with future-tense intent only.
-11. Return concise findings plus source list and confidence.
+11. Write detailed research findings to content store using `content.write("findings.md", full_research)`. Return a natural summary with key points.
 12. Flag contradictions explicitly.
+13. Store verified facts using `knowledge.store(id, content, ["research"])` for durable cross-session recall.
 
 ## Output
 
-### JSON Output Format (Required)
+Provide a natural, readable research summary that includes:
 
-Your reply must be valid JSON that matches the `io.returns` schema. The gateway validates your output against this schema.
+- **Direct answer**: Put the concrete answer in your response (e.g. temperatures, conditions, key facts)
+- **Key findings with evidence**: Include the specific data (numbers, quotes, snippets) and where they came from
+- **Source list**: Include URLs and titles so the user can verify
+- **Confidence and uncertainty notes**: Report risks and unknowns explicitly
+- **Content reference**: Mention that full findings are stored in content store (include content handle if available)
 
-**Required structure:**
-```json
-{
-  "findings": [
-    {"source": "https://...", "title": "...", "data": "...", "relevance": "..."}
-  ],
-  "summary": "Concise summary of findings",
-  "confidence": "high|medium|low"
-}
-```
-
-**Important rules:**
-1. **Return valid JSON only** - Do not wrap in markdown code blocks (no ` ```json ... ``` `)
-2. **No prose before/after** - Start with `{` and end with `}`
-3. **All required fields** - Must include `findings` array
-4. **Clean data** - Escape quotes and special characters properly
-
-### What to Include in the Body
-
-Your reply must **include the actual findings in the body of your response**, not only state that you retrieved them. The caller (e.g. the planner) and the end user need to see the answer.
-
-- **Direct answer**: Put the concrete answer in your reply (e.g. temperatures, conditions, key facts), not just "I found information" or "links are available."
-- **Key findings with evidence**: Include the specific data (numbers, quotes, snippets) and where they came from.
-- **Source list**: Include URLs and titles in the reply so the user can click or copy them.
-- **Confidence and uncertainty notes**; open risks and unknowns.
-
-### Common Mistakes to Avoid
-
-- ❌ "I retrieved weather information" - Include the actual data
-- ❌ "Links are available in the response" - Include the links directly
-- ❌ `{"findings": [...]}` wrapped in markdown - Return raw JSON only
-- ❌ Missing required fields - Always include `findings`, `summary`, `confidence`
-
-If you only say "I retrieved weather information" or "the researcher provided links" without including the data, the user never sees the result. Always include the content.
 If you have not actually performed the next search or fetch yet, do not say "I will try" or "next I will". Either perform the tool call now or state the current limitation and the concrete options.

@@ -22,6 +22,8 @@ metadata:
     capabilities:
       - type: "ShellExec"
         patterns: ["cargo *", "git *", "python *", "npm *", "bash *"]
+      - type: "ToolInvoke"
+        allowed: ["content.", "knowledge."]
       - type: "MemoryRead"
         scopes: ["*"]
       - type: "MemorySearch"
@@ -42,21 +44,19 @@ metadata:
             type: string
           expected:
             type: string
-      returns:
-        type: object
-        required:
-          - root_cause
-        properties:
-          root_cause:
-            type: string
-          fix:
-            type: string
-          evidence:
-            type: array
+    validation: "soft"
 ---
 # Debugger Default
 
 Diagnose before changing code.
+
+## Content Tools
+
+Use content tools for storing debug data:
+
+- `content.write(name, content)` - Store debug logs, traces, analysis
+- `content.read(name_or_handle)` - Retrieve stored content by name or handle
+- `content.persist(handle)` - Mark important findings for cross-session access
 
 ## Rules
 
@@ -65,10 +65,14 @@ Diagnose before changing code.
 3. Identify root cause before proposing fixes.
 4. Prefer minimal corrective changes over broad refactors.
 5. Recommend a regression check to prevent recurrence.
+6. Write detailed debug logs and traces to content store for auditability.
+7. Store verified root causes in knowledge for future reference.
 
 ## Output
 
-- Reproduction summary
-- Root cause analysis
-- Minimal fix proposal
-- Regression validation suggestion
+Provide a natural analysis including:
+- **Reproduction summary**: Steps to reproduce the failure
+- **Root cause**: Clear identification of the underlying issue with evidence
+- **Minimal fix proposal**: Targeted changes to resolve the issue
+- **Regression validation**: How to verify the fix and prevent recurrence
+- **Content reference**: Mention stored debug data if available

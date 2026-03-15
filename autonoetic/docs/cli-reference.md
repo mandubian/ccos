@@ -269,6 +269,49 @@ autonoetic trace follow session-123 --json
 
 Press `Ctrl+C` to stop following.
 
+### `autonoetic trace fork`
+
+Fork a session from a snapshot to explore alternative paths.
+
+```bash
+autonoetic trace fork session-123
+autonoetic trace fork session-123 --message "Try a different approach"
+autonoetic trace fork session-123 --at-turn 3 --interactive
+autonoetic trace fork session-123 --new-session-id my-fork --agent researcher.default --json
+```
+
+| Argument | Description |
+|----------|-------------|
+| `session_id` | Source session ID to fork from |
+
+| Option | Description |
+|--------|-------------|
+| `--message` | Branch message to append (e.g., "Try a different approach") |
+| `--new-session-id` | New session ID (auto-generated if not provided) |
+| `--at-turn` | Fork from specific turn number (default: latest) |
+| `--agent` | Target agent ID (defaults to source agent) |
+| `--interactive` | Start interactive chat session after forking |
+| `--json` | Machine-readable JSON output |
+
+### `autonoetic trace history`
+
+Show conversation history for a session.
+
+```bash
+autonoetic trace history session-123
+autonoetic trace history session-123 --agent planner.default
+autonoetic trace history session-123 --json
+```
+
+| Argument | Description |
+|----------|-------------|
+| `session_id` | Session identifier |
+
+| Option | Description |
+|--------|-------------|
+| `--agent` | Restrict to specific agent |
+| `--json` | Machine-readable JSON output |
+
 ---
 
 ## Skill

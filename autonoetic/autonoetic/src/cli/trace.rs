@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::Path;
 
 use super::common::AgentTrace;
+use autonoetic_gateway::llm::Message;
 use autonoetic_types::causal_chain::CausalChainEntry;
 
 pub fn handle_trace_sessions(
@@ -596,4 +597,174 @@ pub async fn handle_trace_follow(
             }
         }
     }
+}
+
+/// Handle `autonoetic trace fork` command.
+pub async fn handle_trace_fork(
+    config_path: &Path,
+    source_session_id: &str,
+    branch_message: Option<&str>,
+    new_session_id: Option<&str>,
+    at_turn: Option<usize>,
+    agent_id: Option<&str>,
+    interactive: bool,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let _store = autonoetic_gateway::runtime::content_store::ContentStore::new(&gateway_dir)?;
+
+    // Load snapshot from source session
+    let mut snapshot =
+        autonoetic_gateway::runtime::session_snapshot::SessionSnapshot::load_from_session(
+            source_session_id,
+            &gateway_dir,
+        )?;
+
+    // If at_turn is specified, truncate history to that turn
+    if let Some(turn) = at_turn {
+        // Each turn is typically user + assistant messages, so we estimate:
+        // turn 1 = 2 messages (user, assistant), turn 2 = 4 messages, etc.
+        // But we need to be more precise - find the turn boundaries
+        let target_message_count = turn * 2; // Approximate: user + assistant per turn
+        if target_message_count < snapshot.history.len() {
+            snapshot.history.truncate(target_message_count);
+            snapshot.turn_count = turn;
+        }
+    }
+
+    // Fork the session
+    let fork = autonoetic_gateway::runtime::session_snapshot::SessionFork::fork(
+        &snapshot,
+        new_session_id,
+        branch_message,
+        &gateway_dir,
+    )?;
+
+    if !json_output {
+        println!("Session forked successfully!");
+        println!("  Source session:    {}", fork.source_session_id);
+        println!("  New session:       {}", fork.new_session_id);
+        println!("  Fork turn:         {}", fork.fork_turn);
+        if let Some(turn) = at_turn {
+            println!("  Forked at turn:    {}", turn);
+        }
+        println!("  History messages:  {}", fork.initial_history.len());
+        println!("  History handle:    {}", fork.history_handle);
+        if let Some(msg) = branch_message {
+            println!("  Branch message:    {}", msg);
+        }
+    }
+
+    // If interactive mode, start a chat session with the forked session
+    if interactive {
+        if json_output {
+            // In JSON mode, output the fork info first
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "new_session_id": fork.new_session_id,
+                    "source_session_id": fork.source_session_id,
+                    "fork_turn": fork.fork_turn,
+                    "history_handle": fork.history_handle,
+                    "message_count": fork.initial_history.len(),
+                    "at_turn": at_turn,
+                }))?
+            );
+        }
+
+        println!();
+        println!("Starting interactive session with forked session...");
+        println!("Type /exit to quit.");
+        println!();
+
+        // Use the existing chat functionality to continue the session
+        let chat_args = super::common::ChatArgs {
+            agent_id: agent_id.map(|a| a.to_string()),
+            session_id: Some(fork.new_session_id.clone()),
+            sender_id: None,
+            channel_id: None,
+            test_mode: false,
+        };
+        super::chat::handle_chat(config_path, &chat_args).await?;
+    } else if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "new_session_id": fork.new_session_id,
+                "source_session_id": fork.source_session_id,
+                "fork_turn": fork.fork_turn,
+                "history_handle": fork.history_handle,
+                "message_count": fork.initial_history.len(),
+                "at_turn": at_turn,
+            }))?
+        );
+    }
+
+    Ok(())
+}
+
+/// Handle `autonoetic trace history` command.
+pub fn handle_trace_history(
+    config_path: &Path,
+    session_id: &str,
+    _requested_agent: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let store = autonoetic_gateway::runtime::content_store::ContentStore::new(&gateway_dir)?;
+
+    // Try to load history from session
+    let history = store.read_by_name(session_id, "session_history");
+
+    match history {
+        Ok(content) => {
+            let messages: Vec<Message> = serde_json::from_slice(&content)?;
+
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "session_id": session_id,
+                        "message_count": messages.len(),
+                        "messages": messages.iter().map(|m| serde_json::json!({
+                            "role": format!("{:?}", m.role),
+                            "content": m.content,
+                        })).collect::<Vec<_>>(),
+                    }))?
+                );
+            } else {
+                println!("Session history: {} messages", messages.len());
+                println!();
+                for (i, msg) in messages.iter().enumerate() {
+                    let role = match msg.role {
+                        autonoetic_gateway::llm::Role::System => "system",
+                        autonoetic_gateway::llm::Role::User => "user",
+                        autonoetic_gateway::llm::Role::Assistant => "assistant",
+                        autonoetic_gateway::llm::Role::Tool => "tool",
+                    };
+                    println!("[{}] {}: {}", i + 1, role, msg.content);
+                }
+            }
+        }
+        Err(_) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "session_id": session_id,
+                        "error": "History not found",
+                        "message_count": 0,
+                        "messages": [],
+                    }))?
+                );
+            } else {
+                println!("No history found for session '{}'.", session_id);
+                println!("The session may not have been snapshotted yet.");
+            }
+        }
+    }
+
+    Ok(())
 }

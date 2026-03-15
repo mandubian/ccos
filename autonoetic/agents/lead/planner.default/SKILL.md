@@ -24,6 +24,8 @@ metadata:
         max_children: 12
       - type: "AgentMessage"
         patterns: ["*"]
+      - type: "ToolInvoke"
+        allowed: ["content.", "knowledge.", "agent."]
       - type: "MemoryRead"
         scopes: ["*"]
       - type: "MemoryWrite"
@@ -33,19 +35,7 @@ metadata:
         oneOf:
           - type: string
           - type: object
-      returns:
-        type: object
-        required:
-          - mode
-          - plan
-          - result
-        properties:
-          mode:
-            type: string
-          plan:
-            type: array
-          result:
-            type: string
+    validation: "soft"
 ---
 # Planner Default
 
@@ -182,34 +172,38 @@ When requesting `specialized_builder.default` to install a new agent, tell it:
 
 ## Session and Memory Discipline
 
-- Prefer pathless memory tools to avoid scope confusion:
-  - `memory.working.save(key, content)` — saves to `state/<key>.json`
-  - `memory.working.load(key)` — reads from `state/<key>.json`
-  - `memory.working.list()` — lists all saved keys
-- Avoid `memory.write`/`memory.read` unless you're certain the path is allowed by current `MemoryWrite` scopes.
-- Preserve continuity by recording compact planning state in memory.
+- Use **content tools** for files and data:
+  - `content.write(name, content)` — write files/data, returns handle
+  - `content.read(name_or_handle)` — read by name or handle
+  - `content.persist(handle)` — make content survive session cleanup
+- Use **knowledge tools** for durable facts:
+  - `knowledge.store(id, content, scope)` — store facts with provenance
+  - `knowledge.recall(id)` — retrieve facts
+  - `knowledge.search(scope, query)` — search by scope
+- Preserve continuity by recording compact planning state via content.write.
 - Store delegation rationale and expected outputs for each sub-goal.
 - Avoid silent routing changes mid-session unless the user explicitly redirects.
 
-### Critical: Use Response Content Directly
+### Critical: Use Artifacts from agent.spawn Response
 
 When `agent.spawn` returns a specialist response:
-1. **The response IS in `assistant_reply`** — extract content from there
-2. **Do NOT try to load from memory** — other agents' memory is NOT accessible to you
-3. **Do NOT assume the specialist saved to your memory** — memory is agent-scoped
+1. **The response contains `artifacts`** — an array of content bundles with handles
+2. **Each artifact has `files`** — list of file names in the artifact
+3. **Use `content.read(name)`** to retrieve file contents by name
+4. **Or use `content.read(handle)`** to retrieve by content handle
 
 **After spawning coder/architect:**
-- Read the `assistant_reply` field in the response
-- The actual content (script, design, etc.) is IN that reply
-- Use it directly to proceed to the next step
-- Only save to YOUR memory if YOU need to reference it later
+- Check the `artifacts` field in the response
+- For each file needed, call `content.read("filename")` or `content.read(handle)`
+- Do NOT try to load from memory — use content tools with artifact handles
+- Do NOT ask the specialist to "return content in response" — they write via content.write
 
 **Example flow:**
 ```
-1. spawn coder → response contains {"assistant_reply": "Here is the script: ..."}
-2. Extract script from assistant_reply
-3. Proceed to specialized_builder with the extracted script
-4. Do NOT call memory.working.load("script") — it won't exist
+1. spawn coder → response contains artifacts: [{name: "weather_agent", files: ["main.py", "SKILL.md"], ...}]
+2. content.read("main.py") → get the script content
+3. Pass file handles to specialized_builder
+4. Do NOT call memory.working.load("script") — use content.read instead
 ```
 
 ## Response Format

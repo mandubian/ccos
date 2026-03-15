@@ -343,6 +343,27 @@ impl Tier2Memory {
 
         Ok(scopes)
     }
+
+    /// Lists all memories owned by the current agent.
+    pub fn list_memories(&self) -> anyhow::Result<Vec<MemoryObject>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT memory_id FROM memories WHERE owner_agent_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let mut rows = stmt.query(params![&self.current_agent_id])?;
+
+        let mut memories = Vec::new();
+        while let Some(row) = rows.next()? {
+            let memory_id: String = row.get(0)?;
+            match self.recall(&memory_id) {
+                Ok(memory) => memories.push(memory),
+                Err(e) => {
+                    tracing::warn!("Failed to recall memory '{}' during list: {}", memory_id, e);
+                }
+            }
+        }
+
+        Ok(memories)
+    }
 }
 
 const LIST_SCOPES_SQL: &str = r#"
@@ -553,8 +574,5 @@ mod tests {
         assert!(!memory.created_at.is_empty());
         assert!(!memory.updated_at.is_empty());
         assert!(!memory.content_hash.is_empty());
-
     }
-
-
 }

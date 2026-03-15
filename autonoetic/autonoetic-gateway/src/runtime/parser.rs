@@ -43,6 +43,10 @@ struct AutonoeticMetadata {
     execution_mode: Option<ExecutionMode>,
     #[serde(default)]
     script_entry: Option<String>,
+    #[serde(default)]
+    gateway_url: Option<String>,
+    #[serde(default)]
+    gateway_token: Option<String>,
 }
 
 /// Parser for `SKILL.md` files.
@@ -113,6 +117,8 @@ fn map_standard_frontmatter_to_manifest(standard: StandardSkillFrontmatter) -> A
         middleware: meta.middleware,
         execution_mode: meta.execution_mode.unwrap_or_default(),
         script_entry: meta.script_entry,
+        gateway_url: meta.gateway_url,
+        gateway_token: meta.gateway_token,
     }
 }
 

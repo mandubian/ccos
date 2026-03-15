@@ -18,12 +18,228 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactMetadata {
+    pub id: String,           // content handle (sha256:...)
+    pub name: String,         // agent name from SKILL.md frontmatter
+    pub description: String,
+    pub files: Vec<String>,   // list of file names in the artifact
+    pub entry_point: Option<String>,
+    pub io: Option<serde_json::Value>,
+}
+
+/// Knowledge shared during execution that the caller can access.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedKnowledge {
+    pub id: String,           // memory_id
+    pub scope: String,
+    pub content_preview: String, // first 100 chars
+    pub writer_agent_id: String,
+    pub created_at: String,
+}
+
+/// Extracts artifacts from the content store by looking for SKILL.md files.
+///
+/// This function:
+/// 1. Lists all content names in the session
+/// 2. Finds any SKILL.md files
+/// 3. Parses YAML frontmatter to extract metadata
+/// 4. Creates ArtifactMetadata for each SKILL.md found
+pub fn extract_artifacts_from_content_store(
+    gateway_dir: &std::path::Path,
+    session_id: &str,
+) -> anyhow::Result<Vec<ArtifactMetadata>> {
+    let store = crate::runtime::content_store::ContentStore::new(gateway_dir)?;
+    let names = store.list_names(session_id)?;
+    
+    let mut artifacts = Vec::new();
+    
+    for name in &names {
+        // Look for SKILL.md files
+        if name.ends_with("SKILL.md") || name == "SKILL.md" {
+            match store.read_by_name(session_id, name) {
+                Ok(content_bytes) => {
+                    if let Ok(content) = String::from_utf8(content_bytes) {
+                        if let Some(metadata) = parse_skill_md_artifact(&store, session_id, name, &content) {
+                            artifacts.push(metadata);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "artifacts",
+                        name = %name,
+                        error = %e,
+                        "Failed to read SKILL.md from content store"
+                    );
+                }
+            }
+        }
+    }
+    
+    Ok(artifacts)
+}
+
+/// Collects knowledge that was shared with a specific agent during execution.
+///
+/// Queries the Tier 2 memory for records that:
+/// 1. Have visibility "shared" or "global"
+/// 2. Include the target_agent_id in allowed_agents
+/// 3. Were created or updated recently (within this session)
+pub fn collect_shared_knowledge(
+    gateway_dir: &std::path::Path,
+    target_agent_id: &str,
+    writer_agent_id: &str,
+) -> Vec<SharedKnowledge> {
+    let Ok(mem) = crate::runtime::memory::Tier2Memory::new(gateway_dir, writer_agent_id) else {
+        return Vec::new();
+    };
+
+    // Get all memories owned by the writer agent
+    let Ok(all_memories) = mem.list_memories() else {
+        return Vec::new();
+    };
+
+    // Filter to those shared with the target agent
+    all_memories
+        .into_iter()
+        .filter(|m| {
+            match &m.visibility {
+                autonoetic_types::memory::MemoryVisibility::Global => true,
+                autonoetic_types::memory::MemoryVisibility::Shared => {
+                    m.allowed_agents.contains(&target_agent_id.to_string())
+                }
+                autonoetic_types::memory::MemoryVisibility::Private => false,
+            }
+        })
+        .map(|m| {
+            let preview = if m.content.len() > 100 {
+                format!("{}...", &m.content[..100])
+            } else {
+                m.content.clone()
+            };
+            SharedKnowledge {
+                id: m.memory_id,
+                scope: m.scope,
+                content_preview: preview,
+                writer_agent_id: m.writer_agent_id,
+                created_at: m.created_at,
+            }
+        })
+        .collect()
+}
+
+/// Parses SKILL.md content and creates ArtifactMetadata.
+///
+/// Uses loose/soft validation:
+/// - Missing or invalid frontmatter → still creates artifact with defaults
+/// - Missing fields → sensible defaults (name from dir, empty description)
+/// - This matches the "soft validation" approach for LLM-generated content
+fn parse_skill_md_artifact(
+    store: &crate::runtime::content_store::ContentStore,
+    session_id: &str,
+    skill_md_name: &str,
+    content: &str,
+) -> Option<ArtifactMetadata> {
+    // Get all files in the session (needed regardless of parsing)
+    let files = store.list_names(session_id).unwrap_or_default();
+    
+    // Use the directory of SKILL.md as the artifact ID prefix
+    let artifact_dir = if skill_md_name.contains('/') {
+        skill_md_name.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
+    } else {
+        ""
+    };
+    
+    // Derive default name from directory
+    let default_name = artifact_dir
+        .split('/')
+        .last()
+        .unwrap_or("unknown")
+        .to_string();
+    
+    // Try to parse frontmatter, but use defaults if it fails
+    #[derive(Deserialize)]
+    struct SkillFrontmatter {
+        name: Option<String>,
+        description: Option<String>,
+        script_entry: Option<String>,
+        io: Option<serde_json::Value>,
+    }
+    
+    let (name, description, script_entry, io) = match content.split("---").collect::<Vec<&str>>().get(1) {
+        Some(frontmatter) => {
+            // Attempt to parse YAML - if it fails, use defaults
+            match serde_yaml::from_str::<SkillFrontmatter>(frontmatter) {
+                Ok(fm) => (
+                    fm.name.unwrap_or(default_name),
+                    fm.description.unwrap_or_default(),
+                    fm.script_entry,
+                    fm.io,
+                ),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "artifacts",
+                        skill_md = %skill_md_name,
+                        error = %e,
+                        "Could not parse SKILL.md frontmatter, using defaults"
+                    );
+                    (default_name, String::new(), None, None)
+                }
+            }
+        }
+        None => {
+            // No frontmatter markers - still create artifact with defaults
+            tracing::debug!(
+                target: "artifacts",
+                skill_md = %skill_md_name,
+                "SKILL.md has no frontmatter, using defaults"
+            );
+            (default_name, String::new(), None, None)
+        }
+    };
+    
+    // Filter files that are in the same directory as SKILL.md
+    let artifact_files: Vec<String> = files
+        .iter()
+        .filter(|f| {
+            if artifact_dir.is_empty() {
+                !f.contains('/')
+            } else {
+                f.starts_with(artifact_dir)
+            }
+        })
+        .cloned()
+        .collect();
+    
+    // Compute a combined handle for the artifact (hash of all file handles)
+    let mut combined_hash = Sha256::new();
+    for file in &artifact_files {
+        if let Ok(handle) = store.resolve_name(session_id, file) {
+            combined_hash.update(handle.as_bytes());
+        }
+    }
+    let artifact_id = format!("sha256:{:x}", combined_hash.finalize());
+    
+    // Always return an artifact if we found the SKILL.md file
+    Some(ArtifactMetadata {
+        id: artifact_id,
+        name,
+        description,
+        files: artifact_files,
+        entry_point: script_entry,
+        io,
+    })
+}
+
 #[derive(Debug)]
 pub struct SpawnResult {
     pub agent_id: String,
     pub session_id: String,
     pub assistant_reply: Option<String>,
     pub should_signal_background: bool,
+    pub artifacts: Vec<ArtifactMetadata>,
+    pub shared_knowledge: Vec<SharedKnowledge>,
 }
 
 #[derive(Clone)]
@@ -239,11 +455,26 @@ impl GatewayExecutionService {
                 // Return result (or error)
                 let script_result = script_result?;
 
+                // Extract artifacts from content store
+                let artifacts = extract_artifacts_from_content_store(
+                    &self.config.agents_dir.join(".gateway"),
+                    session_id,
+                ).unwrap_or_default();
+
+                // Collect shared knowledge (for script mode, typically empty)
+                let shared_knowledge = collect_shared_knowledge(
+                    &self.config.agents_dir.join(".gateway"),
+                    source_agent_id.unwrap_or(agent_id),
+                    agent_id,
+                );
+
                 return Ok(SpawnResult {
                     agent_id: agent_id.to_string(),
                     session_id: session_id.to_string(),
                     assistant_reply: Some(script_result),
                     should_signal_background,
+                    artifacts,
+                    shared_knowledge,
                 });
             }
 
@@ -291,11 +522,26 @@ impl GatewayExecutionService {
             };
             runtime.close_session(close_reason)?;
 
+            // Extract artifacts from content store
+            let artifacts = extract_artifacts_from_content_store(
+                &self.config.agents_dir.join(".gateway"),
+                &resolved_session_id,
+            ).unwrap_or_default();
+
+            // Collect knowledge shared with the caller
+            let shared_knowledge = collect_shared_knowledge(
+                &self.config.agents_dir.join(".gateway"),
+                source_agent_id.unwrap_or(agent_id),
+                agent_id,
+            );
+
             Ok(SpawnResult {
                 agent_id: agent_id.to_string(),
                 session_id: resolved_session_id,
                 assistant_reply,
                 should_signal_background,
+                artifacts,
+                shared_knowledge,
             })
         })
         .await?;

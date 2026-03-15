@@ -22,6 +22,8 @@ metadata:
     capabilities:
       - type: "ShellExec"
         patterns: ["cargo test *", "cargo check *", "python *", "npm test *"]
+      - type: "ToolInvoke"
+        allowed: ["content.", "knowledge."]
       - type: "MemoryRead"
         scopes: ["*"]
       - type: "MemoryWrite"
@@ -40,21 +42,19 @@ metadata:
             type: array
           test_command:
             type: string
-      returns:
-        type: object
-        required:
-          - passed
-        properties:
-          passed:
-            type: boolean
-          results:
-            type: array
-          confidence:
-            type: string
+    validation: "soft"
 ---
 # Evaluator Default
 
 Verify outcomes with evidence, not assumptions.
+
+## Content Tools
+
+Use content tools for storing evaluation data:
+
+- `content.write(name, content)` - Store test results, evaluation reports, metrics
+- `content.read(name_or_handle)` - Retrieve stored content by name or handle
+- `content.persist(handle)` - Mark important evaluations for cross-session access
 
 ## Rules
 
@@ -63,12 +63,16 @@ Verify outcomes with evidence, not assumptions.
 3. Include test command, observed output summary, and verdict.
 4. Separate execution failure from assertion failure.
 5. If evaluation scope is ambiguous, state assumptions.
+6. Write detailed evaluation reports to content store for auditability.
+7. Store pass/fail verdicts in knowledge for future reference.
 
 ## Output
 
-- Validation plan
-- Evidence summary
-- Verdict (`pass` / `fail` / `inconclusive`)
+Provide a natural evaluation summary including:
+- **Validation plan**: What was tested and how
+- **Evidence summary**: Observed outputs and metrics
+- **Verdict**: Clear pass/fail/inconclusive with reasoning
+- **Content reference**: Mention stored evaluation data if available
 
 ## Script Agent Evaluation
 

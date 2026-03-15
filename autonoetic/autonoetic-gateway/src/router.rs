@@ -294,6 +294,8 @@ impl JsonRpcRouter {
                                 Some(serde_json::json!({
                                     "session_id": result.session_id.clone(),
                                     "assistant_reply": result.assistant_reply.clone(),
+                                    "artifacts": result.artifacts.clone(),
+                                    "shared_knowledge": result.shared_knowledge.clone(),
                                     "delegation_metadata": params.metadata.clone(),
                                 })),
                             );
@@ -304,6 +306,8 @@ impl JsonRpcRouter {
                                 "agent_id": result.agent_id,
                                 "session_id": result.session_id,
                                 "assistant_reply": result.assistant_reply,
+                                "artifacts": result.artifacts,
+                                "shared_knowledge": result.shared_knowledge,
                             }),
                         )
                     }
@@ -383,6 +387,8 @@ impl JsonRpcRouter {
                                 Some(serde_json::json!({
                                     "session_id": result.session_id.clone(),
                                     "assistant_reply": result.assistant_reply.clone(),
+                                    "artifacts": result.artifacts.clone(),
+                                    "shared_knowledge": result.shared_knowledge.clone(),
                                     "event_type": event_type.clone(),
                                 })),
                             );
@@ -394,6 +400,8 @@ impl JsonRpcRouter {
                                 "target_agent_id": target_agent_id,
                                 "session_id": result.session_id,
                                 "assistant_reply": result.assistant_reply,
+                                "artifacts": result.artifacts,
+                                "shared_knowledge": result.shared_knowledge,
                             }),
                         )
                     }
@@ -430,6 +438,108 @@ impl JsonRpcRouter {
                     }
                 }
             }
+
+            // Session fork - fork a session from a snapshot
+            "session.fork" => {
+                #[derive(Deserialize)]
+                struct ForkParams {
+                    source_session_id: String,
+                    #[serde(default)]
+                    branch_message: Option<String>,
+                    #[serde(default)]
+                    new_session_id: Option<String>,
+                    #[serde(default)]
+                    target_agent_id: Option<String>,
+                }
+
+                let params: ForkParams = match serde_json::from_value(req.params.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32602,
+                            format!("Invalid params for session.fork: {}", e),
+                        );
+                    }
+                };
+
+                let gateway_dir = self.config.agents_dir.join(".gateway");
+
+                // Load snapshot from source session
+                let snapshot = match crate::runtime::session_snapshot::SessionSnapshot::load_from_session(
+                    &params.source_session_id,
+                    &gateway_dir,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32000,
+                            format!("Failed to load snapshot from session '{}': {}", params.source_session_id, e),
+                        );
+                    }
+                };
+
+                // Fork the session
+                let fork = match crate::runtime::session_snapshot::SessionFork::fork(
+                    &snapshot,
+                    params.new_session_id.as_deref(),
+                    params.branch_message.as_deref(),
+                    &gateway_dir,
+                ) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            req.id,
+                            -32000,
+                            format!("Failed to fork session: {}", e),
+                        );
+                    }
+                };
+
+                // Determine target agent
+                let target_agent_id = params
+                    .target_agent_id
+                    .unwrap_or_else(|| params.source_session_id.clone());
+
+                // Log fork in causal chain (best effort, don't fail fork on logging error)
+                let causal_logger_result =
+                    crate::execution::init_gateway_causal_logger(&self.config);
+                if let Ok(causal_logger) = causal_logger_result {
+                    let branch_message_sha256 = params.branch_message.as_ref().map(|m| {
+                        use sha2::{Sha256, Digest};
+                        let mut hasher = Sha256::new();
+                        hasher.update(m.as_bytes());
+                        format!("{:x}", hasher.finalize())
+                    });
+                    let _ = crate::execution::log_gateway_causal_event(
+                        &causal_logger,
+                        &target_agent_id,
+                        &fork.new_session_id,
+                        1,
+                        "session.forked",
+                        autonoetic_types::causal_chain::EntryStatus::Success,
+                        Some(serde_json::json!({
+                            "source_session_id": params.source_session_id,
+                            "fork_turn": fork.fork_turn,
+                            "history_handle": fork.history_handle,
+                            "branch_message_sha256": branch_message_sha256,
+                        })),
+                    );
+                }
+
+                JsonRpcResponse::success(
+                    req.id,
+                    serde_json::json!({
+                        "new_session_id": fork.new_session_id,
+                        "source_session_id": fork.source_session_id,
+                        "fork_turn": fork.fork_turn,
+                        "history_handle": fork.history_handle,
+                        "message_count": fork.initial_history.len(),
+                    }),
+                )
+            }
+
             _ => JsonRpcResponse::error(req.id, -32601, "Method not found"),
         }
     }

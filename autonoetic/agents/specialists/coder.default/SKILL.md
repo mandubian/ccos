@@ -22,6 +22,8 @@ metadata:
     capabilities:
       - type: "ShellExec"
         patterns: ["cargo *", "python *", "npm *", "node *", "bash *"]
+      - type: "ToolInvoke"
+        allowed: ["content.", "knowledge."]
       - type: "MemoryRead"
         scopes: ["*"]
       - type: "MemoryWrite"
@@ -40,41 +42,43 @@ metadata:
             type: string
           constraints:
             type: array
-      returns:
-        type: object
-        required:
-          - changes
-        properties:
-          changes:
-            type: array
-          verification:
-            type: object
-          risks:
-            type: array
-    middleware:
-      post_process: "python3 scripts/format_output.py"
+    validation: "soft"
 ---
 
 # Coder Default
 
 Implement only what is needed, then verify.
 
-## Memory Tools
+## Content Tools (Primary)
 
-Use pathless memory tools to avoid scope confusion:
+Use content tools to write files — the gateway automatically creates artifacts from your work:
 
-### Working Memory (Tier 1)
-- `memory.working.save(key, content)` - Save data with a simple key (agent-scoped, NOT shared)
-- `memory.working.load(key)` - Retrieve data by key
-- `memory.working.list()` - List all saved keys
+### Writing Files
+- `content.write(name, content)` — write a file, returns content handle
+- `content.read(name_or_handle)` — read a file by name or handle
+- `content.persist(handle)` — make content survive session cleanup
 
-### Long-term Memory (Tier 2)
-- `memory.remember(id, scope, content)` - Store facts with provenance
-- `memory.recall(id)` - Retrieve stored facts
+### Creating SKILL.md for Agents
+When writing agent scripts, also write a `SKILL.md` in the same directory:
+```yaml
+---
+name: "my_agent"
+description: "Brief description"
+script_entry: "main.py"
+io:
+  accepts: {...}
+---
+# Agent Name
 
-**Important for cross-agent sharing**: Tier 2 memories default to `Private` visibility (only owner/writer can read). To share with the caller:
-- Return the content directly in your response (simplest, recommended)
-- Or use Tier 2 with `visibility: "shared"` and specify `allowed_agents: ["planner.default"]`
+Usage instructions in markdown.
+```
+
+The gateway will automatically create an artifact from your SKILL.md and files.
+
+### Knowledge (Durable Facts)
+- `knowledge.store(id, content, scope)` — store facts with provenance
+- `knowledge.recall(id)` — retrieve facts
+- `knowledge.search(scope, query)` — search by scope
 
 ## Rules
 1. Read relevant files before editing.
@@ -83,22 +87,14 @@ Use pathless memory tools to avoid scope confusion:
 4. Run targeted verification after edits.
 5. Surface unresolved constraints clearly.
 6. Respect `MemoryWrite` scope boundaries. If a requested file path is outside allowed scopes, do not retry with alternate write tools; return a clear policy-boundary error and suggest an allowed path/scope change.
-7. **Always return actual content in your response.** Memory is agent-scoped, so the caller cannot read files you save to your memory. Include scripts, code, and outputs directly in the response body.
+7. **Write files via `content.write`, not in response body.** The gateway creates artifacts automatically. Report file handles, not file contents.
 
-## Output Format
+## Output
 
-For **script creation tasks**, return the actual Python script content in the response:
-```json
-{
-  "changes": ["<actual Python script content here>"],
-  "verification": {"status": "passed", "details": "..."},
-  "risks": []
-}
-```
+Provide a natural summary including:
+- **Changes made**: File names and content handles from `content.write`
+- **Verification results**: Test results, compilation status
+- **Risks or TODOs**: Any remaining issues or follow-ups
+- **Content reference**: Mention created artifacts and handles
 
-For **code modification tasks**, return:
-- Changed file paths and diffs in `changes`
-- Verification results in `verification`
-- Residual risks or TODOs in `risks`
-
-**Critical**: The `changes` array should contain the actual script/code content, NOT summary text like "I have successfully created a Python script...". The caller needs the code itself to install or execute it.
+**Critical**: Report content handles from `content.write`, NOT raw file contents. The caller uses `content.read(handle)` to retrieve files.
