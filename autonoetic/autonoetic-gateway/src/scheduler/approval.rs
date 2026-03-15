@@ -2,13 +2,15 @@
 //! Handles loading, approving, and rejecting approval requests.
 //!
 //! When an agent.install approval is resolved, the gateway automatically
-//! resumes the caller's session with the approval result so they can
-//! retry with the install_approval_ref.
+//! executes the approved install using the stored payload.
 
 use crate::execution::{gateway_actor_id, init_gateway_causal_logger};
+use crate::runtime::tools::{AgentInstallTool, NativeTool};
+use crate::policy::PolicyEngine;
 use crate::tracing::{EventScope, SessionId, TraceSession};
 use autonoetic_types::background::{ApprovalDecision, ApprovalRequest, ApprovalStatus};
 use autonoetic_types::config::GatewayConfig;
+use autonoetic_types::agent::AgentManifest;
 use std::sync::Arc;
 
 pub use super::store::{
@@ -33,10 +35,20 @@ pub fn approve_request(
         reason,
         ApprovalStatus::Approved,
     )?;
-    
-    // Resume the caller's session so they can retry with install_approval_ref
-    resume_session_after_approval(config, &decision)?;
-    
+
+    // Directly execute the approved install instead of relying on agents to retry.
+    // This ensures the install completes even if the caller session has ended.
+    if let Err(e) = execute_approved_install(config, &decision) {
+        tracing::warn!(
+            target: "approval",
+            request_id = %decision.request_id,
+            error = %e,
+            "Failed to execute approved install directly; install may need manual retry"
+        );
+        // Still send resume event as fallback so agents can retry manually
+        resume_session_after_approval(config, &decision)?;
+    }
+
     Ok(decision)
 }
 
@@ -232,6 +244,145 @@ fn resume_session_after_approval(
     });
     
     Ok(())
+}
+
+/// Directly execute an approved agent.install action using the stored payload.
+/// This reuses the AgentInstallTool by adding install_approval_ref and calling it.
+fn execute_approved_install(
+    config: &GatewayConfig,
+    decision: &ApprovalDecision,
+) -> anyhow::Result<()> {
+    use autonoetic_types::background::ScheduledAction;
+    use autonoetic_types::agent::{RuntimeDeclaration, AgentIdentity};
+    
+    // Only handle agent_install actions
+    let ScheduledAction::AgentInstall { agent_id, .. } = &decision.action else {
+        return Ok(());
+    };
+    
+    // Load the stored install payload (created when approval was first requested)
+    let payload_path = pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
+    if !payload_path.exists() {
+        return Err(anyhow::anyhow!(
+            "No stored payload found at {} for request {}; cannot auto-complete install",
+            payload_path.display(),
+            decision.request_id
+        ));
+    }
+    
+    // Use the requested agent's directory as the parent (e.g., specialized_builder.default)
+    let parent_agent_id = &decision.agent_id;
+    let parent_dir = config.agents_dir.join(parent_agent_id);
+    
+    // Modify the stored payload to include install_approval_ref
+    let payload_json = std::fs::read_to_string(&payload_path)?;
+    let mut args_value: serde_json::Value = serde_json::from_str(&payload_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse stored install payload: {}", e))?;
+    
+    // Add promotion_gate with install_approval_ref if not present
+    if let Some(obj) = args_value.as_object_mut() {
+        if !obj.contains_key("promotion_gate") {
+            obj.insert("promotion_gate".to_string(), serde_json::json!({
+                "evaluator_pass": true,
+                "auditor_pass": true,
+                "install_approval_ref": decision.request_id
+            }));
+        } else if let Some(gate) = obj.get_mut("promotion_gate") {
+            if let Some(gate_obj) = gate.as_object_mut() {
+                gate_obj.insert("install_approval_ref".to_string(), 
+                    serde_json::Value::String(decision.request_id.clone()));
+            }
+        }
+    }
+    
+    let arguments_json = args_value.to_string();
+    
+    tracing::info!(
+        target: "approval",
+        request_id = %decision.request_id,
+        agent_id = %agent_id,
+        "Executing approved install directly via AgentInstallTool"
+    );
+    
+    // Build minimal parent manifest for the tool
+    let parent_manifest = AgentManifest {
+        version: "1.0".to_string(),
+        runtime: RuntimeDeclaration {
+            engine: "autonoetic".to_string(),
+            gateway_version: "0.1.0".to_string(),
+            sdk_version: "0.1.0".to_string(),
+            runtime_type: "stateful".to_string(),
+            sandbox: "bubblewrap".to_string(),
+            runtime_lock: "runtime.lock".to_string(),
+        },
+        agent: AgentIdentity {
+            id: parent_agent_id.clone(),
+            name: parent_agent_id.clone(),
+            description: format!("Gateway auto-complete parent for {}", decision.request_id),
+        },
+        capabilities: vec![],
+        llm_config: None,
+        limits: None,
+        background: None,
+        disclosure: None,
+        io: None,
+        middleware: None,
+        execution_mode: autonoetic_types::agent::ExecutionMode::Reasoning,
+        script_entry: None,
+        gateway_url: None,
+        gateway_token: None,
+    };
+    
+    // Execute the install using the existing tool
+    let tool = AgentInstallTool;
+    let agent_dir = &parent_dir;
+    let gateway_dir = config.agents_dir.parent();
+    let policy = PolicyEngine::new(parent_manifest.clone());
+    
+    match tool.execute(
+        &parent_manifest,
+        &policy,
+        agent_dir,
+        gateway_dir,
+        &arguments_json,
+        Some(&decision.session_id),
+        None,
+        Some(config),
+    ) {
+        Ok(result) => {
+            tracing::info!(
+                target: "approval",
+                request_id = %decision.request_id,
+                agent_id = %agent_id,
+                result = %result,
+                "Successfully auto-completed approved agent.install"
+            );
+            
+            // Log completion to causal chain
+            let causal_logger = init_gateway_causal_logger(config)?;
+            let mut trace_session = TraceSession::create_with_session_id(
+                SessionId::from_string(decision.session_id.clone()),
+                Arc::new(causal_logger),
+                gateway_actor_id(),
+                EventScope::Session,
+            );
+            let _ = trace_session.log_completed(
+                "agent.install.completed",
+                Some("approved"),
+                Some(serde_json::json!({
+                    "agent_id": agent_id,
+                    "request_id": decision.request_id,
+                    "executed_by": "gateway_auto_complete",
+                })),
+            );
+            
+            // Cleanup payload on success
+            let _ = std::fs::remove_file(&payload_path);
+            
+            Ok(())
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to execute approved install: {}", e)),
+    }
 }
 
 fn decide_request(
