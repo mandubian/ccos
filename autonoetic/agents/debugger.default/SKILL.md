@@ -16,15 +16,17 @@ metadata:
       name: "Debugger Default"
       description: "Isolates root causes and proposes targeted fixes."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "google/gemini-3-flash-preview"
       temperature: 0.1
     capabilities:
-      - type: "ToolInvoke"
-        allowed: ["content.", "knowledge.", "sandbox."]
-      - type: "ShellExec"
-        patterns: ["python3 scripts/*", "bash *"]
-      - type: "MemoryWrite"
+      - type: "SandboxFunctions"
+        allowed: ["knowledge.", "sandbox."]
+      - type: "CodeExecution"
+        patterns: ["python3 scripts/*", "node *", "bash *"]
+      - type: "WriteAccess"
+        scopes: ["self.*", "skills/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---

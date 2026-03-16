@@ -20,13 +20,15 @@ metadata:
       model: "gpt-4o"
       temperature: 0.2
     capabilities:
-      - type: "ToolInvoke"
-        allowed: ["content.", "knowledge.", "sandbox."]
-      - type: "ShellExec"
+      - type: "SandboxFunctions"
+        allowed: ["knowledge.", "sandbox."]
+      - type: "CodeExecution"
         patterns: ["python3 scripts/*"]
-      - type: "AgentInstall"
-        approval_policy: "risk_based"
-      - type: "MemoryWrite"
+      - type: "AgentSpawn"
+        max_children: 5
+      - type: "WriteAccess"
+        scopes: ["self.*", "skills/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---
@@ -37,4 +39,4 @@ Generates wrapper agents for bridging I/O gaps between tools and targets.
 ## Behavior
 - Analyze source and target schemas using `schema_diff.py`
 - Generate wrapper scripts using `generate_wrapper.py`
-- Install the wrapper as a new agent using `agent.install`
+- **Delegate installation to `specialized_builder.default`** - you cannot call agent.install directly
