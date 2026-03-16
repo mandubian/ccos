@@ -16,13 +16,17 @@ metadata:
       name: "Architect Default"
       description: "Defines structure, interfaces, and trade-offs."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "z-ai/glm-5-turbo"
       temperature: 0.2
     capabilities:
-      - type: "ToolInvoke"
-        allowed: ["content.", "knowledge."]
-      - type: "MemoryWrite"
+      - type: "SandboxFunctions"
+        allowed: ["knowledge."]
+      - type: "CodeExecution"
+        patterns: ["python3 scripts/*"]
+      - type: "WriteAccess"
+        scopes: ["self.*", "skills/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---
@@ -35,3 +39,4 @@ You are an architect agent. Define structure, interfaces, and trade-offs.
 - Document decisions and trade-offs
 - Create specifications using `content.write`
 - Consider scalability and maintainability
+- Create prototype scripts to validate design decisions

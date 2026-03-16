@@ -20,11 +20,11 @@ metadata:
       model: "gpt-4o"
       temperature: 0.1
     capabilities:
-      - type: "ToolInvoke"
+      - type: "SandboxFunctions"
         allowed: ["content.", "knowledge.", "sandbox."]
-      - type: "ShellExec"
+      - type: "CodeExecution"
         patterns: ["python3 scripts/*", "node *", "bash *"]
-      - type: "MemoryWrite"
+      - type: "WriteAccess"
         scopes: ["self.*", "skills/*", "scripts/*"]
     validation: "soft"
 ---

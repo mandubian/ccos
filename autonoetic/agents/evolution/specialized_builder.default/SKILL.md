@@ -20,11 +20,11 @@ metadata:
       model: "gpt-4o"
       temperature: 0.2
     capabilities:
-      - type: "ToolInvoke"
-        allowed: ["content.", "knowledge.", "agent.", "content.write", "content.read", "content.persist"]
-      - type: "AgentInstall"
-        approval_policy: "risk_based"
-      - type: "MemoryWrite"
+      - type: "SandboxFunctions"
+        allowed: ["content.", "knowledge.", "agent."]
+      - type: "AgentSpawn"
+        max_children: 5
+      - type: "WriteAccess"
         scopes: ["self.*", "skills/*", "agents/*"]
     validation: "soft"
 ---

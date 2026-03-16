@@ -20,9 +20,9 @@ metadata:
       model: "gpt-4o"
       temperature: 0.2
     capabilities:
-      - type: "ToolInvoke"
+      - type: "SandboxFunctions"
         allowed: ["content.", "knowledge."]
-      - type: "MemoryWrite"
+      - type: "WriteAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---
