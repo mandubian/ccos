@@ -31,7 +31,7 @@ pub fn install_memory_recall_agent(agent_dir: &Path, agent_id: &str) -> anyhow::
     install_agent(
         agent_dir,
         &format!(
-            "---\nname: \"Memory Agent\"\ndescription: \"Integration test memory agent\"\nmetadata:\n  autonoetic:\n    version: \"1.0\"\n    agent:\n      id: \"{agent_id}\"\n      name: \"memory_agent\"\n      description: \"mock agent\"\n    llm_config:\n      provider: \"openai\"\n      model: \"gpt-4o\"\n    capabilities:\n      - type: \"MemoryWrite\"\n        scopes: [\"*\"]\n      - type: \"MemoryRead\"\n        scopes: [\"*\"]\n---\n# Instructions\nYou are a memory agent.\n",
+            "---\nname: \"Memory Agent\"\ndescription: \"Integration test memory agent\"\nmetadata:\n  autonoetic:\n    version: \"1.0\"\n    agent:\n      id: \"{agent_id}\"\n      name: \"memory_agent\"\n      description: \"mock agent\"\n    llm_config:\n      provider: \"openai\"\n      model: \"gpt-4o\"\n    capabilities:\n      - type: \"WriteAccess\"\n        scopes: [\"*\"]\n      - type: \"ReadAccess\"\n        scopes: [\"*\"]\n---\n# Instructions\nYou are a memory agent.\n",
         ),
     )
 }
@@ -40,7 +40,7 @@ pub fn install_content_agent(agent_dir: &Path, agent_id: &str) -> anyhow::Result
     install_agent(
         agent_dir,
         &format!(
-            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"content_agent\"\n  description: \"Content store test agent\"\nllm_config:\n  provider: \"openai\"\n  model: \"gpt-4o\"\n  temperature: 0.0\ncapabilities:\n  - type: \"ToolInvoke\"\n    allowed: [\"content.read\", \"content.write\", \"content.persist\"]\n  - type: \"MemoryRead\"\n    scopes: [\"*\"]\n  - type: \"MemoryWrite\"\n    scopes: [\"*\"]\n---\n# Instructions\nYou are a content agent that reads and writes content.\n",
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"content_agent\"\n  description: \"Content store test agent\"\nllm_config:\n  provider: \"openai\"\n  model: \"gpt-4o\"\n  temperature: 0.0\ncapabilities:\n  - type: \"SandboxFunctions\"\n    allowed: [\"content.read\", \"content.write\", \"content.persist\"]\n  - type: \"ReadAccess\"\n    scopes: [\"*\"]\n  - type: \"WriteAccess\"\n    scopes: [\"*\"]\n---\n# Instructions\nYou are a content agent that reads and writes content.\n",
         ),
     )
 }
@@ -52,7 +52,7 @@ pub fn install_generated_skill_learner_agent(
     install_agent(
         agent_dir,
         &format!(
-            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"learner\"\n  description: \"A learning agent\"\nllm_config:\n  provider: \"openai\"\n  model: \"gpt-4o\"\ncapabilities:\n  - type: \"MemoryWrite\"\n    scopes: [\"skills/*\"]\n  - type: \"BackgroundReevaluation\"\n    min_interval_secs: 1\n    allow_reasoning: true\nbackground:\n  enabled: true\n  mode: \"reasoning\"\n  interval_secs: 1\n---\n# Instructions\nYou are a learning agent.\n",
+            "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"learner\"\n  description: \"A learning agent\"\nllm_config:\n  provider: \"openai\"\n  model: \"gpt-4o\"\ncapabilities:\n  - type: \"WriteAccess\"\n    scopes: [\"skills/*\"]\n  - type: \"BackgroundReevaluation\"\n    min_interval_secs: 1\n    allow_reasoning: true\nbackground:\n  enabled: true\n  mode: \"reasoning\"\n  interval_secs: 1\n---\n# Instructions\nYou are a learning agent.\n",
         ),
     )
 }
