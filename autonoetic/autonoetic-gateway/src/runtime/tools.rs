@@ -3706,10 +3706,7 @@ fn parse_dependency_plan(runtime: &str, packages: Vec<String>) -> anyhow::Result
         "nodejs" | "node" => DependencyRuntime::NodeJs,
         other => anyhow::bail!("Unsupported dependency runtime '{}'", other),
     };
-    anyhow::ensure!(
-        !packages.is_empty(),
-        "dependency packages must not be empty"
-    );
+    // Empty packages is OK - means use runtime from sandbox without extra packages
     Ok(DependencyPlan { runtime, packages })
 }
 
