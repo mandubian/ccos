@@ -93,7 +93,12 @@ impl OpenAiDriver {
         let t = req.temperature.or(self.provider.temperature);
         if let Some(t) = t {
             if t > 0.0 {
-                body["temperature"] = json!(t);
+                // Round temperature to 2 decimal places to avoid floating-point
+                // precision issues (e.g., 0.699999988079071 -> 0.7)
+                // Some providers (Z.AI) reject precision values
+                // Use f64 for proper rounding and JSON serialization
+                let rounded = ((t as f64) * 100.0).round() / 100.0;
+                body["temperature"] = json!(rounded);
             }
         }
 
@@ -126,6 +131,14 @@ impl LlmDriver for OpenAiDriver {
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
         let body = self.build_body(req, false);
 
+        // Debug log the request body (trace level for full body)
+        tracing::debug!(target: "llm::openai", model=%self.provider.model, "Sending LLM request");
+        if tracing::enabled!(tracing::Level::TRACE) {
+            if let Ok(pretty) = serde_json::to_string_pretty(&body) {
+                tracing::trace!(target: "llm::openai", "Full request body:\n{}", pretty);
+            }
+        }
+
         const MAX_RETRIES: u32 = 3;
         for attempt in 0..=MAX_RETRIES {
             let builder = self.apply_auth(
@@ -155,6 +168,12 @@ impl LlmDriver for OpenAiDriver {
 
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
+                tracing::debug!(
+                    target: "llm::openai",
+                    status = %status,
+                    model = %self.provider.model,
+                    "LLM API error response"
+                );
                 anyhow::bail!("OpenAI API error {}: {}", status, text);
             }
 
