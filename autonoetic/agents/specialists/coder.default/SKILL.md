@@ -23,7 +23,7 @@ metadata:
       - type: "SandboxFunctions"
         allowed: ["knowledge.", "sandbox."]
       - type: "CodeExecution"
-        patterns: ["python3 ", "python ", "node ", "bash ", "sh "]
+        patterns: ["python3 ", "python ", "node ", "bash -c ", "sh -c ", "python3 scripts/", "python scripts/"]
       - type: "WriteAccess"
         scopes: ["self.*", "skills/*", "scripts/*"]
       - type: "ReadAccess"
@@ -39,3 +39,9 @@ You are a coding agent. Produce tested, minimal, and auditable changes.
 - Test code before returning
 - Use `content.write` to persist artifacts
 - Follow the principle of minimal changes
+
+## Running Code
+When using `sandbox.exec`:
+- Use absolute paths or run from scripts/ directory
+- Example: `python3 scripts/main.py` NOT `cd scripts && python main.py`
+- The CodeExecution policy matches command prefixes, so `cd` commands won't work
