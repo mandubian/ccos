@@ -236,7 +236,7 @@ impl From<anyhow::Error> for ToolError {
             if lower.contains("invalid json arguments for 'agent.install'")
                 && lower.contains("missing field `type`")
             {
-                return Some("agent.install.capabilities items must include a valid `type` field (for example `NetConnect`, `MemoryRead`, `MemoryWrite`, `ShellExec`, `AgentSpawn`).".to_string());
+                return Some("agent.install.capabilities items must include a valid `type` field (for example `NetConnect`, `ReadAccess`, `WriteAccess`, `ShellExec`, `AgentSpawn`).".to_string());
             }
 
             if lower.contains("invalid json arguments for 'agent.install'")
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn test_agent_install_unknown_variant_gets_specific_hint() {
         let anyhow_err = anyhow::anyhow!(
-            "Invalid JSON arguments for 'agent.install': unknown variant `capability`, expected one of `ToolInvoke`, `MemoryRead` at line 1 column 42"
+            "Invalid JSON arguments for 'agent.install': unknown variant `capability`, expected one of `ToolInvoke`, `ReadAccess` at line 1 column 42"
         );
         let err: ToolError = anyhow_err.into();
         assert_eq!(err.error_type, ToolErrorType::Validation);
