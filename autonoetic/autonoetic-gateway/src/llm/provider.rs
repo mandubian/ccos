@@ -335,7 +335,10 @@ pub fn resolve(
                 "HTTP-Referer".to_string(),
                 "https://autonoetic.ccos.local".to_string(),
             ),
-            ("X-Title".to_string(), "Autonoetic Gateway".to_string()),
+            (
+                "X-OpenRouter-Title".to_string(),
+                "Autonoetic Gateway".to_string(),
+            ),
         ]
     } else {
         vec![]

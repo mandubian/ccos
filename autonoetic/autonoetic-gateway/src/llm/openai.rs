@@ -18,6 +18,18 @@ fn uses_completion_tokens(model: &str) -> bool {
     m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
 }
 
+/// Check if a model is known to NOT support tool/function calling.
+/// Some multimodal or specialized models only support text completion.
+fn model_supports_tools(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // Known models that don't support tool calling
+    // Add more as discovered
+    if m.contains("healer-alpha") || m.contains("healer_alpha") {
+        return false;
+    }
+    true
+}
+
 pub struct OpenAiDriver {
     client: Client,
     provider: ResolvedProvider,
@@ -102,8 +114,9 @@ impl OpenAiDriver {
             }
         }
 
-        // Only include tools if provider supports them
-        if !req.tools.is_empty() && self.provider.capabilities.supports_tools {
+        // Only include tools if provider supports them AND the model supports them
+        let model_supports_tools = model_supports_tools(&self.provider.model);
+        if !req.tools.is_empty() && self.provider.capabilities.supports_tools && model_supports_tools {
             body["tools"] = json!(req
                 .tools
                 .iter()
