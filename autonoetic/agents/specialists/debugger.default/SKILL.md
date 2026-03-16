@@ -23,7 +23,7 @@ metadata:
       - type: "SandboxFunctions"
         allowed: ["knowledge.", "sandbox."]
       - type: "CodeExecution"
-        patterns: ["python3 scripts/*", "node *", "bash *"]
+        patterns: ["python3 ", "python ", "node ", "bash ", "sh "]
       - type: "WriteAccess"
         scopes: ["self.*", "skills/*"]
       - type: "ReadAccess"
