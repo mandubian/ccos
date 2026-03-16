@@ -16,15 +16,17 @@ metadata:
       name: "Researcher Default"
       description: "Collects evidence, compares sources, and reports uncertainty explicitly."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "google/gemini-3-flash-preview"
       temperature: 0.3
     capabilities:
       - type: "SandboxFunctions"
-        allowed: ["content.", "knowledge.", "web.", "mcp_"]
+        allowed: ["knowledge.", "web.", "mcp_"]
       - type: "NetworkAccess"
         hosts: ["*"]
       - type: "WriteAccess"
+        scopes: ["self.*", "skills/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---
