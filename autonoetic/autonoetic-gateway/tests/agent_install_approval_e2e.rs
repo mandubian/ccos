@@ -1,7 +1,7 @@
 //! End-to-end test for agent.install with approval flow.
 //!
 //! Tests the full lifecycle:
-//! 1. Specialized_builder calls agent.install with high-risk capability (NetConnect)
+//! 1. Specialized_builder calls agent.install with high-risk capability (NetworkAccess)
 //! 2. Gateway returns approval_required (agent NOT installed)
 //! 3. Programmatically approve the pending request
 //! 4. Retry with install_approval_ref → agent IS installed
@@ -47,7 +47,7 @@ fn evolution_manifest() -> AgentManifest {
 }
 
 /// Full approval flow via direct tool registry calls:
-/// 1. Call agent.install with high-risk NetConnect capability
+/// 1. Call agent.install with high-risk NetworkAccess capability
 /// 2. Gateway returns approval_required (agent NOT installed)
 /// 3. Programmatically approve the request
 /// 4. Retry with install_approval_ref → agent IS installed
@@ -69,14 +69,14 @@ async fn test_agent_install_full_approval_flow() {
 
     let registry = default_registry();
 
-    // --- Step 1: Call agent.install with high-risk capability (NetConnect) ---
+    // --- Step 1: Call agent.install with high-risk capability (NetworkAccess) ---
     let install_args = serde_json::json!({
         "agent_id": "weather.fetcher",
         "name": "Weather Fetcher",
         "description": "Fetches weather from Open-Meteo API",
         "instructions": "---\nname: weather.fetcher\ndescription: Fetches weather\nexecution_mode: script\nscript_entry: main.py\n---\n# Weather Fetcher\nFetches weather data for given coordinates.",
         "capabilities": [
-            { "type": "NetConnect", "hosts": ["api.open-meteo.com"] }
+            { "type": "NetworkAccess", "hosts": ["api.open-meteo.com"] }
         ],
         "files": [
             { "path": "main.py", "content": "import json\nprint(json.dumps({'temp': 22}))\n" }
@@ -122,7 +122,7 @@ async fn test_agent_install_full_approval_flow() {
             "action": {
                 "type": "agent_install",
                 "agent_id": "weather.fetcher",
-                "summary": "Weather fetcher with NetConnect to api.open-meteo.com",
+                "summary": "Weather fetcher with NetworkAccess to api.open-meteo.com",
                 "requested_by_agent_id": "specialized_builder.default",
                 "install_fingerprint": "test_fingerprint"
             },
@@ -137,7 +137,7 @@ async fn test_agent_install_full_approval_flow() {
         "agent_id": "weather.fetcher",
         "instructions": "---\nname: weather.fetcher\ndescription: Fetches weather\nexecution_mode: script\nscript_entry: main.py\n---\n# Weather Fetcher\nFetches weather data for given coordinates.",
         "capabilities": [
-            { "type": "NetConnect", "hosts": ["api.open-meteo.com"] }
+            { "type": "NetworkAccess", "hosts": ["api.open-meteo.com"] }
         ],
         "files": [
             { "path": "main.py", "content": "import json\nprint(json.dumps({'temp': 22}))\n" }
@@ -193,7 +193,7 @@ async fn test_agent_install_rejects_invalid_approval_ref() {
     let args = serde_json::json!({
         "agent_id": "fake.agent",
         "instructions": "# Fake Agent",
-        "capabilities": [{ "type": "NetConnect", "hosts": ["api.example.com"] }],
+        "capabilities": [{ "type": "NetworkAccess", "hosts": ["api.example.com"] }],
         "promotion_gate": {
             "evaluator_pass": true,
             "auditor_pass": true,
@@ -228,7 +228,7 @@ async fn test_agent_install_approval_policies() {
     let install_args = serde_json::json!({
         "agent_id": "test.worker",
         "instructions": "# Test Worker",
-        "capabilities": [{ "type": "NetConnect", "hosts": ["api.example.com"] }],
+        "capabilities": [{ "type": "NetworkAccess", "hosts": ["api.example.com"] }],
         "promotion_gate": { "evaluator_pass": true, "auditor_pass": true }
     });
 

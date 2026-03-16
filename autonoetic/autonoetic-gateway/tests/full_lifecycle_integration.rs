@@ -29,7 +29,7 @@ agent:
   name: "Coder Default"
   description: "Implements focused changes with verification."
   capabilities:
-    - type: "ToolInvoke"
+    - type: "SandboxFunctions"
       allowed: ["content.", "knowledge."]
 llm_config:
   provider: "openai"
@@ -78,7 +78,7 @@ agent:
   name: "Specialized Builder"
   description: "Installs new durable specialists."
   capabilities:
-    - type: "ToolInvoke"
+    - type: "SandboxFunctions"
       allowed: ["content.", "agent."]
     - type: "AgentInstall"
 llm_config:

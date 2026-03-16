@@ -211,8 +211,8 @@ fn test_generated_wrapper_inherits_base_capabilities() {
     });
     let base_manifest = serde_json::json!({
         "capabilities": [
-            { "type": "ToolInvoke", "allowed": ["web.search"] },
-            { "type": "MemoryRead", "scopes": ["*"] }
+            { "type": "SandboxFunctions", "allowed": ["web.search"] },
+            { "type": "ReadAccess", "scopes": ["*"] }
         ]
     });
     let wrapper_dir = generate_wrapper(
@@ -239,11 +239,11 @@ fn test_generated_wrapper_inherits_base_capabilities() {
     assert_eq!(manifest.capabilities.len(), 2);
     assert!(matches!(
         &manifest.capabilities[0],
-        Capability::ToolInvoke { allowed } if allowed == &vec!["web.search".to_string()]
+        Capability::SandboxFunctions { allowed } if allowed == &vec!["web.search".to_string()]
     ));
     assert!(matches!(
         &manifest.capabilities[1],
-        Capability::MemoryRead { scopes } if scopes == &vec!["*".to_string()]
+        Capability::ReadAccess { scopes } if scopes == &vec!["*".to_string()]
     ));
 }
 
