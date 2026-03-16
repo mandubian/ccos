@@ -16,15 +16,17 @@ metadata:
       name: "Coder Default"
       description: "Produces tested, minimal, and auditable code changes."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "google/gemini-3-flash-preview"
       temperature: 0.1
     capabilities:
       - type: "SandboxFunctions"
-        allowed: ["content.", "knowledge.", "sandbox."]
+        allowed: ["knowledge.", "sandbox."]
       - type: "CodeExecution"
         patterns: ["python3 scripts/*", "node *", "bash *"]
       - type: "WriteAccess"
+        scopes: ["self.*", "skills/*", "scripts/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*", "scripts/*"]
     validation: "soft"
 ---

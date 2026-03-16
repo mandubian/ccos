@@ -16,13 +16,17 @@ metadata:
       name: "Auditor Default"
       description: "Reviews for correctness, risks, and reproducibility."
     llm_config:
-      provider: "openai"
-      model: "gpt-4o"
+      provider: "openrouter"
+      model: "z-ai/glm-5-turbo"
       temperature: 0.1
     capabilities:
       - type: "SandboxFunctions"
-        allowed: ["content.", "knowledge."]
+        allowed: ["knowledge."]
+      - type: "CodeExecution"
+        patterns: ["python3 scripts/*"]
       - type: "WriteAccess"
+        scopes: ["self.*", "skills/*"]
+      - type: "ReadAccess"
         scopes: ["self.*", "skills/*"]
     validation: "soft"
 ---
