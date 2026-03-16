@@ -27,18 +27,6 @@ pub struct ToolMetadata {
     pub path: Option<String>,
 }
 
-/// Extracts the `path` field from tool arguments JSON.
-/// Shared helper for file-backed native tools (memory.read, memory.write, skill.draft).
-fn extract_path_from_args(arguments_json: &str) -> ToolMetadata {
-    let mut meta = ToolMetadata::default();
-    if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
-        if let Some(path) = parsed_args.get("path").and_then(|v| v.as_str()) {
-            meta.path = Some(path.to_string());
-        }
-    }
-    meta
-}
-
 fn validate_relative_agent_path(path: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!path.trim().is_empty(), "path must not be empty");
     anyhow::ensure!(
@@ -106,13 +94,13 @@ fn is_install_high_risk(
     // Broad or powerful capabilities
     for cap in &args.capabilities {
         match cap {
-            Capability::ShellExec { .. } => return true,
-            Capability::MemoryWrite { scopes }
+            Capability::CodeExecution { .. } => return true,
+            Capability::WriteAccess { scopes }
                 if scopes.len() > 2 || scopes.iter().any(|s| s == "*" || s.ends_with("/*")) =>
             {
                 return true
             }
-            Capability::NetConnect { hosts } if !hosts.is_empty() => return true,
+            Capability::NetworkAccess { hosts } if !hosts.is_empty() => return true,
             _ => {}
         }
     }
@@ -442,7 +430,7 @@ impl NativeTool for SandboxExecTool {
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::ShellExec { .. }))
+            .any(|cap| matches!(cap, Capability::CodeExecution { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -493,7 +481,7 @@ impl NativeTool for SandboxExecTool {
         );
         anyhow::ensure!(
             policy.can_exec_shell(&args.command),
-            "sandbox command denied by ShellExec policy"
+            "sandbox command denied by CodeExecution policy"
         );
 
         let dep_plan = dependency_plan_from_args_or_lock(manifest, agent_dir, args.dependencies)?;
@@ -917,7 +905,7 @@ fn execute_duckduckgo_search(
     if !policy.can_connect_net(&engine_host) {
         return Err(anyhow::Error::from(tagged::Tagged::permission(
             anyhow::anyhow!(
-                "Permission Denied: NetConnect does not allow host '{}'",
+                "Permission Denied: NetworkAccess does not allow host '{}'",
                 engine_host
             ),
         )));
@@ -1002,7 +990,7 @@ fn execute_google_search(
     if !policy.can_connect_net(&engine_host) {
         return Err(anyhow::Error::from(tagged::Tagged::permission(
             anyhow::anyhow!(
-                "Permission Denied: NetConnect does not allow host '{}'",
+                "Permission Denied: NetworkAccess does not allow host '{}'",
                 engine_host
             ),
         )));
@@ -1112,7 +1100,7 @@ impl NativeTool for WebSearchTool {
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::NetConnect { .. }))
+            .any(|cap| matches!(cap, Capability::NetworkAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1327,7 +1315,7 @@ impl NativeTool for WebFetchTool {
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::NetConnect { .. }))
+            .any(|cap| matches!(cap, Capability::NetworkAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1366,7 +1354,7 @@ impl NativeTool for WebFetchTool {
         if !policy.can_connect_net(&host) {
             return Err(anyhow::Error::from(tagged::Tagged::permission(
                 anyhow::anyhow!(
-                    "Permission Denied: NetConnect does not allow host '{}'",
+                    "Permission Denied: NetworkAccess does not allow host '{}'",
                     host
                 ),
             )));
@@ -1449,11 +1437,11 @@ impl NativeTool for ContentWriteTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Available to any agent with MemoryWrite capability
+        // Available to any agent with WriteAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+            .any(|cap| matches!(cap, Capability::WriteAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1465,7 +1453,7 @@ impl NativeTool for ContentWriteTool {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "A name for this content (e.g., 'main.py', 'design.json'). Alphanumeric, dots, underscores, and hyphens only."
+                        "description": "A name for this content (e.g., 'main.py', 'scripts/main.py'). Supports path-like names with slashes."
                     },
                     "content": {
                         "type": "string",
@@ -1498,9 +1486,10 @@ impl NativeTool for ContentWriteTool {
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
         anyhow::ensure!(!args.name.trim().is_empty(), "name must not be empty");
+        // Allow alphanumeric, underscores, hyphens, dots, and slashes for path-like names
         anyhow::ensure!(
-            args.name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.'),
-            "name must contain only alphanumeric characters, underscores, hyphens, or dots"
+            args.name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/'),
+            "name must contain only alphanumeric characters, underscores, hyphens, dots, or slashes"
         );
 
         let Some(gw_dir) = gateway_dir else {
@@ -1548,11 +1537,11 @@ impl NativeTool for ContentReadTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Available to any agent with MemoryRead capability
+        // Available to any agent with ReadAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
+            .any(|cap| matches!(cap, Capability::ReadAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1636,11 +1625,11 @@ impl NativeTool for ContentPersistTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Available to any agent with MemoryWrite capability
+        // Available to any agent with WriteAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+            .any(|cap| matches!(cap, Capability::WriteAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1717,11 +1706,11 @@ impl NativeTool for KnowledgeStoreTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Uses MemoryWrite capability (same as memory.remember)
+        // Uses WriteAccess capability (same as memory.remember)
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+            .any(|cap| matches!(cap, Capability::WriteAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1831,11 +1820,11 @@ impl NativeTool for KnowledgeRecallTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Uses MemoryRead capability (same as memory.recall)
+        // Uses ReadAccess capability (same as memory.recall)
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryRead { .. }))
+            .any(|cap| matches!(cap, Capability::ReadAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1906,11 +1895,11 @@ impl NativeTool for KnowledgeSearchTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Uses MemorySearch capability (same as memory.search)
+        // Search is included in ReadAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemorySearch { .. } | Capability::MemoryRead { .. }))
+            .any(|cap| matches!(cap, Capability::ReadAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -1993,11 +1982,11 @@ impl NativeTool for KnowledgeShareTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Uses MemoryShare capability (same as memory.share)
+        // Sharing is included in WriteAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryShare { .. }))
+            .any(|cap| matches!(cap, Capability::WriteAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -2070,136 +2059,6 @@ impl NativeTool for KnowledgeShareTool {
 // ---------------------------------------------------------------------------
 // Skill Draft Tool
 // ---------------------------------------------------------------------------
-
-pub struct SkillDraftTool;
-
-impl NativeTool for SkillDraftTool {
-    fn name(&self) -> &'static str {
-        "skill.draft"
-    }
-
-    fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Relies on MemoryWrite capability as well
-        manifest
-            .capabilities
-            .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().to_string(),
-            description: "Draft a new skill by proposing its SKILL.md content. Drafting a skill requires human approval before it is loaded. The path must be in the skills/ directory (e.g., skills/my_skill.md).".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" },
-                    "evidence_ref": { "type": "string" }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false
-            }),
-        }
-    }
-
-    fn execute(
-        &self,
-        _manifest: &AgentManifest,
-        policy: &PolicyEngine,
-        agent_dir: &Path,
-        gateway_dir: Option<&Path>,
-        arguments_json: &str,
-        session_id: Option<&str>,
-        _turn_id: Option<&str>,
-        config: Option<&autonoetic_types::config::GatewayConfig>,
-    ) -> anyhow::Result<String> {
-        #[derive(Deserialize)]
-        struct Args {
-            path: String,
-            content: String,
-            #[serde(default)]
-            evidence_ref: Option<String>,
-        }
-        let args: Args = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
-
-        anyhow::ensure!(!args.path.trim().is_empty(), "path must not be empty");
-        anyhow::ensure!(
-            args.path.starts_with("skills/"),
-            "skill path must begin with skills/"
-        );
-        anyhow::ensure!(
-            policy.can_write_path(&args.path),
-            "skill draft write denied by policy"
-        );
-
-        // Create approval request directly (like agent.install)
-        let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let manifest = _manifest;
-        
-        let summary = format!("Draft skill: {}", args.path);
-        let action = ScheduledAction::WriteFile {
-            path: args.path.clone(),
-            content: args.content.clone(),
-            requires_approval: true,
-            evidence_ref: args.evidence_ref.clone(),
-        };
-
-        let request = ApprovalRequest {
-            request_id: request_id.clone(),
-            agent_id: manifest.agent.id.clone(),
-            session_id: session_id.unwrap_or("").to_string(),
-            action: action.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-            reason: Some(summary),
-            evidence_ref: None,
-        };
-
-        // Write pending approval file
-        if let Some(cfg) = config {
-            let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
-                .join(format!("{request_id}.json"));
-            std::fs::create_dir_all(pending_path.parent().unwrap())?;
-            crate::scheduler::store::write_json_file(&pending_path, &request)?;
-
-            // Store payload for deterministic retry
-            let payload = serde_json::json!({
-                "path": args.path,
-                "content": args.content,
-                "evidence_ref": args.evidence_ref,
-            });
-            let payload_path = crate::scheduler::store::pending_approvals_dir(cfg)
-                .join(format!("{request_id}_payload.json"));
-            crate::scheduler::store::write_json_file(&payload_path, &payload)?;
-
-            // Also store in reevaluation state for backward compatibility
-            let _ = persist_reevaluation_state(agent_dir, |state| {
-                state.pending_scheduled_action = Some(action.clone());
-                state.open_approval_request_ids.push(request_id.clone());
-            });
-        } else {
-            // Fallback: just store in reevaluation state (old behavior)
-            persist_reevaluation_state(agent_dir, |state| {
-                state.pending_scheduled_action = Some(action);
-            })?;
-        }
-
-        serde_json::to_string(&serde_json::json!({
-            "ok": true,
-            "status": "Skill drafted and pending approval",
-            "request_id": request_id,
-            "path": args.path,
-            "bytes_proposed": args.content.len(),
-            "approval_required": true,
-        }))
-        .map_err(Into::into)
-    }
-
-    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
-        extract_path_from_args(arguments_json)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Agent Install Tool
@@ -2537,11 +2396,11 @@ impl NativeTool for SessionSnapshotTool {
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Available to any agent with MemoryWrite capability
+        // Available to any agent with WriteAccess capability
         manifest
             .capabilities
             .iter()
-            .any(|cap| matches!(cap, Capability::MemoryWrite { .. }))
+            .any(|cap| matches!(cap, Capability::WriteAccess { .. }))
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -2844,6 +2703,60 @@ impl NativeTool for AgentSpawnTool {
     }
 }
 
+/// Provides helpful error context for capability-related deserialization errors.
+fn capability_error_context(serde_error: &serde_json::Error) -> String {
+    let err_str = serde_error.to_string();
+    
+    // Check for common capability format mistakes
+    if err_str.contains("hosts") {
+        return format!(
+            "{}\n\nHELP: NetworkAccess capability requires 'hosts' field.\n\
+            Correct format: {{\"type\": \"NetworkAccess\", \"hosts\": [\"api.example.com\"]}}\n\
+            Use [\"*\"] to allow all hosts.",
+            err_str
+        );
+    }
+    
+    if err_str.contains("allowed") {
+        return format!(
+            "{}\n\nHELP: SandboxFunctions capability requires 'allowed' field.\n\
+            Correct format: {{\"type\": \"SandboxFunctions\", \"allowed\": [\"web.\", \"content.\"]}}",
+            err_str
+        );
+    }
+    
+    if err_str.contains("scopes") {
+        return format!(
+            "{}\n\nHELP: ReadAccess or WriteAccess requires 'scopes' field.\n\
+            Correct format: {{\"type\": \"ReadAccess\", \"scopes\": [\"self.*\"]}}",
+            err_str
+        );
+    }
+    
+    if err_str.contains("max_children") {
+        return format!(
+            "{}\n\nHELP: AgentSpawn capability requires 'max_children' field.\n\
+            Correct format: {{\"type\": \"AgentSpawn\", \"max_children\": 3}}",
+            err_str
+        );
+    }
+    
+    if err_str.contains("unknown field") {
+        return format!(
+            "{}\n\nHELP: Unexpected field detected. Capability types only accept specific fields.\n\
+            - NetworkAccess: type, hosts\n\
+            - SandboxFunctions: type, allowed\n\
+            - ReadAccess/WriteAccess: type, scopes\n\
+            - AgentSpawn: type, max_children\n\
+            - CodeExecution: type, patterns\n\
+            Remove extra fields like 'description' or 'runtime'.",
+            err_str
+        );
+    }
+    
+    err_str
+}
+
 pub struct AgentInstallTool;
 
 impl NativeTool for AgentInstallTool {
@@ -2859,65 +2772,119 @@ impl NativeTool for AgentInstallTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Install a specialized child agent by writing its SKILL.md, runtime.lock, files, and optional background schedule. Only available to evolution roles (specialized_builder, evolution-steward). Other agents should delegate to specialized_builder.default.".to_string(),
+            description: "Install a specialized child agent. Writes the agent's SKILL.md and files to disk. Only available to evolution roles (specialized_builder, evolution-steward).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "agent_id": { "type": "string" },
-                    "name": { "type": "string" },
-                    "description": { "type": "string" },
-                    "instructions": { "type": "string" },
-                    "llm_config": { "type": "object" },
+                    "agent_id": { 
+                        "type": "string",
+                        "description": "Unique identifier for the agent (e.g., 'weather-fetcher'). Use lowercase with hyphens."
+                    },
+                    "name": { 
+                        "type": "string",
+                        "description": "Display name for the agent."
+                    },
+                    "description": { 
+                        "type": "string",
+                        "description": "What this agent does."
+                    },
+                    "instructions": { 
+                        "type": "string",
+                        "description": "The agent's SKILL.md content with instructions."
+                    },
                     "capabilities": {
                         "type": "array",
-                        "items": { "type": "object" }
+                        "description": "List of capabilities this agent needs.",
+                        "items": {
+                            "type": "object",
+                            "description": "Capability object with 'type' and type-specific fields.",
+                            "oneOf": [
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "NetworkAccess" },
+                                        "hosts": { "type": "array", "items": { "type": "string" }, "description": "Allowed hosts. Use ['*'] for all." }
+                                    },
+                                    "required": ["type", "hosts"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "SandboxFunctions" },
+                                        "allowed": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["type", "allowed"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "ReadAccess" },
+                                        "scopes": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["type", "scopes"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "WriteAccess" },
+                                        "scopes": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["type", "scopes"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "AgentSpawn" },
+                                        "max_children": { "type": "integer" }
+                                    },
+                                    "required": ["type", "max_children"]
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": { "const": "CodeExecution" },
+                                        "patterns": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["type", "patterns"]
+                                }
+                            ]
+                        }
                     },
-                    "background": { "type": "object" },
-                    "scheduled_action": { "type": "object" },
                     "files": {
                         "type": "array",
-                        "description": "An array of files to be written to the child agent's directory. Each entry must be an object with 'path' and 'content'. DO NOT stringify this array; it must be a literal JSON array.",
+                        "description": "Files to write to the agent's directory.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "path": {
                                     "type": "string",
-                                    "description": "Relative path to the file (e.g. 'skills/handler.py')."
+                                    "description": "Relative path (e.g., 'scripts/main.py', 'SKILL.md')."
                                 },
                                 "content": {
                                     "type": "string",
-                                    "description": "The literal content of the file."
+                                    "description": "The file content."
                                 }
                             },
-                            "required": ["path", "content"],
-                            "additionalProperties": false
+                            "required": ["path", "content"]
                         }
-                    },
-                    "runtime_lock_dependencies": {
-                        "type": "array",
-                        "items": { "type": "object" }
                     },
                     "promotion_gate": {
                         "type": "object",
+                        "description": "Required for evolution roles. Set both to true.",
                         "properties": {
                             "evaluator_pass": { "type": "boolean" },
-                            "auditor_pass": { "type": "boolean" },
-                            "override_approval_ref": { "type": "string" },
-                            "install_approval_ref": { "type": "string" }
+                            "auditor_pass": { "type": "boolean" }
                         },
-                        "required": ["evaluator_pass", "auditor_pass"],
-                        "additionalProperties": false
+                        "required": ["evaluator_pass", "auditor_pass"]
                     },
-                    "arm_immediately": { "type": "boolean" },
-                    "validate_on_install": { "type": "boolean" },
                     "execution_mode": {
                         "type": "string",
                         "enum": ["script", "reasoning"],
-                        "description": "Script mode runs a script directly without LLM (for deterministic tasks). Reasoning mode uses LLM-driven reasoning (default)."
+                        "description": "Script mode runs code without LLM. Reasoning mode uses LLM (default)."
                     },
                     "script_entry": {
                         "type": "string",
-                        "description": "Entry script path for script mode (e.g., 'scripts/main.py'). Required when execution_mode is 'script'."
+                        "description": "Entry script path when execution_mode is 'script' (e.g., 'scripts/main.py')."
                     }
                 },
                 "required": ["agent_id", "instructions"],
@@ -2938,7 +2905,10 @@ impl NativeTool for AgentInstallTool {
         config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let mut args: InstallAgentArgs = serde_json::from_str(arguments_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+            .map_err(|e| {
+                let context = capability_error_context(&e);
+                anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), context)
+            })?;
         let mut scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
         let mut background =
             normalize_install_background(args.background.clone(), &args.scheduled_action)?;
@@ -3104,7 +3074,8 @@ impl NativeTool for AgentInstallTool {
                         "ok": false,
                         "approval_required": true,
                         "request_id": request_id,
-                        "message": "Install requires human approval. After operator approves, retry agent.install with the same payload and promotion_gate.install_approval_ref set to this request_id."
+                        "message": format!("Install requires approval. To proceed: 1) Get the request approved by an operator, 2) Retry agent.install with the EXACT same payload PLUS add promotion_gate.install_approval_ref = '{}' to your JSON.", request_id),
+                        "retry_instruction": format!("Add this to your promotion_gate: \"install_approval_ref\": \"{}\"", request_id)
                     })
                     .to_string());
                 }
@@ -3165,18 +3136,18 @@ impl NativeTool for AgentInstallTool {
             match action {
                 ScheduledAction::SandboxExec { command, .. } => {
                     if !capabilities.iter().any(|cap| {
-                        matches!(cap, Capability::ShellExec { patterns } if patterns.iter().any(|pattern| pattern == command))
+                        matches!(cap, Capability::CodeExecution { patterns } if patterns.iter().any(|pattern| pattern == command))
                     }) {
-                        capabilities.push(Capability::ShellExec {
+                        capabilities.push(Capability::CodeExecution {
                             patterns: vec![command.clone()],
                         });
                     }
                 }
                 ScheduledAction::WriteFile { path, .. } => {
                     if !capabilities.iter().any(|cap| {
-                        matches!(cap, Capability::MemoryWrite { scopes } if scopes.iter().any(|scope| path.starts_with(scope.trim_end_matches('*'))))
+                        matches!(cap, Capability::WriteAccess { scopes } if scopes.iter().any(|scope| path.starts_with(scope.trim_end_matches('*'))))
                     }) {
-                        capabilities.push(Capability::MemoryWrite {
+                        capabilities.push(Capability::WriteAccess {
                             scopes: vec![path.clone()],
                         });
                     }
@@ -3544,7 +3515,7 @@ impl NativeTool for AgentDiscoverTool {
                     "required_capabilities": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "List of required capability types (e.g., 'ShellExec', 'MemoryWrite', 'NetConnect')"
+                        "description": "List of required capability types (e.g., 'CodeExecution', 'WriteAccess', 'NetworkAccess')"
                     },
                     "exclude_ids": {
                         "type": "array",
@@ -3679,16 +3650,14 @@ impl NativeTool for AgentDiscoverTool {
 
 fn capability_type_name(cap: &Capability) -> String {
     match cap {
-        Capability::ToolInvoke { .. } => "ToolInvoke".to_string(),
-        Capability::MemoryRead { .. } => "MemoryRead".to_string(),
-        Capability::MemoryWrite { .. } => "MemoryWrite".to_string(),
-        Capability::MemoryShare { .. } => "MemoryShare".to_string(),
-        Capability::MemorySearch { .. } => "MemorySearch".to_string(),
-        Capability::NetConnect { .. } => "NetConnect".to_string(),
+        Capability::SandboxFunctions { .. } => "SandboxFunctions".to_string(),
+        Capability::ReadAccess { .. } => "ReadAccess".to_string(),
+        Capability::WriteAccess { .. } => "WriteAccess".to_string(),
+        Capability::NetworkAccess { .. } => "NetworkAccess".to_string(),
         Capability::AgentSpawn { .. } => "AgentSpawn".to_string(),
         Capability::AgentMessage { .. } => "AgentMessage".to_string(),
         Capability::BackgroundReevaluation { .. } => "BackgroundReevaluation".to_string(),
-        Capability::ShellExec { .. } => "ShellExec".to_string(),
+        Capability::CodeExecution { .. } => "CodeExecution".to_string(),
     }
 }
 
@@ -3760,8 +3729,7 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(KnowledgeShareTool));
     // Session tools
     registry.register(Box::new(SessionSnapshotTool));
-    // Skill and agent tools
-    registry.register(Box::new(SkillDraftTool));
+    // Agent tools
     registry.register(Box::new(AgentSpawnTool));
     registry.register(Box::new(AgentInstallTool));
     registry.register(Box::new(AgentExistsTool));
@@ -3889,7 +3857,7 @@ mod tests {
         let manifest_none = test_manifest(vec![]);
         assert_eq!(registry.available_definitions(&manifest_none).len(), 0);
 
-        let manifest_shell = test_manifest(vec![Capability::ShellExec {
+        let manifest_shell = test_manifest(vec![Capability::CodeExecution {
             patterns: vec!["*".into()],
         }]);
         let defs = registry.available_definitions(&manifest_shell);
@@ -3897,14 +3865,14 @@ mod tests {
         assert_eq!(defs[0].name, "sandbox.exec");
 
         let manifest_all = test_manifest(vec![
-            Capability::ShellExec { patterns: vec![] },
-            Capability::MemoryRead { scopes: vec![] },
-            Capability::MemoryWrite { scopes: vec![] },
+            Capability::CodeExecution { patterns: vec![] },
+            Capability::ReadAccess { scopes: vec![] },
+            Capability::WriteAccess { scopes: vec![] },
         ]);
         let defs_all = registry.available_definitions(&manifest_all);
         // sandbox.exec (1) + content.write, content.read, content.persist (3) +
         // knowledge.store, knowledge.recall, knowledge.search (3) +
-        // session.snapshot (1) + skill.draft (1) = 9
+        // session.snapshot (1) + knowledge.share (1) = 9
         assert_eq!(defs_all.len(), 9);
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
@@ -3921,7 +3889,7 @@ mod tests {
         let defs_evolution = registry.available_definitions(&manifest_evolution);
         assert!(defs_evolution.iter().any(|d| d.name == "agent.install"), "agent.install should be available to evolution roles");
 
-        let manifest_net = test_manifest(vec![Capability::NetConnect {
+        let manifest_net = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["*".to_string()],
         }]);
         let defs_net = registry.available_definitions(&manifest_net);
@@ -3932,7 +3900,7 @@ mod tests {
 
     #[test]
     fn test_web_fetch_tool_roundtrip_local_server() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -3978,7 +3946,7 @@ mod tests {
 
     #[test]
     fn test_web_fetch_tool_denied_by_netconnect_policy() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["example.com".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4002,12 +3970,12 @@ mod tests {
                 None,
             )
             .expect_err("web.fetch should be denied");
-        assert!(err.to_string().contains("NetConnect"));
+        assert!(err.to_string().contains("NetworkAccess"));
     }
 
     #[test]
     fn test_web_search_tool_denied_by_netconnect_policy() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["example.com".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4032,12 +4000,12 @@ mod tests {
                 None,
             )
             .expect_err("web.search should be denied");
-        assert!(err.to_string().contains("NetConnect"));
+        assert!(err.to_string().contains("NetworkAccess"));
     }
 
     #[test]
     fn test_web_search_tool_roundtrip_local_engine() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4101,7 +4069,7 @@ mod tests {
 
     #[test]
     fn test_web_search_google_requires_api_key_env() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4134,7 +4102,7 @@ mod tests {
 
     #[test]
     fn test_web_search_google_roundtrip_local_engine() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4209,7 +4177,7 @@ mod tests {
 
     #[test]
     fn test_web_search_google_legacy_cx_env_alias_roundtrip() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4277,7 +4245,7 @@ mod tests {
 
     #[test]
     fn test_web_search_auto_falls_back_to_duckduckgo_when_google_fails() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4378,7 +4346,7 @@ mod tests {
 
     #[test]
     fn test_web_search_cache_hits_without_second_network_call() {
-        let manifest = test_manifest(vec![Capability::NetConnect {
+        let manifest = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["127.0.0.1".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -4569,7 +4537,7 @@ mod tests {
             "agent_id": "net.worker",
             "instructions": "Worker with network access.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -4725,7 +4693,7 @@ mod tests {
         assert!(skill.contains("metadata:\n  autonoetic:"));
         assert!(skill.contains("agent:\n      id: fib_worker"));
         assert!(skill.contains("type: BackgroundReevaluation"));
-        assert!(skill.contains("type: ShellExec"));
+        assert!(skill.contains("type: CodeExecution"));
         assert!(skill.contains("## Output Contract"));
 
         let background_state = std::fs::read_to_string(
@@ -5076,7 +5044,7 @@ dependencies:
 
     #[test]
     fn test_execute_sandbox_tool_call_denied_by_policy() {
-        let manifest = test_manifest(vec![Capability::ShellExec {
+        let manifest = test_manifest(vec![Capability::CodeExecution {
             patterns: vec!["python3 scripts/*".to_string()],
         }]);
         let policy = PolicyEngine::new(manifest.clone());
@@ -5101,7 +5069,7 @@ dependencies:
             .expect_err("policy should deny command");
         assert!(err
             .to_string()
-            .contains("sandbox command denied by ShellExec policy"));
+            .contains("sandbox command denied by CodeExecution policy"));
     }
 
     #[test]
@@ -5292,13 +5260,13 @@ dependencies:
         let parent_dir = agents_dir.join("specialized_builder.default");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        // Malformed: NetConnect without required "hosts" field
+        // Malformed: NetworkAccess without required "hosts" field
         let malformed_args = serde_json::json!({
             "agent_id": "repaired.worker",
             "instructions": "# Repaired Worker\nMinimal specialist.",
             "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
             "capabilities": [
-                { "type": "NetConnect" }
+                { "type": "NetworkAccess" }
             ]
         });
 
@@ -5329,13 +5297,13 @@ dependencies:
             "failed install must not leave partial child directory"
         );
 
-        // Repaired payload: add required "hosts" for NetConnect
+        // Repaired payload: add required "hosts" for NetworkAccess
         let repaired_args = serde_json::json!({
             "agent_id": "repaired.worker",
             "instructions": "# Repaired Worker\nMinimal specialist.",
             "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["example.com"] }
+                { "type": "NetworkAccess", "hosts": ["example.com"] }
             ]
         });
 
@@ -5612,9 +5580,9 @@ Instructions.
             let caps_json = caps
                 .iter()
                 .map(|c| match *c {
-                    "ShellExec" => r#"{"type":"ShellExec","patterns":["*"]}"#.to_string(),
-                    "MemoryWrite" => r#"{"type":"MemoryWrite","scopes":["*"]}"#.to_string(),
-                    _ => format!(r#"{{"type":"ToolInvoke","allowed":["{}"]}}"#, c),
+                    "CodeExecution" => r#"{"type":"CodeExecution","patterns":["*"]}"#.to_string(),
+                    "WriteAccess" => r#"{"type":"WriteAccess","scopes":["*"]}"#.to_string(),
+                    _ => format!(r#"{{"type":"SandboxFunctions","allowed":["{}"]}}"#, c),
                 })
                 .collect::<Vec<_>>()
                 .join(",");
@@ -5649,17 +5617,17 @@ metadata:
         create_agent(
             "researcher.default",
             "Web research and information gathering specialist",
-            &["ToolInvoke"],
+            &["SandboxFunctions"],
         );
         create_agent(
             "coder.default",
-            "Code generation and software development specialist with ShellExec",
-            &["ShellExec", "MemoryWrite"],
+            "Code generation and software development specialist with CodeExecution",
+            &["CodeExecution", "WriteAccess"],
         );
         create_agent(
             "auditor.default",
             "Security audit and compliance specialist",
-            &["MemoryRead"],
+            &["ReadAccess"],
         );
 
         let manifest = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
@@ -5668,7 +5636,7 @@ metadata:
 
         let args = serde_json::json!({
             "intent": "code generation",
-            "required_capabilities": ["ShellExec"],
+            "required_capabilities": ["CodeExecution"],
             "exclude_ids": []
         });
 
@@ -6099,12 +6067,12 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        // Try to install with approval-required capability (NetConnect is high-risk)
+        // Try to install with approval-required capability (NetworkAccess is high-risk)
         let args = serde_json::json!({
             "agent_id": "pending.worker",
             "instructions": "Worker that requires approval.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6175,7 +6143,7 @@ Research agent instructions.
             "agent_id": "fake.approval.worker",
             "instructions": "Worker with fake approval.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6222,7 +6190,7 @@ Research agent instructions.
 
     #[test]
     fn test_agent_install_no_approval_needed_for_low_risk() {
-        // This test verifies that low-risk agents (no NetConnect, no background) 
+        // This test verifies that low-risk agents (no NetworkAccess, no background) 
         // can be installed without approval when using RiskBased policy.
 
         let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
@@ -6232,7 +6200,7 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
-        // Low-risk install: no NetConnect, no background
+        // Low-risk install: no NetworkAccess, no background
         let args = serde_json::json!({
             "agent_id": "simple.worker",
             "instructions": "A simple worker.",
@@ -6292,7 +6260,7 @@ Research agent instructions.
             "agent_id": "stored.payload.worker",
             "instructions": "Worker for payload storage test.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6361,7 +6329,7 @@ Research agent instructions.
             "agent_id": "retry.test.worker",
             "instructions": "# Original Instructions\nThis is the original payload.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6431,7 +6399,7 @@ Research agent instructions.
             "agent_id": "retry.test.worker",
             "instructions": "# CHANGED Instructions\nThis is a different payload that should be ignored!",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["different.api.com"] }
+                { "type": "NetworkAccess", "hosts": ["different.api.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6485,7 +6453,7 @@ Research agent instructions.
             "agent_id": "cleanup.test.worker",
             "instructions": "Worker for cleanup test.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
@@ -6563,7 +6531,7 @@ Research agent instructions.
             "agent_id": "cleanup.test.worker",
             "instructions": "Worker for cleanup test.",
             "capabilities": [
-                { "type": "NetConnect", "hosts": ["api.example.com"] }
+                { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
