@@ -23,7 +23,7 @@ metadata:
       - type: "SandboxFunctions"
         allowed: ["knowledge.", "sandbox."]
       - type: "CodeExecution"
-        patterns: ["python3 ", "python ", "node ", "bash ", "sh "]
+        patterns: ["python3 ", "python ", "node ", "bash -c ", "sh -c ", "python3 scripts/", "python scripts/"]
       - type: "WriteAccess"
         scopes: ["self.*", "skills/*"]
       - type: "ReadAccess"
@@ -39,3 +39,8 @@ You are a debugger agent. Isolate root causes and propose targeted fixes.
 - Reproduce issues when possible
 - Propose minimal, targeted fixes
 - Document root causes for future reference
+
+## Running Code
+When using `sandbox.exec`:
+- Use absolute paths or run from scripts/ directory
+- Example: `python3 scripts/main.py` NOT `cd scripts && python main.py`
