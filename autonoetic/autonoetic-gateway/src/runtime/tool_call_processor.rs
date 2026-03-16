@@ -262,10 +262,10 @@ mod tests {
                 description: "test".to_string(),
             },
             capabilities: vec![
-                Capability::MemoryRead {
+                Capability::ReadAccess {
                     scopes: vec!["*".to_string()],
                 },
-                Capability::MemoryWrite {
+                Capability::WriteAccess {
                     scopes: vec!["*".to_string()],
                 },
             ],
