@@ -87,7 +87,41 @@
 | **RL integration** | Not a focus | Atropos RL environments, Tinker-Atropos integration |
 | **Training readiness** | N/A | Designed for training next-gen tool-calling models |
 
-## 10. Maturity & Status
+## 10. Tool & Skill Repository
+
+| Aspect | Autonoetic (current) | Autonoetic (proposed) | Hermes-Agent |
+|--------|---------------------|----------------------|--------------|
+| **Tool registration** | Scattered match statements in `tools.rs` | Declarative `ToolRegistry` (~150 lines Rust) | `tools/registry.py` (229 lines Python) |
+| **Registration pattern** | Edit match statement + add handler | `register_tool!` macro in each tool file | `registry.register()` at import time |
+| **Schema location** | Hardcoded in match arm | Co-located with handler | Co-located with handler |
+| **Skill system** | None (agents are the only unit) | Shared `~/.autonoetic/skills/` with progressive disclosure | `~/.hermes/skills/` with 3-tier disclosure |
+| **Skill tiers** | N/A | Tier 0: categories → Tier 1: metadata → Tier 2: full content | Same 3 tiers |
+| **Skill sources** | N/A | Local, GitHub, well-known, MCP | Local, GitHub, skills.sh, ClawHub, well-known |
+| **Toolset composition** | Declared in SKILL.md capabilities | Convention in SKILL.md (not gateway code) | `toolsets.py` with `includes` composition |
+| **MCP integration** | Separate MCP tools | Register as first-class tool registry entries | Register as first-class registry entries |
+| **New code estimate** | N/A | ~850 lines (Rust) | ~2200 lines (Python) |
+
+### Key Insight: What Autonoetic Should Take From Hermes
+
+1. **Registry pattern** (not implementation): Tools self-declare metadata. Gateway doesn't need to know what tools exist — it just dispatches.
+
+2. **Progressive disclosure** (proven by Anthropic): Agent sees ~20 tokens/skill in `skill.list`, loads full content only when needed via `skill.view`. Prevents context window bloat.
+
+3. **Skills ≠ Agents**: Hermes correctly separates skills (injectable context) from the agent loop. Autonoetic's `concepts.md` envisioned this ("Global Skill Engine Repository") but never implemented it.
+
+4. **Multi-source discovery**: Hermes' hub pattern (local + GitHub + marketplace + well-known) is the right model. But Autonoetic should implement this as gateway primitives, not a monolithic hub module.
+
+### What Autonoetic Does Better
+
+1. **Toolsets as convention, not code**: Hermes' `toolsets.py` (542 lines) is overkill. Autonoetic makes toolsets a YAML convention in SKILL.md — zero gateway code.
+
+2. **Gateway mediation**: Hermes tools run directly in agent context. Autonoetic's gateway mediation means tool dispatch has a natural enforcement point (capability checking).
+
+3. **Rust performance**: The registry pattern in Rust is faster and has compile-time guarantees that Python can't provide.
+
+---
+
+## 11. Maturity & Status
 
 | Aspect | Autonoetic | Hermes-Agent |
 |--------|-----------|--------------|

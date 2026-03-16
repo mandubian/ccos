@@ -156,13 +156,13 @@ All external interactions require declared capabilities:
 
 | Capability | Grants Access To |
 |------------|-----------------|
-| `MemoryRead` | Reading agent state files |
-| `MemoryWrite` | Writing agent state files |
-| `ToolInvoke` | Invoking MCP and native tools |
-| `ShellExec` | Running shell commands in sandbox |
+| `ReadAccess` | Reading agent state files |
+| `WriteAccess` | Writing agent state files |
+| `SandboxFunctions` | Invoking MCP and native tools |
+| `CodeExecution` | Running shell commands in sandbox |
 | `AgentSpawn` | Spawning child agents |
 | `AgentMessage` | Messaging other agents |
-| `NetConnect` | Network access (with host allowlist) |
+| `NetworkAccess` | Network access (with host allowlist) |
 | `BackgroundReevaluation` | Scheduled background wakes |
 
 ### Capability Scoping
@@ -171,9 +171,9 @@ Capabilities use pattern-based scoping:
 
 ```yaml
 capabilities:
-  - type: "MemoryWrite"
+  - type: "WriteAccess"
     scopes: ["self.*", "skills/*"]  # Can only write to own dir and skills
-  - type: "NetConnect"
+  - type: "NetworkAccess"
     hosts: ["api.open-meteo.com"]   # Can only reach specific hosts
 ```
 

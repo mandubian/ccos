@@ -125,10 +125,10 @@ Not every deployment needs every role as a long-lived installed agent. Some role
 
 Role prompts are not enough by themselves; runtime capability policy must enforce boundaries:
 
-- `researcher` should have explicit external-tool capability (for example native `web.search`/`web.fetch` via `NetConnect`, plus `ToolInvoke` permissions for approved `mcp_*` tools).
+- `researcher` should have explicit external-tool capability (for example native `web.search`/`web.fetch` via `NetworkAccess`, plus `SandboxFunctions` permissions for approved `mcp_*` tools).
 - `researcher` should not depend on ad-hoc shell networking as its primary evidence path.
 - `planner.default` should include structured metadata on each `agent.spawn` delegation.
-- roles without `NetConnect` should not be able to use native web tools; roles without `ToolInvoke` should not be able to see or invoke MCP tools.
+- roles without `NetworkAccess` should not be able to use native web tools; roles without `SandboxFunctions` should not be able to see or invoke MCP tools.
 
 This keeps specialization enforceable at runtime, not only suggested in prompts.
 
@@ -410,7 +410,7 @@ To turn this design into implementation work, the thin next steps are:
    - multi-role delegation chains
    - session affinity across follow-up messages
    - promotion of a reusable worker through evaluator and auditor gates
-   - MCP `ToolInvoke` enforcement (authorized vs unauthorized tool exposure/invocation)
+   - MCP `SandboxFunctions` enforcement (authorized vs unauthorized tool exposure/invocation)
 
 ## 13. Bottom Line
 
@@ -498,8 +498,8 @@ Explicit human override path:
 
 Current iteration status:
 
-- [x] enforce MCP tool exposure/invocation through `ToolInvoke` capability checks
-- [x] add native `web.search` and `web.fetch` tools gated by `NetConnect`
+- [x] enforce MCP tool exposure/invocation through `SandboxFunctions` capability checks
+- [x] add native `web.search` and `web.fetch` tools gated by `NetworkAccess`
 - [x] add `web.search` provider auto-mode (`google` then `duckduckgo`) with bounded TTL response caching
 - [x] support structured `agent.spawn.metadata` delegation contracts in gateway/native spawn paths
 - [x] update `researcher.default` to prefer authorized MCP research tools over ad-hoc shell networking
