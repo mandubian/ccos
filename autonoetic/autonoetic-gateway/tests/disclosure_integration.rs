@@ -132,7 +132,7 @@ llm_config:
   provider: "openai"
   model: "gpt-4o"
 capabilities:
-  - type: "ToolInvoke"
+  - type: "SandboxFunctions"
     allowed: ["content.read", "content.write"]
 disclosure:
   default_class: "public"

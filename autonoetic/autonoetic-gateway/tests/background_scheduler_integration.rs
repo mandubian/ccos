@@ -24,7 +24,7 @@ fn write_background_agent(
     std::fs::create_dir_all(agent_dir.join("state"))?;
     std::fs::create_dir_all(agent_dir.join("skills"))?;
     let skill = format!(
-        "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"{agent_id}\"\n  description: \"Background integration test agent\"\ncapabilities:\n  - type: BackgroundReevaluation\n    min_interval_secs: 5\n    allow_reasoning: false\n  - type: MemoryWrite\n    scopes: [\"skills/*\", \"state/*\"]\nbackground:\n  enabled: true\n  interval_secs: 5\n  mode: deterministic\n  wake_predicates:\n{wake_block}---\n# Instructions\nBackground integration agent.\n",
+        "---\nversion: \"1.0\"\nruntime:\n  engine: \"autonoetic\"\n  gateway_version: \"0.1.0\"\n  sdk_version: \"0.1.0\"\n  type: \"stateful\"\n  sandbox: \"bubblewrap\"\n  runtime_lock: \"runtime.lock\"\nagent:\n  id: \"{agent_id}\"\n  name: \"{agent_id}\"\n  description: \"Background integration test agent\"\ncapabilities:\n  - type: BackgroundReevaluation\n    min_interval_secs: 5\n    allow_reasoning: false\n  - type: WriteAccess\n    scopes: [\"skills/*\", \"state/*\"]\nbackground:\n  enabled: true\n  interval_secs: 5\n  mode: deterministic\n  wake_predicates:\n{wake_block}---\n# Instructions\nBackground integration agent.\n",
     );
     std::fs::write(agent_dir.join("SKILL.md"), skill)?;
     Ok(agent_dir)
