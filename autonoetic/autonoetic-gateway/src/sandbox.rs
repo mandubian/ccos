@@ -1,14 +1,17 @@
 //! Sandbox runner supporting bubblewrap, docker, and firecracker.
 
+use autonoetic_types::causal_chain::EntryStatus;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use std::process::{Child, Command, Stdio};
-use std::{fs, io::{BufRead, BufReader, Write}};
-use std::os::unix::net::{UnixListener, UnixStream};
-use autonoetic_types::causal_chain::EntryStatus;
+use std::{
+    fs,
+    io::{BufRead, BufReader, Write},
+};
 
 const DOCKER_IMAGE_ENV: &str = "AUTONOETIC_DOCKER_IMAGE";
 const FIRECRACKER_CONFIG_ENV: &str = "AUTONOETIC_FIRECRACKER_CONFIG";
@@ -223,11 +226,11 @@ fn handle_sdk_client(
         return Ok(());
     }
     let request: serde_json::Value = serde_json::from_str(&line)?;
-    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
-    let method = request
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let id = request
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = request
         .get("params")
         .and_then(|v| v.as_object())
@@ -263,7 +266,9 @@ fn validate_sdk_relative_path(path: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!path.trim().is_empty(), "path must not be empty");
     anyhow::ensure!(!path.starts_with('/'), "absolute paths are not allowed");
     anyhow::ensure!(
-        !path.split('/').any(|part| part == ".." || part.is_empty() || part == "."),
+        !path
+            .split('/')
+            .any(|part| part == ".." || part.is_empty() || part == "."),
         "path traversal is not allowed"
     );
     Ok(())
@@ -486,13 +491,18 @@ fn dispatch_sdk_method(
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("state.checkpoint requires data"))?;
             let checkpoint = serde_json::json!({ "data": data });
-            write_json_file(&agent_dir.join("state").join("sdk_checkpoint.json"), &checkpoint)?;
+            write_json_file(
+                &agent_dir.join("state").join("sdk_checkpoint.json"),
+                &checkpoint,
+            )?;
             Ok(serde_json::json!({ "ok": true }))
         }
         "state.get_checkpoint" => {
             let path = agent_dir.join("state").join("sdk_checkpoint.json");
             let payload = load_json_file(&path)?;
-            Ok(serde_json::json!({ "data": payload.get("data").cloned().unwrap_or(serde_json::Value::Null) }))
+            Ok(
+                serde_json::json!({ "data": payload.get("data").cloned().unwrap_or(serde_json::Value::Null) }),
+            )
         }
         "events.emit" => {
             let event_type = params
@@ -637,10 +647,16 @@ fn compose_entrypoint(entrypoint: &str, deps: Option<&DependencyPlan>) -> anyhow
     let Some(plan) = deps else {
         return Ok(entrypoint.to_string());
     };
-    anyhow::ensure!(
-        !plan.packages.is_empty(),
-        "dependency plan must contain at least one package"
-    );
+
+    // If no packages needed, just run the entrypoint with the runtime
+    if plan.packages.is_empty() {
+        let cmd = match plan.runtime {
+            DependencyRuntime::Python => format!("python3 {entrypoint}"),
+            DependencyRuntime::NodeJs => format!("node {entrypoint}"),
+        };
+        return Ok(cmd);
+    }
+
     for pkg in &plan.packages {
         validate_dependency_package(pkg)?;
     }
@@ -790,7 +806,8 @@ mod tests {
     #[test]
     fn test_sdk_dispatch_memory_roundtrip() {
         let temp = tempfile::tempdir().expect("tempdir should create");
-        let gateway_dir = gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
+        let gateway_dir =
+            gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
         let params = serde_json::Map::from_iter(vec![
             ("key".to_string(), json!("skills.worker.latest")),
             ("value".to_string(), json!({"n": 13})),
@@ -799,20 +816,28 @@ mod tests {
             .expect("remember should succeed");
         assert_eq!(remember["ok"], json!(true));
 
-        let recall_params = serde_json::Map::from_iter(vec![("key".to_string(), json!("skills.worker.latest"))]);
-        let recall = dispatch_sdk_method("memory.recall", &recall_params, temp.path(), &gateway_dir)
-            .expect("recall should succeed");
+        let recall_params =
+            serde_json::Map::from_iter(vec![("key".to_string(), json!("skills.worker.latest"))]);
+        let recall =
+            dispatch_sdk_method("memory.recall", &recall_params, temp.path(), &gateway_dir)
+                .expect("recall should succeed");
         assert_eq!(recall["value"]["n"], json!(13));
     }
 
     #[test]
     fn test_sdk_dispatch_checkpoint_roundtrip() {
         let temp = tempfile::tempdir().expect("tempdir should create");
-        let gateway_dir = gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
+        let gateway_dir =
+            gateway_dir_from_agent_dir(temp.path()).expect("gateway dir should resolve");
         let checkpoint_params =
             serde_json::Map::from_iter(vec![("data".to_string(), json!({"cursor": 42}))]);
-        let written = dispatch_sdk_method("state.checkpoint", &checkpoint_params, temp.path(), &gateway_dir)
-            .expect("checkpoint should succeed");
+        let written = dispatch_sdk_method(
+            "state.checkpoint",
+            &checkpoint_params,
+            temp.path(),
+            &gateway_dir,
+        )
+        .expect("checkpoint should succeed");
         assert_eq!(written["ok"], json!(true));
 
         let loaded = dispatch_sdk_method(
@@ -821,7 +846,7 @@ mod tests {
             temp.path(),
             &gateway_dir,
         )
-            .expect("load checkpoint should succeed");
+        .expect("load checkpoint should succeed");
         assert_eq!(loaded["data"]["cursor"], json!(42));
     }
 }
