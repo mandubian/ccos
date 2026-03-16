@@ -17,7 +17,7 @@ metadata:
       description: "Front-door lead agent for ambiguous goals. Interprets requests, routes to specialists, and synthesizes responses."
     llm_config:
       provider: "openrouter"
-      model: "z-ai/glm-5-turbo"
+      model: "nvidia/nemotron-3-super-120b-a12b:free"
       temperature: 0.2
     capabilities:
       - type: "SandboxFunctions"
