@@ -38,15 +38,27 @@ pub fn approve_request(
 
     // Directly execute the approved action (install or write).
     // This ensures the action completes even if the caller session has ended.
-    if let Err(e) = execute_approved_action(config, &decision) {
+    let install_result = execute_approved_action(config, &decision);
+    
+    // ALWAYS notify the waiting session so the LLM knows the agent is available
+    // and can use it. This enables the LLM to automatically use the new agent.
+    if let Err(e) = &install_result {
         tracing::warn!(
             target: "approval",
             request_id = %decision.request_id,
             error = %e,
-            "Failed to execute approved action directly; may need manual retry"
+            "Failed to execute approved action directly; agent may need manual retry"
         );
-        // Still send resume event as fallback so agents can retry manually
-        resume_session_after_approval(config, &decision)?;
+    }
+    
+    // Always resume session to notify LLM - either with success or error info
+    if let Err(e) = resume_session_after_approval(config, &decision, install_result.is_ok()) {
+        tracing::warn!(
+            target: "approval",
+            request_id = %decision.request_id,
+            error = %e,
+            "Failed to send session resume notification"
+        );
     }
 
     Ok(decision)
@@ -67,7 +79,7 @@ pub fn reject_request(
     )?;
     
     // Resume the caller's session so they can handle the rejection
-    resume_session_after_approval(config, &decision)?;
+    resume_session_after_approval(config, &decision, false)?;
     
     Ok(decision)
 }
@@ -75,9 +87,12 @@ pub fn reject_request(
 /// Resume a session after approval/rejection by sending an event to the gateway.
 /// This allows the caller (e.g., planner) to automatically continue without
 /// requiring the user to type "approved" in chat.
+/// 
+/// `install_succeeded` indicates whether the auto-install succeeded (if applicable).
 fn resume_session_after_approval(
     config: &GatewayConfig,
     decision: &ApprovalDecision,
+    install_succeeded: bool,
 ) -> anyhow::Result<()> {
     use crate::router::JsonRpcRequest;
     
@@ -107,15 +122,25 @@ fn resume_session_after_approval(
     
     let message = match &decision.action {
         autonoetic_types::background::ScheduledAction::AgentInstall { agent_id, .. } => {
+            let status_message = if install_succeeded {
+                format!(
+                    "Agent '{}' has been approved and installed successfully. You can now use it with agent.spawn('{}', message='...').",
+                    agent_id, agent_id
+                )
+            } else {
+                format!(
+                    "The approval for installing agent '{}' has been {}. Retry agent.install with install_approval_ref='{}'.",
+                    agent_id, status_str, decision.request_id
+                )
+            };
+            
             serde_json::json!({
                 "type": "approval_resolved",
                 "request_id": decision.request_id,
                 "agent_id": agent_id,
                 "status": status_str,
-                "message": format!(
-                    "The approval for installing agent '{}' has been {}. You can now retry agent.install with install_approval_ref='{}'.",
-                    agent_id, status_str, decision.request_id
-                )
+                "install_completed": install_succeeded,
+                "message": status_message
             }).to_string()
         }
         _ => format!("Approval {} for request {}", status_str, decision.request_id),
@@ -246,7 +271,7 @@ fn resume_session_after_approval(
     Ok(())
 }
 
-/// Execute the approved action (agent.install or skill.draft/write).
+/// Execute the approved action (agent.install or file write).
 fn execute_approved_action(
     config: &GatewayConfig,
     decision: &ApprovalDecision,
@@ -269,7 +294,7 @@ fn execute_approved_action(
     }
 }
 
-/// Execute an approved WriteFile action (from skill.draft).
+/// Execute an approved WriteFile action.
 fn execute_approved_write(
     config: &GatewayConfig,
     decision: &ApprovalDecision,
@@ -278,7 +303,7 @@ fn execute_approved_write(
         return Ok(());
     };
 
-    // Load the stored payload (created when skill.draft was called)
+    // Load the stored payload (created when the write was requested)
     let payload_path = pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
     
     let (write_path, write_content) = if payload_path.exists() {
@@ -302,7 +327,7 @@ fn execute_approved_write(
         request_id = %decision.request_id,
         path = %write_path,
         agent_id = %decision.agent_id,
-        "Executing approved skill draft write"
+        "Executing approved file write"
     );
 
     // Write the skill file
@@ -321,7 +346,7 @@ fn execute_approved_write(
         EventScope::Session,
     );
     let _ = trace_session.log_completed(
-        "skill.draft.completed",
+        "file.write.completed",
         Some("approved"),
         Some(serde_json::json!({
             "path": write_path,
@@ -337,7 +362,7 @@ fn execute_approved_write(
         target: "approval",
         request_id = %decision.request_id,
         path = %write_path,
-        "Successfully auto-completed approved skill draft"
+        "Successfully auto-completed approved file write"
     );
 
     Ok(())
