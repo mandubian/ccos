@@ -71,7 +71,7 @@ pub fn execute_scheduled_action(
             );
             anyhow::ensure!(
                 policy.can_write_path(path),
-                "scheduled file write denied by MemoryWrite policy"
+                "scheduled file write denied by WriteAccess policy"
             );
             let target = agent_dir.join(path);
             if let Some(parent) = target.parent() {

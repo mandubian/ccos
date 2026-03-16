@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_execute_scheduled_write_file_action() {
-        let manifest = manifest_with_capabilities(vec![Capability::MemoryWrite {
+        let manifest = manifest_with_capabilities(vec![Capability::WriteAccess {
             scopes: vec!["skills/*".to_string()],
         }]);
         let temp = tempdir().expect("tempdir should create");

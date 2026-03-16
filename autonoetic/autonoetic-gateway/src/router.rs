@@ -897,7 +897,7 @@ mod tests {
         std::fs::create_dir_all(&source_dir).unwrap();
         std::fs::write(
             source_dir.join("SKILL.md"),
-            "---\nname: source\ndescription: test\ncapabilities:\n  - type: MemoryRead\n    scopes: ['*']\n---\nbody\n",
+            "---\nname: source\ndescription: test\ncapabilities:\n  - type: ReadAccess\n    scopes: ['*']\n---\nbody\n",
         ).unwrap();
 
         // Create target agent
