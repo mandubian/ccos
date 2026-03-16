@@ -161,9 +161,9 @@ metadata:
       model: "test-model"
       temperature: 0.0
     capabilities:
-      - type: "MemoryWrite"
+      - type: "WriteAccess"
         scopes: ["*"]
-      - type: "MemoryRead"
+      - type: "ReadAccess"
         scopes: ["*"]
 ---
 # Terminal Memory Agent

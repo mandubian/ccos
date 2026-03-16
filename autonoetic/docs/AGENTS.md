@@ -177,28 +177,75 @@ The body contains natural language instructions for the agent. Key sections typi
 
 ## Capabilities System
 
+### Capability Categories
+
+Capabilities fall into three categories:
+
+| Category | Purpose | Examples |
+|----------|---------|----------|
+| **Tool Access** | Which tools/commands can be invoked | `SandboxFunctions`, `CodeExecution` |
+| **Storage Access** | Which paths/scopes can be read/written | `ReadAccess`, `WriteAccess` |
+| **Privilege Escalation** | Operations that escape sandbox/agent boundaries | `NetworkAccess`, `AgentSpawn` |
+
 ### Available Capabilities
 
-| Type | Fields | Description |
-|------|--------|-------------|
-| `MemoryRead` | `scopes: [string]` | Read agent state files |
-| `MemoryWrite` | `scopes: [string]` | Write agent state files |
-| `MemorySearch` | `scopes: [string]` | Search memory |
-| `MemoryShare` | `allowed_targets: [string]` | Share memory with specific agents |
-| `ToolInvoke` | `allowed: [string]` | Invoke MCP/native tools (prefix matching) |
-| `ShellExec` | `patterns: [string]` | Run shell commands in sandbox |
-| `NetConnect` | `hosts: [string]` | Network access to specific hosts |
-| `AgentSpawn` | `max_children: number` | Spawn child agents |
-| `AgentMessage` | `patterns: [string]` | Message other agents |
-| `BackgroundReevaluation` | `min_interval_secs: number, allow_reasoning: boolean` | Scheduled background wakes |
+| Capability | Fields | Description |
+|------------|--------|-------------|
+| `SandboxFunctions` | `allowed: [string]` | MCP tool access by prefix (e.g., `web.*`, `sandbox.*`) |
+| `ReadAccess` | `scopes: [string]` | Read access to content, memory, knowledge (includes search) |
+| `WriteAccess` | `scopes: [string]` | Write access to content, memory, knowledge (includes share) |
+| `NetworkAccess` | `hosts: [string]` | HTTP/network access to specific hosts |
+| `CodeExecution` | `patterns: [string]` | Execute scripts/commands in sandbox |
+| `AgentSpawn` | `max_children: number` | Create child agent sessions |
+| `AgentMessage` | `patterns: [string]` | Send messages to other agents |
+| `BackgroundReevaluation` | `min_interval_secs: number, allow_reasoning: boolean` | Periodic wake-ups for background processing |
+
+### Capability Semantics
+
+**Storage capabilities control all data operations:**
+
+| Capability | Gates These Tools |
+|------------|------------------|
+| `ReadAccess` | `content.read`, `memory.read`, `knowledge.recall`, `knowledge.search` |
+| `WriteAccess` | `content.write`, `content.persist`, `memory.write`, `knowledge.store`, `knowledge.share` |
+
+**Privilege capabilities gate boundary-crossing operations:**
+
+| Capability | Controls |
+|------------|----------|
+| `NetworkAccess` | HTTP requests via `web.fetch`, `web.search` |
+| `CodeExecution` | Script execution via `sandbox.exec` |
+| `AgentSpawn` | Creating new agent sessions |
 
 ### Scoping
 
 Capabilities use pattern-based scoping:
-- `*` = wildcard (all)
-- `self.*` = own agent directory
-- `skills/*` = installed skills
-- `shared.*` = shared memory scope
+- `*` = wildcard (all access)
+- `self.*` = own agent's state
+- `skills/*` = installed skills directory
+- `scripts/*` = scripts directory
+- `api.*` = API-related state
+
+### Adding New Capabilities
+
+Capabilities are defined in `autonoetic-types/src/capability.rs` as a Rust enum. To add a new capability:
+
+1. Add a variant to the `Capability` enum
+2. Implement the policy check in `policy.rs`
+3. Gate the relevant tool(s) in `is_available()` 
+4. Update this documentation
+
+Example: Adding a hypothetical `ImageGenerate` capability:
+```rust
+// In capability.rs
+pub enum Capability {
+    // ... existing variants ...
+    ImageGenerate {
+        max_size: u32,
+        allowed_formats: Vec<String>,
+    },
+}
+```
 
 ---
 

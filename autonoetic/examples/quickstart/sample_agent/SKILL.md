@@ -20,9 +20,9 @@ metadata:
       model: "gpt-4o"
       temperature: 0.0
     capabilities:
-      - type: "MemoryWrite"
+      - type: "WriteAccess"
         scopes: ["*"]
-      - type: "MemoryRead"
+      - type: "ReadAccess"
         scopes: ["*"]
 ---
 # Field Journal

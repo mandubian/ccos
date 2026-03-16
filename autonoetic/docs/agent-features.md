@@ -44,7 +44,7 @@ metadata:
       model: "gpt-4o"
       temperature: 0.0
     capabilities:
-      - type: "MemoryRead"
+      - type: "ReadAccess"
         scopes: ["*"]
 ---
 # My Agent Instructions
@@ -152,27 +152,27 @@ Capabilities control what agents can do. The gateway enforces these at runtime.
 
 | Capability | Description |
 |------------|-------------|
-| `MemoryRead` | Read from memory scopes |
-| `MemoryWrite` | Write to memory scopes |
-| `ShellExec` | Execute shell commands |
-| `ToolInvoke` | Invoke MCP tools |
+| `ReadAccess` | Read from memory scopes |
+| `WriteAccess` | Write to memory scopes |
+| `CodeExecution` | Execute shell commands |
+| `SandboxFunctions` | Invoke MCP tools |
 | `AgentSpawn` | Spawn child agents |
 | `AgentMessage` | Message other agents |
 | `BackgroundReevaluation` | Schedule background tasks |
-| `NetConnect` | Make network requests |
+| `NetworkAccess` | Make network requests |
 | `SandboxExec` | Execute in sandbox |
 
 ### Capability Examples
 
 ```yaml
 capabilities:
-  - type: "MemoryRead"
+  - type: "ReadAccess"
     scopes: ["*"]
-  - type: "MemoryWrite"
+  - type: "WriteAccess"
     scopes: ["self.*", "shared.*"]
   - type: "AgentSpawn"
     max_children: 5
-  - type: "ShellExec"
+  - type: "CodeExecution"
     patterns: ["cargo test *", "python *"]
 ```
 
@@ -381,9 +381,9 @@ metadata:
       model: "gpt-4o"
       temperature: 0.2
     capabilities:
-      - type: "MemoryRead"
+      - type: "ReadAccess"
         scopes: ["*"]
-      - type: "MemoryWrite"
+      - type: "WriteAccess"
         scopes: ["self.*"]
     io:
       accepts:

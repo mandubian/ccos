@@ -70,14 +70,14 @@ Example target intent shape:
   - Include an `## Output Contract` section describing memory keys and output schema
   - Enable background reevaluation using the requested cadence and execution mode
   - Arm it immediately when the request is clearly asking for a live recurring worker
-| MemoryRecall | `memory_ids`: array of strings | `{ "type": "MemoryRecall", "memory_ids": ["*"] }` |
-| MemoryShare | `allowed_targets`: array of strings | `{ "type": "MemoryShare", "allowed_targets": ["planner.default"] }` |
-| MemorySearch | `scopes`: array of strings | `{ "type": "MemorySearch", "scopes": ["*"] }` |
-| NetConnect | `hosts`: array of strings | `{ "type": "NetConnect", "hosts": ["api.open-meteo.com"] }` |
+| ReadAccess | `scopes`: array of strings | `{ "type": "ReadAccess", "scopes": ["self.*", "skills/*"] }` |
+| WriteAccess | `scopes`: array of strings | `{ "type": "WriteAccess", "scopes": ["self.*", "skills/*"] }` |
+| NetworkAccess | `hosts`: array of strings | `{ "type": "NetworkAccess", "hosts": ["api.open-meteo.com"] }` |
 | AgentSpawn | `max_children`: number | `{ "type": "AgentSpawn", "max_children": 5 }` |
 | AgentMessage | `patterns`: array of strings | `{ "type": "AgentMessage", "patterns": ["*"] }` |
 | BackgroundReevaluation | `min_interval_secs`: number, `allow_reasoning`: boolean | `{ "type": "BackgroundReevaluation", "min_interval_secs": 60, "allow_reasoning": false }` |
-| ShellExec | `patterns`: array of strings | `{ "type": "ShellExec", "patterns": ["python3", "*.py"] }` |
+| CodeExecution | `patterns`: array of strings | `{ "type": "CodeExecution", "patterns": ["python3", "*.py"] }` |
+| SandboxFunctions | `allowed`: array of strings | `{ "type": "SandboxFunctions", "allowed": ["web.*", "sandbox.*"] }` |
 
 ## File shapes (required for agent.install)
 

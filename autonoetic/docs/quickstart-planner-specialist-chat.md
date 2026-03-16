@@ -107,23 +107,23 @@ This shows available presets and which template uses which preset.
 
 ## 2c) Researcher and web search (required for "search today's weather" etc.)
 
-The researcher can use native `web.search` and `web.fetch` only if its runtime SKILL has a **NetConnect** capability that allows the target hosts (e.g. DuckDuckGo, or `*` for all).
+The researcher can use native `web.search` and `web.fetch` only if its runtime SKILL has a **NetworkAccess** capability that allows the target hosts (e.g. DuckDuckGo, or `*` for all).
 
-- If you see errors when the researcher runs goals like "search today's weather", the runtime researcher may have been created from an older bundle without NetConnect. Re-bootstrap so it gets the current researcher (with `NetConnect` and `hosts: ["*"]`):
+- If you see errors when the researcher runs goals like "search today's weather", the runtime researcher may have been created from an older bundle without NetworkAccess. Re-bootstrap so it gets the current researcher (with `NetworkAccess` and `hosts: ["*"]`):
 
   ```bash
   cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml agent bootstrap --overwrite
   ```
 
-- To confirm the runtime researcher can use web search, check that its SKILL includes NetConnect:
+- To confirm the runtime researcher can use web search, check that its SKILL includes NetworkAccess:
 
   ```bash
-  grep -A1 "NetConnect" /tmp/autonoetic-demo/agents/researcher.default/SKILL.md
+  grep -A1 "NetworkAccess" /tmp/autonoetic-demo/agents/researcher.default/SKILL.md
   ```
 
   You should see `hosts: ["*"]` (or at least hosts that include `duckduckgo.com` and any other search/fetch targets).
 
-- **If NetConnect is present but the researcher still doesn't use web search** (e.g. for "search today's weather"): the model may be answering from training data instead of calling the tool. Re-bootstrap so the researcher gets the latest instructions (which tell it to always call `web.search` first for current/live info), then restart the gateway and try again. You can also inspect the planner/researcher trace to see whether `web.search` was in the tool list and whether the model requested it:
+- **If NetworkAccess is present but the researcher still doesn't use web search** (e.g. for "search today's weather"): the model may be answering from training data instead of calling the tool. Re-bootstrap so the researcher gets the latest instructions (which tell it to always call `web.search` first for current/live info), then restart the gateway and try again. You can also inspect the planner/researcher trace to see whether `web.search` was in the tool list and whether the model requested it:
 
   ```bash
   cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml trace show demo-session --agent researcher.default

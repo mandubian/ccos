@@ -468,7 +468,8 @@ fn apply_llm_preset_to_skill(
     agent_id: &str,
 ) -> Option<String> {
     // Determine the template/role from agent_id
-    let template = agent_id.replace(".default", "").replace("_", "");
+    // Remove .default suffix but keep underscores to match llm_preset_mapping keys
+    let template = agent_id.trim_end_matches(".default").to_string();
 
     // Try to resolve LLM config: preset mapping → hardcoded defaults
     let llm = resolve_llm_config(config, Some(&template), None, None, None);
@@ -819,7 +820,7 @@ agent:
   name: "Agent Demo"
   description: "Demo agent"
 capabilities:
-  - type: "ShellExec"
+  - type: "CodeExecution"
     patterns:
       - "python3 scripts/*"
 ---
