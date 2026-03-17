@@ -119,3 +119,35 @@ When `sandbox.exec` fails (exit code != 0):
 1. **DO NOT** rewrite code that was working - may be environment issue
 2. **DO** check stderr for your script's errors (ignore `/etc/profile.d/` noise)
 3. **DO** report environment issues to user if persistent
+
+## Remote Access Approval (CRITICAL)
+
+When `sandbox.exec` returns `approval_required: true` with `remote_access_detected: true`:
+
+**DO NOT retry or work around this!** The code requires network access and needs operator approval.
+
+**STOP and inform the user:**
+```
+Network Access Required
+
+The script needs to access external APIs/services but this requires operator approval.
+
+Detected network patterns:
+- [list the detected_patterns from the response]
+
+To approve this execution, the operator must run:
+  autonoetic gateway approvals approve <request_id> --config <config_path>
+```
+
+**This is a HARD STOP** - do not try alternative approaches, do not continue until the user approves.
+
+## Permission Denied (CRITICAL)
+
+When `sandbox.exec` returns `"error_type": "permission"` with `"message": "sandbox command denied by CodeExecution policy"`:
+
+**DO NOT retry the same command** - it will fail again.
+
+**Options:**
+1. Check if the command matches allowed patterns (`python3 `, `node `, `bash -c `, `sh -c `)
+2. If using packages, add `dependencies` field
+3. If the command is not in allowed patterns, inform the user that the operation is not permitted
