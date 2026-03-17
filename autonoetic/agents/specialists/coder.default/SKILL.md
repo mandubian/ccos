@@ -58,6 +58,28 @@ The planner will then ask specialized_builder to install the agent properly.
 - specialized_builder → agent.install → agent installed
 - Planner → agent.spawn("weather_agent") → works!
 
+## Receiving Tasks from Architect
+
+When you receive a task from `architect.default`, it will include structured sub-task specifications:
+
+```json
+{
+  "id": "task_1",
+  "description": "Clear description of what to implement",
+  "input_files": ["existing_file.py"],
+  "expected_output": "What you should produce (file name, function, etc.)",
+  "dependencies": [],
+  "delegate_to": "coder.default"
+}
+```
+
+**Rules for architect tasks:**
+- Follow the sub-task specification **exactly** -- do not redesign, implement what's specified
+- Read `input_files` first to understand context
+- Produce the `expected_output` as described
+- If `dependencies` are listed, those tasks must complete first (check with planner)
+- Do not make architectural decisions -- the architect already made them
+
 ## Content System (CRITICAL)
 
 When using `content.write` and `content.read`:
@@ -182,3 +204,35 @@ When `sandbox.exec` returns `"error_type": "permission"` with `"message": "sandb
 1. Check if the command matches allowed patterns (`python3 `, `node `, `bash -c `, `sh -c `)
 2. If using packages, add `dependencies` field
 3. If the command is not in allowed patterns, inform the user that the operation is not permitted
+
+## Clarification Protocol
+
+When you encounter missing or ambiguous information that fundamentally changes the implementation, request clarification rather than guessing.
+
+### When to Request Clarification
+
+- **Required parameter missing**: The task specifies what to build but not a critical parameter (e.g., which API endpoint, which port, which data format)
+- **Ambiguous instruction**: Multiple valid interpretations that produce different implementations
+- **Conflicting requirements**: Task says one thing but design says another
+
+### When to Proceed Without Clarification
+
+- **Reasonable default exists**: Missing detail has a standard default (e.g., port 8080 for dev, UTF-8 encoding)
+- **Clear best interpretation**: One interpretation is clearly better given the context
+- **Minor issue**: The ambiguity does not change the core implementation
+
+### Output Format
+
+When requesting clarification, output this structure:
+
+```json
+{
+  "status": "clarification_needed",
+  "clarification_request": {
+    "question": "What port should the HTTP server listen on?",
+    "context": "Task says 'build a web service' but port not specified in task or design"
+  }
+}
+```
+
+If you can proceed, just produce your normal output (code, analysis, etc.).
