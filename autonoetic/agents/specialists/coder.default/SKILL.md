@@ -122,22 +122,35 @@ When `sandbox.exec` fails (exit code != 0):
 
 ## Remote Access Approval (CRITICAL)
 
-When `sandbox.exec` returns `approval_required: true` with `remote_access_detected: true`:
+When `sandbox.exec` returns `approval_required: true` with `request_id`:
 
 **DO NOT retry or work around this!** The code requires network access and needs operator approval.
 
-**STOP and inform the user:**
+**STOP and tell the user:**
 ```
 Network Access Required
 
-The script needs to access external APIs/services but this requires operator approval.
+The script needs to access external APIs but this requires operator approval.
 
-Detected network patterns:
-- [list the detected_patterns from the response]
+Detected patterns: [list from response]
+Approval Request ID: [request_id from response]
 
-To approve this execution, the operator must run:
-  autonoetic gateway approvals approve <request_id> --config <config_path>
+To approve, the operator must run in another terminal:
+  autonoetic gateway approvals approve [request_id] --config [config_path]
+
+After approval, I will retry the execution automatically.
 ```
+
+**Then WAIT** - do not continue or retry until the user approves.
+
+**After user says "approved" or you receive an approval_resolved message:**
+1. Retry `sandbox.exec` with the SAME command PLUS:
+   ```json
+   {
+     "command": "python3 /tmp/weather.py",
+     "approval_ref": "[request_id]"
+   }
+   ```
 
 **This is a HARD STOP** - do not try alternative approaches, do not continue until the user approves.
 
