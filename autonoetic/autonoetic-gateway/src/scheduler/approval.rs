@@ -230,6 +230,9 @@ fn resume_session_after_approval(
         }
     }
     
+    // Ensure background signal poller is running
+    super::signal::start_signal_poller_if_needed(config.agents_dir.clone(), config.port);
+    
     // Clone data needed for the thread
     let request_id = decision.request_id.clone();
     let session_id_owned = session_id.to_string();
@@ -265,6 +268,8 @@ fn resume_session_after_approval(
     // Connect to gateway's JSON-RPC server and send the event
     let gateway_addr = format!("127.0.0.1:{}", config.port);
     let addr = gateway_addr.clone();
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let session_id = target_session.clone();
     
     // Use a blocking task to send the resume event
     std::thread::spawn(move || {
@@ -272,85 +277,152 @@ fn resume_session_after_approval(
         match rt {
             Ok(runtime) => {
                 runtime.block_on(async {
-                    match tokio::net::TcpStream::connect(&addr).await {
-                        Ok(stream) => {
-                            use tokio::io::{AsyncWriteExt, BufWriter};
-                            use tokio::io::AsyncBufReadExt;
-                            
-                            let (read_half, write_half) = stream.into_split();
-                            let mut writer = BufWriter::new(write_half);
-                            let mut reader = tokio::io::BufReader::new(read_half);
-                            
-                            let encoded = serde_json::to_string(&request).unwrap_or_default();
-                            if let Err(e) = writer.write_all(encoded.as_bytes()).await {
-                                tracing::warn!(
-                                    target: "approval",
-                                    error = %e,
-                                    "Failed to write approval resume to gateway"
-                                );
-                                return;
-                            }
-                            if let Err(e) = writer.write_all(b"\n").await {
-                                tracing::warn!(
-                                    target: "approval",
-                                    error = %e,
-                                    "Failed to write newline to gateway"
-                                );
-                                return;
-                            }
-                            if let Err(e) = writer.flush().await {
-                                tracing::warn!(
-                                    target: "approval",
-                                    error = %e,
-                                    "Failed to flush to gateway"
-                                );
-                                return;
-                            }
-                            
-                            tracing::info!(
-                                target: "approval",
-                                target_session = %request.params["session_id"],
-                                "Approval resume event sent to gateway"
-                            );
-                            
-                            // Read response (don't block forever)
-                            let mut response_line = String::new();
-                            let read_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                reader.read_line(&mut response_line)
-                            ).await;
-                            
-                            match read_result {
-                                Ok(Ok(_)) => {
-                                    tracing::info!(
-                                        target: "approval",
-                                        request_id = %request_id,
-                                        "Session resume sent successfully"
-                                    );
-                                }
-                                Ok(Err(e)) => {
+                    const MAX_ATTEMPTS: u32 = 3;
+                    let mut attempt = 0;
+                    loop {
+                        attempt += 1;
+                        let delay = std::time::Duration::from_secs(1 << (attempt - 1)); // 1, 2, 4 seconds
+                        if attempt > 1 {
+                            tokio::time::sleep(delay).await;
+                        }
+                        tracing::debug!(
+                            target: "approval",
+                            attempt,
+                            max_attempts = MAX_ATTEMPTS,
+                            "Attempting to send approval resume to gateway"
+                        );
+                        match tokio::net::TcpStream::connect(&addr).await {
+                            Ok(stream) => {
+                                use tokio::io::{AsyncWriteExt, BufWriter};
+                                use tokio::io::AsyncBufReadExt;
+                                
+                                let (read_half, write_half) = stream.into_split();
+                                let mut writer = BufWriter::new(write_half);
+                                let mut reader = tokio::io::BufReader::new(read_half);
+                                
+                                let encoded = serde_json::to_string(&request).unwrap_or_default();
+                                if let Err(e) = writer.write_all(encoded.as_bytes()).await {
                                     tracing::warn!(
                                         target: "approval",
                                         error = %e,
-                                        "Failed to read response from gateway"
+                                        attempt,
+                                        "Failed to write approval resume to gateway"
                                     );
+                                    if attempt >= MAX_ATTEMPTS {
+                                        break;
+                                    }
+                                    continue;
                                 }
-                                Err(_) => {
-                                    tracing::debug!(
+                                if let Err(e) = writer.write_all(b"\n").await {
+                                    tracing::warn!(
                                         target: "approval",
-                                        "Gateway response timeout (non-fatal)"
+                                        error = %e,
+                                        attempt,
+                                        "Failed to write newline to gateway"
                                     );
+                                    if attempt >= MAX_ATTEMPTS {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                if let Err(e) = writer.flush().await {
+                                    tracing::warn!(
+                                        target: "approval",
+                                        error = %e,
+                                        attempt,
+                                        "Failed to flush to gateway"
+                                    );
+                                    if attempt >= MAX_ATTEMPTS {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                
+                                tracing::info!(
+                                    target: "approval",
+                                    target_session = %request.params["session_id"],
+                                    attempt,
+                                    "Approval resume event sent to gateway"
+                                );
+                                
+                                // Read response (don't block forever)
+                                let mut response_line = String::new();
+                                let read_result = tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    reader.read_line(&mut response_line)
+                                ).await;
+                                
+                                match read_result {
+                                    Ok(Ok(_)) => {
+                                        tracing::info!(
+                                            target: "approval",
+                                            request_id = %request_id,
+                                            attempt,
+                                            "Session resume sent successfully"
+                                        );
+                                        // Consume signal file now that delivery succeeded
+                                        if let Err(e) = super::signal::consume_signal(&gateway_dir, &session_id, &request_id) {
+                                            tracing::warn!(
+                                                target: "approval",
+                                                error = %e,
+                                                "Failed to consume signal file after successful delivery"
+                                            );
+                                        }
+                                        break; // Success, exit loop
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::warn!(
+                                            target: "approval",
+                                            error = %e,
+                                            attempt,
+                                            "Failed to read response from gateway"
+                                        );
+                                        if attempt >= MAX_ATTEMPTS {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    Err(_) => {
+                                        tracing::debug!(
+                                            target: "approval",
+                                            attempt,
+                                            "Gateway response timeout (non-fatal)"
+                                        );
+                                        // Timeout is considered success for delivery purposes
+                                        // Consume signal file now that delivery succeeded
+                                        if let Err(e) = super::signal::consume_signal(&gateway_dir, &session_id, &request_id) {
+                                            tracing::warn!(
+                                                target: "approval",
+                                                error = %e,
+                                                "Failed to consume signal file after timeout"
+                                            );
+                                        }
+                                        break;
+                                    }
                                 }
                             }
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "approval",
+                                    error = %e,
+                                    gateway_addr = %gateway_addr,
+                                    attempt,
+                                    "Failed to connect to gateway for session resume"
+                                );
+                                if attempt >= MAX_ATTEMPTS {
+                                    break;
+                                }
+                                continue;
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "approval",
-                                error = %e,
-                                gateway_addr = %gateway_addr,
-                                "Failed to connect to gateway for session resume"
-                            );
-                        }
+                    }
+                    // If all attempts fail, signal file remains for polling fallback
+                    if attempt >= MAX_ATTEMPTS {
+                        tracing::warn!(
+                            target: "approval",
+                            request_id = %request_id,
+                            "All attempts to send approval resume failed; signal file remains for fallback"
+                        );
                     }
                 });
             }
