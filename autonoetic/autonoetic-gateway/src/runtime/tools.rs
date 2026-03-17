@@ -1,7 +1,7 @@
 use crate::llm::ToolDefinition;
 use crate::policy::PolicyEngine;
 use crate::runtime::reevaluation_state::{execute_scheduled_action, persist_reevaluation_state};
-use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner};
+use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner, SandboxMount};
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, ExecutionMode, LlmConfig};
 use autonoetic_types::background::{
     ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
@@ -52,6 +52,76 @@ fn validate_agent_id(agent_id: &str) -> anyhow::Result<()> {
         "agent_id may only contain ASCII letters, digits, '.', '-' and '_'"
     );
     Ok(())
+}
+
+/// Loads session content from the content store and creates sandbox mounts.
+/// Each content file is mounted at its original path inside the sandbox.
+fn load_session_content_mounts(
+    gateway_dir: Option<&Path>,
+    session_id: &str,
+) -> anyhow::Result<Vec<SandboxMount>> {
+    let Some(gw_dir) = gateway_dir else {
+        return Ok(Vec::new());
+    };
+
+    let store = match crate::runtime::content_store::ContentStore::new(gw_dir) {
+        Ok(s) => s,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut mounts = Vec::new();
+
+    // Get all content names in this session
+    let names_with_handles = match store.list_names_with_handles(session_id) {
+        Ok(n) => n,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    for (name, handle) in names_with_handles {
+        // Read the content from the store
+        let content = match store.read(&handle) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Create a temporary file with the content
+        // The temp file path: /tmp/autonoetic_content/{session_id}/{name}
+        let temp_base = std::env::temp_dir()
+            .join("autonoetic_content")
+            .join(session_id.replace('/', "_"));
+        
+        if let Err(_) = std::fs::create_dir_all(&temp_base) {
+            continue;
+        }
+
+        let temp_file = temp_base.join(&name);
+        if let Some(parent) = temp_file.parent() {
+            if let Err(_) = std::fs::create_dir_all(parent) {
+                continue;
+            }
+        }
+
+        if let Err(_) = std::fs::write(&temp_file, &content) {
+            continue;
+        }
+
+        // Mount at the original path inside sandbox (/tmp/{name})
+        let dest_path = format!("/tmp/{}", name);
+        
+        mounts.push(SandboxMount {
+            source: temp_file,
+            dest: dest_path,
+        });
+
+        tracing::debug!(
+            target: "sandbox",
+            name = %name,
+            handle = %handle,
+            "Mounted session content file into sandbox"
+        );
+    }
+
+    Ok(mounts)
 }
 
 fn background_state_file_for_child(agent_dir: &Path, child_id: &str) -> anyhow::Result<PathBuf> {
@@ -421,6 +491,94 @@ impl NativeToolRegistry {
 
 pub struct SandboxExecTool;
 
+/// Extract code content for security analysis.
+/// If running a script file (e.g., "python3 script.py"), reads the script content.
+/// First checks the content store (session content), then falls back to filesystem.
+/// Otherwise, returns the command itself for analysis.
+fn extract_code_for_analysis(
+    command: &str,
+    agent_dir: &Path,
+    gateway_dir: Option<&Path>,
+    session_id: Option<&str>,
+) -> String {
+    let trimmed = command.trim();
+    
+    // Pattern: python3 /path/to/script.py or python /path/to/script.py
+    for python_cmd in &["python3", "python", "python3.11", "python3.12"] {
+        if trimmed.starts_with(python_cmd) || trimmed.starts_with(&format!("{} ", python_cmd)) {
+            let after_python = trimmed[python_cmd.len()..].trim();
+            
+            // Skip flags like -c, -m, -u
+            if after_python.starts_with('-') {
+                // For "python -c 'code'", analyze the code string
+                if after_python.starts_with("-c ") || after_python.starts_with("-c'") {
+                    let code = after_python
+                        .strip_prefix("-c")
+                        .and_then(|s| s.strip_prefix(' ').or_else(|| s.strip_prefix('\'')))
+                        .and_then(|s| s.strip_suffix('\'').or_else(|| s.strip_suffix('"')))
+                        .unwrap_or("");
+                    return code.to_string();
+                }
+                return command.to_string();
+            }
+            
+            // Extract script path
+            let script_path = after_python.split_whitespace().next().unwrap_or("");
+            if script_path.is_empty() {
+                return command.to_string();
+            }
+            
+            // For /tmp/ paths, try to read from content store first (session content mounting)
+            if script_path.starts_with("/tmp/") {
+                let content_name = &script_path[5..]; // Remove "/tmp/" prefix
+                
+                // Try to read from content store
+                if let (Some(gw_dir), Some(sid)) = (gateway_dir, session_id) {
+                    if let Ok(store) = crate::runtime::content_store::ContentStore::new(gw_dir) {
+                        if let Ok(content) = store.read_by_name_or_handle_hierarchical(sid, content_name) {
+                            if let Ok(content_str) = String::from_utf8(content) {
+                                return content_str;
+                            }
+                        }
+                        // Also try without hierarchical (direct session lookup)
+                        if let Ok(content) = store.read_by_name(sid, content_name) {
+                            if let Ok(content_str) = String::from_utf8(content) {
+                                return content_str;
+                            }
+                        }
+                    }
+                }
+                
+                // Fallback: map sandbox /tmp/ path to host agent_dir
+                let actual_path = agent_dir.join(&script_path[5..]);
+                if let Ok(content) = std::fs::read_to_string(&actual_path) {
+                    return content;
+                }
+                
+                return command.to_string();
+            }
+            
+            // Absolute path (not /tmp/)
+            if script_path.starts_with('/') {
+                let actual_path = std::path::PathBuf::from(script_path);
+                if let Ok(content) = std::fs::read_to_string(&actual_path) {
+                    return content;
+                }
+            } else {
+                // Relative path
+                let actual_path = agent_dir.join(script_path);
+                if let Ok(content) = std::fs::read_to_string(&actual_path) {
+                    return content;
+                }
+            }
+            
+            return command.to_string();
+        }
+    }
+    
+    command.to_string()
+}
+
 impl NativeTool for SandboxExecTool {
     fn name(&self) -> &'static str {
         "sandbox.exec"
@@ -466,9 +624,9 @@ impl NativeTool for SandboxExecTool {
         manifest: &AgentManifest,
         policy: &PolicyEngine,
         agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
+        gateway_dir: Option<&Path>,
         arguments_json: &str,
-        _session_id: Option<&str>,
+        session_id: Option<&str>,
         _turn_id: Option<&str>,
         _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
@@ -496,9 +654,15 @@ impl NativeTool for SandboxExecTool {
         }
 
         // Static analysis for remote access detection
-        // This runs deterministic pattern matching to detect code that requires
-        // network access, regardless of what the LLM self-declares.
-        let remote_analysis = crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&args.command);
+        // Analyzes both the command AND the script content (if running a script file)
+        // For /tmp/ paths, reads from content store (session content mounting)
+        let code_to_analyze = extract_code_for_analysis(
+            &args.command,
+            agent_dir,
+            gateway_dir,
+            session_id,
+        );
+        let remote_analysis = crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&code_to_analyze);
         if remote_analysis.requires_approval {
             tracing::warn!(
                 target: "sandbox",
@@ -523,12 +687,36 @@ impl NativeTool for SandboxExecTool {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Agent directory is not valid UTF-8"))?;
 
-        let runner = SandboxRunner::spawn_with_driver_and_dependencies(
-            driver,
-            agent_dir_str,
-            &args.command,
-            dep_plan.as_ref(),
+        // Load session content mounts for seamless file access in sandbox
+        let session_content_mounts = load_session_content_mounts(
+            gateway_dir,
+            session_id.unwrap_or(&manifest.agent.id),
         )?;
+
+        let runner = if session_content_mounts.is_empty() {
+            // No session content - use original spawn method
+            SandboxRunner::spawn_with_driver_and_dependencies(
+                driver,
+                agent_dir_str,
+                &args.command,
+                dep_plan.as_ref(),
+            )?
+        } else {
+            // Has session content - mount files into sandbox at their original paths
+            tracing::info!(
+                target: "sandbox",
+                mount_count = session_content_mounts.len(),
+                "Mounting session content files into sandbox"
+            );
+            SandboxRunner::spawn_with_session_content(
+                driver,
+                agent_dir_str,
+                &args.command,
+                dep_plan.as_ref(),
+                session_content_mounts,
+            )?
+        };
+
         let output = runner.process.wait_with_output()?;
         let body = serde_json::json!({
             "ok": output.status.success(),
@@ -2715,12 +2903,11 @@ impl NativeTool for AgentSpawnTool {
         // so content written by the child is visible to the parent via the hierarchy
         let child_delegation_path = format!("{}/{}-{}", resolved_session_id, args.agent_id, &uuid::Uuid::new_v4().to_string()[..8]);
 
-        if let Ok(gw_dir) = agent_dir
+        if let Ok(agents_dir) = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory missing parent"))
-            .and_then(|p| p.parent().ok_or_else(|| anyhow::anyhow!("Agents dir missing parent")))
         {
-            if let Ok(store) = crate::runtime::content_store::ContentStore::new(&gw_dir.join(".gateway")) {
+            if let Ok(store) = crate::runtime::content_store::ContentStore::new(&agents_dir.join(".gateway")) {
                 // Set parent relationship so child's content is visible to parent
                 let _ = store.set_parent_session(&child_delegation_path, &resolved_session_id);
                 tracing::info!(

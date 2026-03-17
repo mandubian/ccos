@@ -40,8 +40,82 @@ You are a coding agent. Produce tested, minimal, and auditable changes.
 - Use `content.write` to persist artifacts
 - Follow the principle of minimal changes
 
-## Running Code
-When using `sandbox.exec`:
-- Use absolute paths or run from scripts/ directory
-- Example: `python3 scripts/main.py` NOT `cd scripts && python main.py`
-- The CodeExecution policy matches command prefixes, so `cd` commands won't work
+## Content System (CRITICAL)
+
+When using `content.write` and `content.read`:
+
+1. **`content.write` returns a handle AND a short alias**:
+   ```json
+   {"ok": true, "handle": "sha256:abc123...", "alias": "abc12345", "name": "weather.py"}
+   ```
+
+2. **Use the short alias (8 chars) for reading** - it's easier to copy:
+   - ✅ Best: `content.read({"name_or_handle": "abc12345"})`
+   - ✅ OK: `content.read({"name_or_handle": "sha256:abc123..."})`
+   - ❌ Wrong: `content.read({"name_or_handle": "weather.py"})` - may fail
+
+3. **Always save the `alias`** from `content.write` response for later retrieval
+
+## Running Code (CRITICAL)
+
+### How Sandbox Works
+- Session content files (written via `content.write`) are automatically mounted into `/tmp/` in the sandbox
+- Files written with `content.write` named `script.py` are available at `/tmp/script.py` in sandbox
+- You can run them directly: `python3 /tmp/script.py`
+
+### Workflow for Writing and Running Scripts (REQUIRED)
+
+```json
+// Step 1: Save script to content store
+content.write({
+  "name": "script.py",
+  "content": "import sys\nprint('hello')\n"
+})
+// Returns: {"alias": "abc12345", "handle": "sha256:...", "name": "script.py"}
+
+// Step 2: Run the file directly (it's mounted at /tmp/script.py)
+sandbox.exec({
+  "command": "python3 /tmp/script.py"
+})
+```
+
+### When to Use Dependencies
+Only use `dependencies` when you need to install packages:
+
+```json
+// Need to install packages first
+sandbox.exec({
+  "command": "python3 /tmp/script.py",
+  "dependencies": {"runtime": "python", "packages": ["requests", "pandas"]}
+})
+
+// No packages needed - just run the command
+sandbox.exec({
+  "command": "python3 /tmp/script.py"
+})
+```
+
+### Why Use content.write?
+- Persistent storage in content store
+- Automatically mounted into sandbox at `/tmp/{name}`
+- No need for heredoc (which may trigger security policy)
+- Parent agents can read your files
+
+### Path Rules
+- Use `content.write` with `name`: `"script.py"` → available at `/tmp/script.py`
+- Run with: `python3 /tmp/{name}` where `{name}` matches the content.write name
+- The sandbox sees all session content files mounted at `/tmp/`
+
+## Allowed Commands (CRITICAL)
+Your `CodeExecution` capability allows these patterns:
+- `python3 ` - Python scripts  
+- `node ` - Node.js scripts
+- `bash -c `, `sh -c ` - Shell commands
+
+## Sandbox Execution Failure Handling
+
+When `sandbox.exec` fails (exit code != 0):
+
+1. **DO NOT** rewrite code that was working - may be environment issue
+2. **DO** check stderr for your script's errors (ignore `/etc/profile.d/` noise)
+3. **DO** report environment issues to user if persistent

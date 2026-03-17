@@ -67,17 +67,14 @@ These features were identified by comparing Autonoetic with [Hermes-Agent](https
 | **Skill progressive disclosure** | Hermes uses Anthropic's progressive disclosure pattern: metadata first (name + 1-line desc), full instructions on demand, linked files loaded lazily. Prevents context window bloat when agent has many skills. | Adopt for `skill.list` (metadata only) and `skill.view` (full content) |
 | **Toolset composition** | Hermes' `toolsets.py` supports `includes` for composing toolsets from other toolsets (e.g., `debugging = terminal + web + file`). Enables reusable capability bundles. | Agent-level convention: agents declare `toolset` in SKILL.md, gateway resolves composition |
 | **User profiling (Honcho)** | Hermes integrates Honcho for dialectic user modeling — the agent builds a persistent understanding of user preferences across sessions. Autonoetic's `knowledge.*` tools can support this pattern. | Convention: agents use `knowledge.store` with `scope: user_profile` for persistent user modeling |
-| **Context compression** | Hermes auto-compresses conversation when approaching context limits. Autonoetic's `memory.summarize` covers this, but should support automatic triggering. | `memory.summarize` with auto-trigger in lifecycle (Phase 12) |
+| **Unified memory** | Hermes has MEMORY.md (bounded, curated, injected at wake) + USER.md (user profile) + context compression. Autonoetic should unify memory behind `knowledge.store` with scopes. | `knowledge.store` with `memory`/`user_profile` scopes, gateway projection at wake (Phase 12) |
 | **MCP skill integration** | Hermes exposes MCP servers as skills in its skills hub. Autonoetic should treat MCP tools as first-class skill citizens. | Convention: MCP-discovered tools registered as skills with metadata |
 
-### Textual memory conventions (from `concepts.md` vision)
+### Unified memory model (from `concepts.md` + Hermes patterns)
 
-The original design vision in `docs/design/concepts.md` describes a text-native memory model where agents manage state through plain Markdown files that LLMs can natively read, edit, and reason about. The current implementation only partially realizes this:
+The original design vision in `docs/design/concepts.md` describes memory-bearing agents that learn over time. The current implementation has `knowledge.*` tools but lacks auto-injection at wake and memory consolidation. Hermes demonstrates the value of bounded, curated memory (MEMORY.md/USER.md) injected into the system prompt at wake.
 
-- **Implemented now**: per-agent `state/` files, content-addressable storage, `knowledge.*` tools with SQLite backing
-- **Not yet implemented**: automatic `state/summary.md` rollups, enforced `task.md`/`scratchpad.md`/`handoff.md` conventions, cross-session text-based recall for LLM context
-
-This plan addresses the gap through Phase 13 (Textual Memory Conventions).
+This plan addresses the gap through Phase 12 (Unified Memory System) using `knowledge.store` with three scopes: `memory` (environment facts, tool quirks), `user_profile` (preferences, style), and `ephemeral` (session-specific, searchable but not injected).
 
 ### Cognitive Capsule standardization (from `concepts.md` vision)
 
@@ -769,81 +766,124 @@ The planner is the **sensible default** for human-facing adapters (CLI chat, Wha
 
 ---
 
-## Phase 12: Textual Memory Conventions
+## Phase 12: Unified Memory System
 
-**Problem**: `docs/design/concepts.md` describes a text-native memory model where agents manage state through plain Markdown files that LLMs can natively read, edit, and reason about. The current implementation has per-agent `state/` directories and `knowledge.*` tools, but lacks:
-- Enforced conventions for `task.md`, `scratchpad.md`, `handoff.md`
-- Automatic `state/summary.md` rollups when conversations grow long
-- Cross-session text-based recall that feeds into LLM context (not just SQLite queries)
+**Problem**: `knowledge.*` tools exist but there's no auto-injection of curated memory at wake, no consolidation of older facts, and no distinction between raw recent facts and accumulated wisdom. Agents have no way to build up cross-session understanding that gets better over time.
 
-**Goal**: Implement the textual memory vision from `concepts.md` as agent best practices with gateway support primitives, not as enforced rules.
+**Goal**: A unified memory system built on `knowledge.store` with three scopes (`memory`, `user_profile`, `ephemeral`). Gateway auto-projects curated memory at wake (recent facts + consolidated summary). Background consolidation keeps memory bounded and high-quality.
+
+### Design
+
+**Three knowledge scopes:**
+
+| Scope | Injected at wake? | Purpose |
+|-------|-------------------|---------|
+| `memory` | Yes | Tool quirks, environment facts, stable conventions |
+| `user_profile` | Yes | User preferences, communication style, habits |
+| `ephemeral` | No | Session-specific facts, searchable but not injected |
+
+**Projection format at wake** (gateway builds, injects into system prompt):
+
+```
+MEMORY (your personal notes) [42% — 1,260/3,000 chars]
+══════════════════════════════════════════════
+[Recent facts, raw]
+§ Nitter is flaky on weekends, try backup instances
+§ pip install needs --no-cache-dir in this sandbox
+§ User works with financial datasets
+§
+[Consolidated summary]
+Learned: web scraping tends to fail on weekends;
+this sandbox has caching issues with pip; user
+prefers CSV for data exports, JSON for APIs.
+══════════════════════════════════════════════
+
+USER PROFILE (who the user is) [18% — 360/2,000 chars]
+══════════════════════════════════════════════
+§ Prefers concise responses
+§ Works in UTC+1 timezone
+§ Uses VS Code, Python 3.11
+```
+
+**Budget**: ~3000 chars memory + ~2000 chars user_profile. When exceeded, older raw facts are consolidated into the summary.
 
 ### Tasks
 
-**13.1 Add `memory.summarize` primitive**
-
-- **File**: `autonoetic-gateway/src/runtime/tools.rs`
-- **Action**: Add native tool `memory.summarize(session_id, target_file?)` that:
-  1. Takes the full conversation history for a session
-  2. Uses the agent's LLM to generate a concise summary
-  3. Writes the summary to `state/summary.md` (or specified target file)
-  4. Returns the summary text
-- **Use case**: Called by agents (or automatically by the gateway) when conversation history approaches context window limits.
-- **Capability**: Uses existing `WriteAccess` capability
-
-**13.2 Add automatic summary rollup hook**
+**12.1 Add memory projection at wake**
 
 - **File**: `autonoetic-gateway/src/runtime/lifecycle.rs`
-- **Action**: Add optional auto-summarization at the end of reasoning loops:
-  - If `auto_summarize: true` in agent manifest, and conversation exceeds `summarize_threshold` tokens
-  - Gateway triggers `memory.summarize` before hibernation
-  - Summary is written to `state/summary.md`
-  - Next wake loads summary + recent turns instead of full history
+- **Action**: At agent wake, query `knowledge.search("memory", "*")` and `knowledge.search("user_profile", "*")`, render into bounded text blocks, inject into system prompt
+- **Format**: Recent facts (last 5-10) shown raw, older facts shown as consolidated summary
+- **Frozen snapshot**: Projection captured at wake, not refreshed mid-session (preserves prefix cache)
+
+**12.2 Add memory consolidation (background)**
+
+- **File**: `autonoetic-gateway/src/runtime/lifecycle.rs` (background hook)
+- **Action**: Periodic consolidation process (runs after N sessions or on schedule):
+  1. Take `memory` and `user_profile` facts older than threshold or exceeding budget
+  2. Use cheap model to summarize into consolidated entry
+  3. Remove individual old facts, replace with consolidated summary
+  4. Keep last 5-10 facts raw (most recent, most likely relevant)
 - **Configuration** in SKILL.md:
   ```yaml
   memory:
-    auto_summarize: true
-    summarize_threshold: 8000  # tokens
-    summary_file: "state/summary.md"
+    consolidate_after: 10     # sessions
+    budget_chars: 3000        # memory scope budget
+    user_budget_chars: 2000   # user_profile scope budget
   ```
 
-**13.3 Document textual state conventions**
+**12.3 Add security scanning for injected content**
 
-- **File**: `autonoetic/docs/textual-memory.md` (new)
-- **Action**: Document the recommended conventions from `concepts.md`:
-  - `state/task.md`: authoritative checklist with status markers (`[ ]`, `[x]`, `[~]`, `[!]`)
-  - `state/scratchpad.md`: short-lived working notes, cleared between major tasks
-  - `state/handoff.md`: compact progress snapshot for delegation or resumption
-  - `state/summary.md`: auto-generated conversation summaries for context management
-  - `state/learnings.md`: distilled insights from `learning.consolidate`
-- **Emphasis**: These are **conventions**, not enforced rules. Agents choose which files to use.
+- **File**: `autonoetic-gateway/src/skills/security.rs` (or inline in lifecycle)
+- **Action**: Before injecting memory/user_profile content into system prompt, scan for:
+  - Prompt injection patterns ("ignore previous instructions", "you are now...")
+  - Exfiltration attempts (curl with secrets, env file reads)
+  - Invisible unicode characters
+- **Blocked content**: Replaced with `[BLOCKED: content contained potential injection]`
 
-**13.4 Add `memory.recall_text` primitive**
+**12.4 Add system prompt guidance**
 
-- **File**: `autonoetic-gateway/src/runtime/tools.rs`
-- **Action**: Add native tool `memory.recall_text(query, scope?, limit?)` that performs semantic search across an agent's textual memory files (`state/*.md`, `history/*.jsonl`) and returns relevant excerpts with file paths and line numbers.
-- **Difference from `session.search`**: `session.search` searches across all sessions system-wide. `memory.recall_text` searches within an agent's own textual memory files, optimized for the LLM context window (returns compact, relevant excerpts).
-- **Implementation**: FTS5 index on `state/` and `history/` directories. Re-index on file writes.
-- **Capability**: Uses existing `ReadAccess` capability
+- **File**: `autonoetic-gateway/src/runtime/lifecycle.rs` (prompt assembly)
+- **Action**: Inject guidance into system prompt (like Hermes' MEMORY_GUIDANCE):
+  ```
+  MEMORY: You have persistent memory across sessions. Save durable facts 
+  using knowledge.store(id, fact, "memory"): user preferences, environment 
+  details, tool quirks, stable conventions. Memory is injected every session, 
+  keep it compact. Do NOT save task progress or session outcomes to memory; 
+  use session.search for those.
+  
+  USER PROFILE: Save what you learn about the user using 
+  knowledge.store(id, fact, "user_profile"): name, preferences, 
+  communication style, workflow habits.
+  ```
 
-**13.5 Add context file injection**
+**12.5 Agent uses content.write for working files**
 
-- **File**: `autonoetic-gateway/src/runtime/lifecycle.rs`
-- **Action**: At agent wake, automatically inject content from `state/summary.md` (if exists) into the system prompt as "Previous session context". This gives the LLM immediate access to cross-session memory without explicit tool calls.
-- **Configuration**: Controlled by `memory.inject_summary: true` in SKILL.md frontmatter.
+- **File**: `autonoetic/docs/AGENTS.md` (update)
+- **Action**: Document that agents can use `content.write` for any working files they need (task tracking, scratchpads, notes). No enforced conventions — the agent organizes itself.
+- **Recommended patterns** (optional, in agent SKILL.md instructions):
+  ```
+  For tracking progress: content.write("task.md", "## Goal: ...\n- [done] ...")
+  For working notes: content.write("notes.md", "...")
+  For handoff: content.write("handoff.md", "Status: ... Next: ...")
+  ```
 
-**13.6 Update tests**
+**12.6 Update tests**
 
-- **Action**: Add tests for auto-summarization threshold detection. Test `memory.recall_text` relevance. Test context injection at agent wake.
+- **Action**: Test memory projection at wake (correct scopes, bounded output, frozen snapshot). Test consolidation (old facts merged, recent kept raw). Test security scanning (injection blocked).
 
 ### Acceptance Criteria
 
-- `memory.summarize` produces useful summaries written to `state/summary.md`
-- Auto-summarization triggers when configured threshold is exceeded
-- `memory.recall_text` returns relevant excerpts from agent's textual memory
-- Context injection loads `state/summary.md` into system prompt at wake
-- Textual memory conventions are documented as best practices (not enforced)
-- LLMs can naturally read, edit, and reason about state files
+- `knowledge.store(id, fact, "memory")` facts are injected at wake as bounded text block
+- `knowledge.store(id, fact, "user_profile")` facts are injected separately
+- Recent facts (last 5-10) shown raw, older facts shown as consolidated summary
+- Total injection bounded (~3000 + ~2000 chars)
+- Frozen snapshot: projection stable within session (preserves prefix cache)
+- Background consolidation merges old facts into summary
+- Security scanning blocks injection patterns in injected content
+- System prompt includes guidance on what to save to memory vs user_profile
+- Agents can use `content.write` for any working files (no enforced conventions)
+- `knowledge.search("memory", query)` works for structured recall
 
 ---
 
