@@ -594,8 +594,7 @@ impl NativeTool for SandboxExecTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Execute an approved shell command in the configured sandbox driver"
-                .to_string(),
+            description: "Execute an approved shell command in the configured sandbox driver. If remote access is detected, an approval request is created - retry with approval_ref after approval.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -611,6 +610,10 @@ impl NativeTool for SandboxExecTool {
                             }
                         },
                         "required": ["runtime", "packages"]
+                    },
+                    "approval_ref": {
+                        "type": "string",
+                        "description": "Approval request ID (from previous approval_required response). Provide this after operator approval to execute code with remote access."
                     }
                 },
                 "required": ["command"],
@@ -628,7 +631,7 @@ impl NativeTool for SandboxExecTool {
         arguments_json: &str,
         session_id: Option<&str>,
         _turn_id: Option<&str>,
-        _config: Option<&autonoetic_types::config::GatewayConfig>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
         let args: SandboxExecArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -637,6 +640,43 @@ impl NativeTool for SandboxExecTool {
             !args.command.trim().is_empty(),
             "sandbox command must not be empty"
         );
+
+        // Check if this is a retry with approval_ref
+        // If so, validate the approval and proceed with execution
+        if let Some(approval_ref) = args.approval_ref.as_ref() {
+            if let Some(cfg) = config {
+                let approved_path = crate::scheduler::store::approved_approvals_dir(cfg)
+                    .join(format!("{approval_ref}.json"));
+                if approved_path.exists() {
+                    let decision: autonoetic_types::background::ApprovalDecision =
+                        crate::scheduler::store::read_json_file(&approved_path)?;
+                    match &decision.action {
+                        autonoetic_types::background::ScheduledAction::SandboxExec { command, .. }
+                            if command == &args.command => {
+                            tracing::info!(
+                                target: "sandbox.exec",
+                                approval_ref = %approval_ref,
+                                "Proceeding with approved sandbox execution"
+                            );
+                            // Approval validated - continue to execution
+                        }
+                        _ => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "approval_ref '{}' does not match this sandbox.exec command",
+                                approval_ref
+                            ))
+                            .into());
+                        }
+                    }
+                } else {
+                    return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                        "approval_ref '{}' not found in approved approvals; sandbox.exec must be approved first",
+                        approval_ref
+                    ))
+                    .into());
+                }
+            }
+        }
 
         // Check policy with detailed security analysis
         let (allowed, analysis) = policy.can_exec_shell_detailed(&args.command);
@@ -669,6 +709,54 @@ impl NativeTool for SandboxExecTool {
                 patterns = ?remote_analysis.detected_patterns,
                 "Code requires remote access - operator approval required"
             );
+
+            // Create an actual approval request so operator can approve
+            if let Some(cfg) = config {
+                let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let summary = format!("Sandbox exec: {}", &args.command[..args.command.len().min(60)]);
+                let action = autonoetic_types::background::ScheduledAction::SandboxExec {
+                    command: args.command.clone(),
+                    dependencies: args.dependencies.as_ref().map(|d| {
+                        autonoetic_types::background::ScheduledActionDependencies {
+                            runtime: d.runtime.clone(),
+                            packages: d.packages.clone(),
+                        }
+                    }),
+                    requires_approval: true,
+                    evidence_ref: None,
+                };
+                let request = autonoetic_types::background::ApprovalRequest {
+                    request_id: request_id.clone(),
+                    agent_id: manifest.agent.id.clone(),
+                    session_id: session_id.unwrap_or("").to_string(),
+                    action,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    reason: Some(format!("Remote access detected: {}", remote_analysis.summary)),
+                    evidence_ref: None,
+                };
+                let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
+                    .join(format!("{request_id}.json"));
+                if let Err(e) = std::fs::create_dir_all(pending_path.parent().unwrap()) {
+                    tracing::error!(target: "sandbox", error = %e, "Failed to create approval directory");
+                } else if let Err(e) = crate::scheduler::store::write_json_file(&pending_path, &request) {
+                    tracing::error!(target: "sandbox", error = %e, "Failed to create approval request");
+                }
+
+                return serde_json::to_string(&serde_json::json!({
+                    "ok": false,
+                    "exit_code": null,
+                    "stdout": "",
+                    "stderr": format!("Remote access detected: {}. Operator approval required to execute code with network access.", remote_analysis.summary),
+                    "approval_required": true,
+                    "request_id": request_id,
+                    "remote_access_detected": true,
+                    "detected_patterns": remote_analysis.detected_patterns,
+                    "message": format!("To approve: 1) Get approval from operator, 2) Retry sandbox.exec with the SAME command PLUS add approval_ref = '{}' to your JSON.", request_id),
+                }))
+                .map_err(Into::into);
+            }
+
+            // No config available - return basic response
             return serde_json::to_string(&serde_json::json!({
                 "ok": false,
                 "exit_code": null,
@@ -4061,6 +4149,8 @@ pub(crate) struct SandboxExecArgs {
     command: String,
     #[serde(default)]
     dependencies: Option<SandboxExecDependencies>,
+    #[serde(default)]
+    approval_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
