@@ -2086,3 +2086,103 @@ Any agent with `NetworkAccess` capability should require human approval:
 - [x] promotion_gate requires actual analysis evidence, not just boolean flags
 - [x] NetworkAccess capability triggers human approval
 - [x] All security tests pass
+
+---
+
+## Phase 11: Agent-to-Agent Clarification Protocol (2026-03-17)
+
+**Problem:** When a spawned specialist (coder, researcher, etc.) encounters ambiguous or missing information in its task, there is no structured mechanism to ask for clarification. The agent either:
+1. Makes an assumption and proceeds (may be wrong)
+2. Fails with an error (wasteful)
+3. Asks in unstructured text (may not get forwarded to the caller)
+
+The foundation instructions say "ask a short user-facing question rather than inventing hidden assumptions" but provide no tool or output format for this. Worse, when a spawned specialist needs clarification, the user doesn't see its output — only the planner's synthesized response.
+
+**Design:** Structured clarification via output format (no gateway code changes needed).
+
+### The Clarification Flow
+
+```
+1. Planner spawns coder: "Build an HTTP endpoint"
+2. Coder turn: finds ambiguity → outputs clarification_request
+3. Gateway routes result back to planner (standard delegation return)
+4. Planner's next turn: sees coder needs clarification
+5. Planner either:
+   a. Answers from its knowledge: "Use 8080" → respawns coder with clarified instructions
+   b. Asks user: "The coder needs to know what port. What port?"
+   c. Answers from user response → respawns coder
+```
+
+### Clarification Request Output Format
+
+When an agent is blocked by missing/ambiguous information, it outputs:
+
+```json
+{
+  "status": "clarification_needed",
+  "clarification_request": {
+    "question": "What port should the server listen on?",
+    "context": "Task says 'build a web service' but port not specified in task or design"
+  }
+}
+```
+
+**When to request clarification:**
+- Missing required parameter that changes the implementation fundamentally
+- Ambiguous instruction with multiple valid interpretations that produce different outcomes
+- Conflicting requirements between task and design
+
+**When to proceed without clarification:**
+- Missing detail has reasonable default (e.g., port 8080 for dev server)
+- Ambiguity has one clearly best interpretation
+- Issue is minor and doesn't change the core outcome
+
+### Caller Handling
+
+When a planner receives a child agent's clarification request:
+
+1. **Can I answer from context?** → Answer directly, respawn child with clarified instructions + previous work handle
+2. **Do I need user input?** → Ask user, wait for response, then respawn child
+3. **Combine both** → Answer what I can, ask user for what I can't
+
+### Respawn Pattern
+
+When respawning a child after clarification:
+- Include the clarified instruction in the new message
+- Include a reference to previous work: "Previous work saved as handle:sha256:..."
+- Include original task context so the child doesn't restart from scratch
+
+### Agent-Level Only
+
+This is implemented entirely through instruction changes:
+- Foundation instructions: define the clarification protocol
+- Planner SKILL.md: add child clarification handling
+- Specialist SKILL.md files: add clarification output format
+
+No gateway code changes. No new tools. Uses existing delegation result routing.
+
+### Tasks
+
+- [x] Add foundation rule 13 (Clarification Protocol) to `foundation_instructions.md`
+- [x] Add child clarification handling to `planner.default/SKILL.md`
+- [x] Add clarification output format to `coder.default/SKILL.md`
+- [x] Add clarification output format to `architect.default/SKILL.md`
+- [x] Add clarification output format to `evaluator.default/SKILL.md`
+- [x] Add clarification output format to `auditor.default/SKILL.md`
+- [x] Add clarification output format to `debugger.default/SKILL.md`
+- [x] Add clarification output format to `researcher.default/SKILL.md`
+- [x] Create `docs/agent-clarification-protocol.md` documentation
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `autonoetic-gateway/src/runtime/foundation_instructions.md` | Added Rule 13: Clarification Protocol |
+| `agents/lead/planner.default/SKILL.md` | Added "Handling Child Agent Clarification Requests" section |
+| `agents/specialists/coder.default/SKILL.md` | Added "Clarification Protocol" section |
+| `agents/specialists/architect.default/SKILL.md` | Added "Clarification Protocol" section |
+| `agents/specialists/evaluator.default/SKILL.md` | Added "Clarification Protocol" section |
+| `agents/specialists/auditor.default/SKILL.md` | Added "Clarification Protocol" section |
+| `agents/specialists/debugger.default/SKILL.md` | Added "Clarification Protocol" section |
+| `agents/specialists/researcher.default/SKILL.md` | Added "Clarification Protocol" section |
+| `docs/agent-clarification-protocol.md` | NEW: Full protocol documentation |

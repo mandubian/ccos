@@ -85,3 +85,26 @@ Core runtime model:
 - Errors should be returned as structured JSON: `{"ok": false, "error_type": "...", "message": "..."}`.
 - LLM agents are NOT required to return strict JSON - use natural language for LLM responses.
 - Script agents are ALWAYS required to return strict JSON matching their schema.
+
+13. Clarification Protocol (Agent-to-Agent and Agent-to-User).
+- When blocked by missing or ambiguous information that fundamentally changes the outcome, request clarification rather than guessing.
+- Output a structured clarification request:
+  ```
+  {"status": "clarification_needed", "clarification_request": {"question": "...", "context": "..."}}
+  ```
+- When to request clarification:
+  - Missing required parameter that changes the implementation fundamentally (e.g., port number, API endpoint, data format)
+  - Ambiguous instruction with multiple valid interpretations that produce different outcomes
+  - Conflicting requirements between task and design
+- When to proceed WITHOUT clarification:
+  - Missing detail has a reasonable default (e.g., port 8080 for dev server, UTF-8 encoding, standard timeouts)
+  - Ambiguity has one clearly best interpretation given the context
+  - Issue is minor and does not change the core outcome
+- Callers (agents that spawned children): when a child returns `clarification_needed`:
+  - If you can answer from your knowledge of the goal, answer directly and respawn the child with clarified instructions plus a reference to its previous work
+  - If you need user input, ask the user, then respawn the child with the user's answer
+  - You may combine both: answer what you can from context, ask the user for what you cannot
+- When respawning after clarification, include:
+  - The clarified instruction in the new message
+  - A reference to previous work: "Previous work saved as handle:sha256:..."
+  - Original task context so the child does not restart from scratch
