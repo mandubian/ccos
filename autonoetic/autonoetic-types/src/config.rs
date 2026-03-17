@@ -137,6 +137,106 @@ pub struct GatewayConfig {
     /// Map role/template names to LLM presets (e.g., "planner" → "agentic", "coder" → "coding").
     #[serde(default)]
     pub llm_preset_mapping: HashMap<String, String>,
+
+    /// Code analysis configuration for agent.install validation.
+    /// Controls how the gateway analyzes code for capabilities and security.
+    #[serde(default)]
+    pub code_analysis: CodeAnalysisConfig,
+}
+
+/// Configuration for pluggable code analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeAnalysisConfig {
+    /// Provider for capability analysis: "pattern", "llm", "composite", "none"
+    #[serde(default = "default_capability_provider")]
+    pub capability_provider: String,
+
+    /// Provider for security analysis: "pattern", "llm", "composite", "none"
+    #[serde(default = "default_security_provider")]
+    pub security_provider: String,
+
+    /// Require capabilities to be declared (reject if missing)
+    #[serde(default = "default_require_capabilities")]
+    pub require_capabilities: bool,
+
+    /// Capability types that always require human approval when detected
+    #[serde(default)]
+    pub require_approval_for: Vec<String>,
+
+    /// LLM configuration for LLM-based analysis providers
+    #[serde(default)]
+    pub llm_config: CodeAnalysisLlmConfig,
+}
+
+fn default_capability_provider() -> String {
+    "pattern".to_string()
+}
+
+fn default_security_provider() -> String {
+    "pattern".to_string()
+}
+
+fn default_require_capabilities() -> bool {
+    true
+}
+
+impl Default for CodeAnalysisConfig {
+    fn default() -> Self {
+        Self {
+            capability_provider: default_capability_provider(),
+            security_provider: default_security_provider(),
+            require_capabilities: default_require_capabilities(),
+            require_approval_for: vec!["NetworkAccess".to_string(), "CodeExecution".to_string()],
+            llm_config: CodeAnalysisLlmConfig::default(),
+        }
+    }
+}
+
+/// LLM configuration for code analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeAnalysisLlmConfig {
+    /// LLM provider for analysis (e.g., "openrouter", "anthropic")
+    #[serde(default = "default_analysis_provider")]
+    pub provider: String,
+
+    /// Model for code analysis
+    #[serde(default = "default_analysis_model")]
+    pub model: String,
+
+    /// Temperature (lower = more deterministic)
+    #[serde(default = "default_analysis_temperature")]
+    pub temperature: f32,
+
+    /// Timeout in seconds
+    #[serde(default = "default_analysis_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_analysis_provider() -> String {
+    "openrouter".to_string()
+}
+
+fn default_analysis_model() -> String {
+    "google/gemini-3-flash-preview".to_string()
+}
+
+fn default_analysis_temperature() -> f32 {
+    0.1
+}
+
+fn default_analysis_timeout() -> u64 {
+    30
+}
+
+impl Default for CodeAnalysisLlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_analysis_provider(),
+            model: default_analysis_model(),
+            temperature: default_analysis_temperature(),
+            timeout_secs: default_analysis_timeout(),
+        }
+    }
 }
 
 fn default_agents_dir() -> PathBuf {
@@ -193,6 +293,7 @@ impl Default for GatewayConfig {
             schema_enforcement: SchemaEnforcementConfig::default(),
             llm_presets: HashMap::new(),
             llm_preset_mapping: HashMap::new(),
+            code_analysis: CodeAnalysisConfig::default(),
         }
     }
 }

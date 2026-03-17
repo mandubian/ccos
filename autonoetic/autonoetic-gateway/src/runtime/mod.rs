@@ -3,6 +3,7 @@
 //! Contains all logic for running an agent locally, including parsing its SKILL.md,
 //! managing Tier 1 and Tier 2 memory, and enforcing the execution lifecycle.
 
+pub mod analysis;
 pub mod artifact;
 pub mod capability_inference;
 pub mod content_store;
