@@ -3204,41 +3204,109 @@ impl NativeTool for AgentInstallTool {
         );
 
         // ─────────────────────────────────────────────────────────────────
-        // Capability Inference: Analyze code to detect required capabilities
+        // Pluggable Code Analysis: Analyze code for capabilities and security
+        // Provider is selected via GatewayConfig.code_analysis
         // ─────────────────────────────────────────────────────────────────
-        let capability_validation = {
-            // Combine files + instructions for analysis
-            let mut all_files: Vec<crate::runtime::capability_inference::AnalyzableFile> =
-                args.files.iter()
-                    .map(|f| crate::runtime::capability_inference::AnalyzableFile {
-                        path: f.path.clone(),
-                        content: f.content.clone(),
-                    })
-                    .collect();
+        use crate::runtime::analysis::{AnalysisProviderFactory, FileToAnalyze, AnalysisProvider};
 
-            // Also analyze instructions as a potential source of capability hints
-            all_files.push(crate::runtime::capability_inference::AnalyzableFile {
-                path: "SKILL.md".to_string(),
-                content: args.instructions.clone(),
-            });
+        // Build files for analysis
+        let mut files_for_analysis: Vec<FileToAnalyze> = args.files
+            .iter()
+            .map(|f| FileToAnalyze {
+                path: f.path.clone(),
+                content: f.content.clone(),
+            })
+            .collect();
 
-            crate::runtime::capability_inference::validate_capabilities(
-                &args.capabilities,
-                &all_files,
-            )
-        };
+        // Also analyze instructions as a potential source of capability hints
+        files_for_analysis.push(FileToAnalyze {
+            path: "SKILL.md".to_string(),
+            content: args.instructions.clone(),
+        });
 
-        // Check for missing capabilities
-        if !capability_validation.missing.is_empty() {
-            let missing_str = capability_validation.missing.join(", ");
+        // Get the capability analysis provider from config (or default to pattern)
+        let provider_type = config
+            .and_then(|c| serde_json::from_str::<autonoetic_types::config::CodeAnalysisConfig>(
+                &serde_json::to_string(&c.code_analysis).unwrap_or_default()
+            ).ok())
+            .map(|c| match c.capability_provider.as_str() {
+                "llm" => crate::runtime::analysis::AnalysisProviderType::Llm,
+                "composite" => crate::runtime::analysis::AnalysisProviderType::Composite,
+                "none" => crate::runtime::analysis::AnalysisProviderType::None,
+                _ => crate::runtime::analysis::AnalysisProviderType::Pattern,
+            })
+            .unwrap_or(crate::runtime::analysis::AnalysisProviderType::Pattern);
+
+        let analyzer = AnalysisProviderFactory::create_capability_provider(&provider_type);
+        tracing::info!(
+            target: "agent.install",
+            provider = analyzer.name(),
+            "Running capability analysis"
+        );
+
+        let capability_analysis = analyzer.analyze_capabilities(&files_for_analysis);
+
+        // Calculate missing and excessive capabilities
+        let missing: Vec<String> = capability_analysis.inferred_types
+            .iter()
+            .filter(|inferred_type| {
+                !args.capabilities.iter().any(|cap| {
+                    let cap_type = match cap {
+                        autonoetic_types::capability::Capability::NetworkAccess { .. } => "NetworkAccess",
+                        autonoetic_types::capability::Capability::ReadAccess { .. } => "ReadAccess",
+                        autonoetic_types::capability::Capability::WriteAccess { .. } => "WriteAccess",
+                        autonoetic_types::capability::Capability::CodeExecution { .. } => "CodeExecution",
+                        autonoetic_types::capability::Capability::AgentSpawn { .. } => "AgentSpawn",
+                        autonoetic_types::capability::Capability::AgentMessage { .. } => "AgentMessage",
+                        autonoetic_types::capability::Capability::SandboxFunctions { .. } => "SandboxFunctions",
+                        autonoetic_types::capability::Capability::BackgroundReevaluation { .. } => "BackgroundReevaluation",
+                    };
+                    cap_type == inferred_type.as_str()
+                })
+            })
+            .cloned()
+            .collect();
+
+        // Check if capabilities are required by config
+        let require_caps = config
+            .map(|c| c.code_analysis.require_capabilities)
+            .unwrap_or(true);
+
+        if require_caps && !missing.is_empty() {
+            let missing_str = missing.join(", ");
             return Err(tagged::Tagged::validation(anyhow::anyhow!(
                 "Capability mismatch: code requires {} but {} not declared in capabilities. \
-                 Add these capabilities to your install request.",
+                 Add these capabilities to your install request. \
+                 (Analyzer: {})",
                 missing_str,
-                if capability_validation.missing.len() == 1 { "it was" } else { "they were" }
+                if missing.len() == 1 { "it was" } else { "they were" },
+                analyzer.name()
             ))
             .into());
         }
+
+        // Also run security analysis
+        let security_analyzer = AnalysisProviderFactory::create_security_provider(
+            &config
+                .map(|c| match c.code_analysis.security_provider.as_str() {
+                    "llm" => crate::runtime::analysis::AnalysisProviderType::Llm,
+                    "composite" => crate::runtime::analysis::AnalysisProviderType::Composite,
+                    "none" => crate::runtime::analysis::AnalysisProviderType::None,
+                    _ => crate::runtime::analysis::AnalysisProviderType::Pattern,
+                })
+                .unwrap_or(crate::runtime::analysis::AnalysisProviderType::Pattern)
+        );
+
+        let security_analysis = security_analyzer.analyze_security(&files_for_analysis);
+
+        tracing::info!(
+            target: "agent.install",
+            security_provider = security_analyzer.name(),
+            passed = security_analysis.passed,
+            threats = security_analysis.threats.len(),
+            remote_access = security_analysis.remote_access_detected,
+            "Security analysis complete"
+        );
 
         // ─────────────────────────────────────────────────────────────────
         // Promotion Gate validation (for evolution roles)
