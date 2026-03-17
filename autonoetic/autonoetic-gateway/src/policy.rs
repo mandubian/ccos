@@ -1,7 +1,309 @@
 //! Capability Policy Engine.
+//!
+//! Provides security validation for agent actions including:
+//! - Command pattern matching against capability restrictions
+//! - Security analysis for dangerous commands
+//! - Path access validation for file operations
 
 use autonoetic_types::agent::AgentManifest;
 use autonoetic_types::capability::Capability;
+
+/// Security threat categories for command analysis.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SecurityThreat {
+    /// Command can destroy data or filesystem (e.g., rm -rf /, dd)
+    Destructive,
+    /// Command attempts privilege escalation (e.g., sudo, su)
+    PrivilegeEscalation,
+    /// Command may exfiltrate data or make unauthorized network calls
+    NetworkExfiltration,
+    /// Command attempts to escape sandbox (e.g., accessing /proc, /sys)
+    SandboxEscape,
+    /// Command may cause resource exhaustion (e.g., fork bomb)
+    ResourceExhaustion,
+    /// Command contains shell injection patterns (e.g., $(...), eval)
+    ShellInjection,
+    /// Command executes code from string/pipe (e.g., python -c, bash -c)
+    CodeFromInput,
+}
+
+/// Result of security analysis.
+#[derive(Debug, Clone)]
+pub struct SecurityAnalysis {
+    pub is_safe: bool,
+    pub threats: Vec<SecurityThreat>,
+    pub reason: Option<String>,
+}
+
+/// Analyzes shell commands for security threats.
+pub struct SecurityAnalyzer;
+
+impl SecurityAnalyzer {
+    /// Analyze a command for security threats.
+    /// Returns Analysis with threats found and whether it's safe to execute.
+    pub fn analyze_command(command: &str) -> SecurityAnalysis {
+        let mut threats = Vec::new();
+
+        // Split command by shell separators to analyze each part
+        let segments: Vec<&str> = command
+            .split(|c| c == '|' || c == '&' || c == ';')
+            .collect();
+
+        for segment in &segments {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Check for destructive commands
+            if Self::is_destructive(trimmed) {
+                threats.push(SecurityThreat::Destructive);
+            }
+
+            // Check for privilege escalation
+            if Self::is_privilege_escalation(trimmed) {
+                threats.push(SecurityThreat::PrivilegeEscalation);
+            }
+
+            // Check for sandbox escape attempts
+            if Self::is_sandbox_escape(trimmed) {
+                threats.push(SecurityThreat::SandboxEscape);
+            }
+
+            // Check for shell injection
+            if Self::is_shell_injection(trimmed) {
+                threats.push(SecurityThreat::ShellInjection);
+            }
+
+            // Check for code execution from input
+            if Self::is_code_from_input(trimmed) {
+                threats.push(SecurityThreat::CodeFromInput);
+            }
+
+            // Check for resource exhaustion
+            if Self::is_resource_exhaustion(trimmed) {
+                threats.push(SecurityThreat::ResourceExhaustion);
+            }
+        }
+
+        let is_safe = threats.is_empty();
+        let reason = if !threats.is_empty() {
+            Some(format!("Command contains security threats: {:?}", threats))
+        } else {
+            None
+        };
+
+        SecurityAnalysis {
+            is_safe,
+            threats,
+            reason,
+        }
+    }
+
+    /// Check for destructive commands that can destroy data.
+    fn is_destructive(cmd: &str) -> bool {
+        let destructive_patterns = &[
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "rm -rf .",
+            "rm -rf ..",
+            "dd if=",
+            "dd of=/dev/",
+            "mkfs",
+            "format ",
+            ":(){ :|:& };:",
+            "> /dev/",
+            "shred ",
+            "wipefs",
+        ];
+
+        let cmd_lower = cmd.to_lowercase();
+        destructive_patterns.iter().any(|p| cmd_lower.contains(p))
+    }
+
+    /// Check for privilege escalation attempts.
+    fn is_privilege_escalation(cmd: &str) -> bool {
+        let escalation_patterns = &[
+            "sudo ",
+            "su ",
+            "su -",
+            "setuid",
+            "setgid",
+            "chmod +s",
+            "chmod u+s",
+            "chown root",
+            "visudo",
+        ];
+
+        let cmd_lower = cmd.to_lowercase();
+        escalation_patterns.iter().any(|p| cmd_lower.contains(p))
+    }
+
+    /// Check for sandbox escape attempts.
+    fn is_sandbox_escape(cmd: &str) -> bool {
+        let escape_patterns = &[
+            "cat /proc/",
+            "ls /proc/",
+            "cat /sys/",
+            "ls /sys/",
+            "mount",
+            "umount",
+            "chroot",
+            "nsenter",
+            "unshare",
+            "docker ",
+            "lxc-",
+            "systemctl",
+            "service ",
+        ];
+
+        let cmd_lower = cmd.to_lowercase();
+        escape_patterns.iter().any(|p| cmd_lower.contains(p))
+    }
+
+    /// Check for shell injection patterns.
+    fn is_shell_injection(cmd: &str) -> bool {
+        // Check for $(...) but allow $VAR in quotes
+        if cmd.contains("$(") || cmd.contains("`") {
+            // Allow common safe patterns like $(pwd), $(dirname $0) in scripts
+            // For now, flag as potential threat - can be refined
+            let safe_patterns = ["$(pwd)", "$(dirname", "$(basename"];
+            if !safe_patterns.iter().any(|p| cmd.contains(p)) {
+                return true;
+            }
+        }
+
+        // Check for eval with user input
+        if cmd.contains("eval ") {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check for code execution from string input (high risk).
+    /// Note: python3 -c, bash -c, sh -c are NOT flagged here because they're
+    /// already controlled by CodeExecution capability patterns.
+    fn is_code_from_input(cmd: &str) -> bool {
+        let code_patterns = &[
+            // Less common/higher risk patterns
+            "node -e ",
+            "node --eval ",
+            "perl -e ",
+            "ruby -e ",
+            "php -r ",
+            "lua -e ",
+        ];
+
+        code_patterns.iter().any(|p| cmd.contains(p))
+    }
+
+    /// Check for resource exhaustion attacks.
+    fn is_resource_exhaustion(cmd: &str) -> bool {
+        let exhaustion_patterns = &[
+            ":(){ :|:& };:", // Fork bomb
+            "while true",
+            "while :",
+            "for (( ;; ))",
+            "ulimit -c unlimited",
+        ];
+
+        exhaustion_patterns.iter().any(|p| cmd.contains(p))
+    }
+
+    /// Analyze Python script content for security threats.
+    /// Returns threats found in the script code itself.
+    pub fn analyze_script_content(script_content: &str) -> Vec<SecurityThreat> {
+        let mut threats = Vec::new();
+
+        // Network access patterns in Python
+        let network_patterns = &[
+            "urllib.request",
+            "urllib.urlopen",
+            "requests.get",
+            "requests.post",
+            "http.client",
+            "httpx",
+            "aiohttp",
+            "socket.socket",
+            "subprocess",
+            "os.system",
+            "os.popen",
+        ];
+
+        for pattern in network_patterns {
+            if script_content.contains(pattern) {
+                threats.push(SecurityThreat::NetworkExfiltration);
+                break;
+            }
+        }
+
+        // Code execution patterns
+        let exec_patterns = &[
+            "eval(",
+            "exec(",
+            "__import__(",
+            "compile(",
+            "getattr(__builtins__",
+        ];
+
+        for pattern in exec_patterns {
+            if script_content.contains(pattern) {
+                threats.push(SecurityThreat::ShellInjection);
+                break;
+            }
+        }
+
+        // File system destruction
+        let fs_patterns = &[
+            "shutil.rmtree",
+            "os.remove(\"/\")",
+            "os.unlink",
+            "open('/dev/",
+        ];
+
+        for pattern in fs_patterns {
+            if script_content.contains(pattern) {
+                threats.push(SecurityThreat::Destructive);
+                break;
+            }
+        }
+
+        threats
+    }
+
+    /// Check if a Python script needs approval based on its content.
+    /// Returns Some(reason) if approval is required, None if safe.
+    pub fn script_requires_approval(
+        script_content: &str,
+        has_network_access: bool,
+    ) -> Option<String> {
+        let threats = Self::analyze_script_content(script_content);
+
+        if threats.is_empty() {
+            return None;
+        }
+
+        // Check if NetworkAccess capability would cover network calls
+        if threats.contains(&SecurityThreat::NetworkExfiltration) && !has_network_access {
+            return Some(
+                "Script makes network calls but agent lacks NetworkAccess capability".to_string(),
+            );
+        }
+
+        // Always require approval for these threats
+        if threats.contains(&SecurityThreat::ShellInjection) {
+            return Some("Script uses eval/exec which could be dangerous".to_string());
+        }
+
+        if threats.contains(&SecurityThreat::Destructive) {
+            return Some("Script performs potentially destructive file operations".to_string());
+        }
+
+        None
+    }
+}
 
 /// Validates requested actions against the Agent's configured capabilities.
 pub struct PolicyEngine {
@@ -14,21 +316,44 @@ impl PolicyEngine {
     }
 
     /// Check if the agent is allowed to execute a given command string.
-    pub fn can_exec_shell(&self, command: &str) -> bool {
+    /// First runs security analysis, then checks against capability patterns.
+    /// Returns (allowed, Option<SecurityAnalysis>) - analysis is Some if rejected.
+    pub fn can_exec_shell_detailed(&self, command: &str) -> (bool, Option<SecurityAnalysis>) {
+        // First, run security analysis
+        let security = SecurityAnalyzer::analyze_command(command);
+        if !security.is_safe {
+            return (false, Some(security));
+        }
+
+        // Then check against capability patterns
         for cap in &self.manifest.capabilities {
             if let Capability::CodeExecution { patterns } = cap {
+                let command_segments: Vec<&str> = command
+                    .split(|c| c == '|' || c == '&' || c == ';')
+                    .collect();
+
                 for pattern in patterns {
-                    // Naive glob stub: if pattern is "python3 scripts/*",
-                    // we just check if command starts with "python3 scripts/".
-                    // A real implementation would use the `glob` or `regex` crate.
                     let prefix = pattern.trim_end_matches('*');
-                    if command.starts_with(prefix) {
-                        return true;
+
+                    for segment in &command_segments {
+                        let trimmed = segment.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        if trimmed.starts_with(prefix) {
+                            return (true, None);
+                        }
                     }
                 }
             }
         }
-        false
+
+        (false, None)
+    }
+
+    /// Check if the agent is allowed to execute a given command string.
+    pub fn can_exec_shell(&self, command: &str) -> bool {
+        self.can_exec_shell_detailed(command).0
     }
 
     /// Check if the agent is allowed to connect to a specific host.
@@ -260,5 +585,75 @@ mod tests {
         }]);
         let policy = PolicyEngine::new(manifest);
         assert!(!policy.can_invoke_tool("mcp_web_search"));
+    }
+
+    // SecurityAnalyzer tests
+    #[test]
+    fn test_security_analyzer_clean_command() {
+        let analysis = SecurityAnalyzer::analyze_command("python3 script.py");
+        assert!(analysis.is_safe);
+        assert!(analysis.threats.is_empty());
+    }
+
+    #[test]
+    fn test_security_analyzer_pipe_command() {
+        let analysis = SecurityAnalyzer::analyze_command("echo hello | python3 process.py");
+        assert!(analysis.is_safe);
+    }
+
+    #[test]
+    fn test_security_analyzer_destructive_rm() {
+        let analysis = SecurityAnalyzer::analyze_command("rm -rf /");
+        assert!(!analysis.is_safe);
+        assert!(analysis.threats.contains(&SecurityThreat::Destructive));
+    }
+
+    #[test]
+    fn test_security_analyzer_destructive_dd() {
+        let analysis = SecurityAnalyzer::analyze_command("dd if=/dev/zero of=/dev/sda");
+        assert!(!analysis.is_safe);
+        assert!(analysis.threats.contains(&SecurityThreat::Destructive));
+    }
+
+    #[test]
+    fn test_security_analyzer_privilege_escalation() {
+        let analysis = SecurityAnalyzer::analyze_command("sudo rm /etc/passwd");
+        assert!(!analysis.is_safe);
+        assert!(analysis
+            .threats
+            .contains(&SecurityThreat::PrivilegeEscalation));
+    }
+
+    #[test]
+    fn test_security_analyzer_sandbox_escape() {
+        let analysis = SecurityAnalyzer::analyze_command("cat /proc/self/status");
+        assert!(!analysis.is_safe);
+        assert!(analysis.threats.contains(&SecurityThreat::SandboxEscape));
+    }
+
+    #[test]
+    fn test_security_analyzer_code_from_input() {
+        // python3 -c is allowed (controlled by CodeExecution patterns)
+        // but node -e is still blocked as high risk
+        let analysis =
+            SecurityAnalyzer::analyze_command("node -e 'require(\"child_process\").exec(\"ls\")'");
+        assert!(!analysis.is_safe);
+        assert!(analysis.threats.contains(&SecurityThreat::CodeFromInput));
+    }
+
+    #[test]
+    fn test_security_analyzer_python_c_allowed() {
+        // python3 -c should NOT be flagged - controlled by CodeExecution patterns
+        let analysis = SecurityAnalyzer::analyze_command("python3 -c 'print(\"hello\")'");
+        assert!(analysis.is_safe);
+    }
+
+    #[test]
+    fn test_security_analyzer_pipe_with_safe_python() {
+        // This is the case that was failing - piped python should be safe
+        let analysis = SecurityAnalyzer::analyze_command(
+            "echo '{\"place\": \"London\"}' | python3 weather.py",
+        );
+        assert!(analysis.is_safe);
     }
 }

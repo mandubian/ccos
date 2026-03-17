@@ -3,7 +3,80 @@ use std::path::Path;
 
 use super::common::AgentTrace;
 use autonoetic_gateway::llm::Message;
-use autonoetic_types::causal_chain::CausalChainEntry;
+use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
+
+/// ANSI color helpers for terminal output.
+mod color {
+    pub const RESET: &str = "\x1b[0m";
+    pub const BOLD: &str = "\x1b[1m";
+    pub const DIM: &str = "\x1b[2m";
+    pub const RED: &str = "\x1b[31m";
+    pub const GREEN: &str = "\x1b[32m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const BLUE: &str = "\x1b[34m";
+    pub const MAGENTA: &str = "\x1b[35m";
+    pub const CYAN: &str = "\x1b[36m";
+    pub const WHITE: &str = "\x1b[37m";
+    pub const BRIGHT_RED: &str = "\x1b[91m";
+    pub const BRIGHT_YELLOW: &str = "\x1b[93m";
+    pub const BRIGHT_BLUE: &str = "\x1b[94m";
+    pub const BRIGHT_CYAN: &str = "\x1b[96m";
+
+    pub fn status_color(s: &str) -> &'static str {
+        match s {
+            "SUCCESS" => GREEN,
+            "DENIED" => YELLOW,
+            "ERROR" => RED,
+            _ => WHITE,
+        }
+    }
+
+    pub fn status_label(s: &str) -> String {
+        let c = status_color(s);
+        format!("{}{}{}{}", c, BOLD, s, RESET)
+    }
+
+    pub fn agent(s: &str) -> String {
+        format!("{}{}{}{}", BRIGHT_CYAN, BOLD, s, RESET)
+    }
+
+    pub fn category(s: &str) -> String {
+        match s {
+            "tool_invoke" => format!("{}{}{}{}", MAGENTA, BOLD, s, RESET),
+            "gateway" => format!("{}{}{}{}", BLUE, BOLD, s, RESET),
+            "lifecycle" => format!("{}{}{}{}", CYAN, BOLD, s, RESET),
+            "artifact" => format!("{}{}{}{}", YELLOW, BOLD, s, RESET),
+            "llm" => format!("{}{}{}{}", BRIGHT_BLUE, BOLD, s, RESET),
+            _ => format!("{}{}{}", DIM, s, RESET),
+        }
+    }
+
+    pub fn action(s: &str) -> String {
+        match s {
+            "requested" | "started" => format!("{}{}{}", CYAN, s, RESET),
+            "completed" | "success" => format!("{}{}{}", GREEN, s, RESET),
+            "error" | "failed" => format!("{}{}{}{}", BRIGHT_RED, BOLD, s, RESET),
+            "denied" => format!("{}{}{}{}", YELLOW, BOLD, s, RESET),
+            _ => s.to_string(),
+        }
+    }
+
+    pub fn tool_name(s: &str) -> String {
+        format!("{}{}{}{}", BRIGHT_YELLOW, BOLD, s, RESET)
+    }
+
+    pub fn seq(s: u64) -> String {
+        format!("{}{}{}", DIM, s, RESET)
+    }
+
+    pub fn separator(len: usize) -> String {
+        format!("{}{}{}", DIM, "─".repeat(len), RESET)
+    }
+
+    pub fn dim(s: &str) -> String {
+        format!("{}{}{}", DIM, s, RESET)
+    }
+}
 
 pub fn handle_trace_sessions(
     config_path: &Path,
@@ -36,18 +109,20 @@ pub fn handle_trace_sessions(
     }
 
     println!(
-        "{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}",
-        "AGENT", "SESSION ID", "FIRST TS", "LAST TS", "EVENTS", "MAX SEQ"
+        "{}{}{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}{}",
+        color::DIM, color::BOLD,
+        "AGENT", "SESSION ID", "FIRST TS", "LAST TS", "EVENTS", "MAX SEQ",
+        color::RESET
     );
+    println!("{}", color::separator(146));
     for s in sessions {
         println!(
-            "{:<30} {:<38} {:<26} {:<26} {:<8} {:<10}",
-            s.agent_id,
+            "{} {:<38} {:<26} {:<26} {}{} {}",
+            color::agent(&s.agent_id),
             s.session_id,
             s.first_timestamp,
             s.last_timestamp,
-            s.event_count,
-            s.max_event_seq
+            color::BRIGHT_YELLOW, s.event_count, color::RESET,
         );
     }
     Ok(())
@@ -117,21 +192,74 @@ pub fn handle_trace_session(
         return Ok(());
     }
 
-    println!("Agent: {}", agent_id);
-    println!("Session: {}", session_id);
+    println!("Agent: {}", color::agent(&agent_id));
+    println!("Session: {}", color::BRIGHT_YELLOW.to_string() + session_id + color::RESET);
     println!(
-        "{:<10} {:<28} {:<10} {:<24} {}",
-        "EVENT_SEQ", "TIMESTAMP", "STATUS", "CATEGORY.ACTION", "LOG_ID"
+        "{}{}{:<8} {:<24} {:<15} {:<18} {:<15} {:<20} {}{}",
+        color::DIM, color::BOLD,
+        "SEQ", "TIMESTAMP", "CATEGORY", "ACTION", "STATUS", "TARGET", "REASON",
+        color::RESET
     );
+    println!("{}", color::separator(130));
     for entry in entries {
+        let target_str = entry.target.as_deref().unwrap_or("-");
+        let reason_str = entry.reason.as_deref().unwrap_or("-");
+        let target_display = if target_str.len() > 19 { format!("{}…", &target_str[..18]) } else { target_str.to_string() };
+        let reason_display = if reason_str.len() > 35 { format!("{}…", &reason_str[..34]) } else { reason_str.to_string() };
+
+        // Highlight reason in red for errors/denials, dim otherwise
+        let reason_colored = match &entry.status {
+            EntryStatus::Error => format!("{}{}{}{}", color::BRIGHT_RED, color::BOLD, reason_display, color::RESET),
+            EntryStatus::Denied => format!("{}{}{}{}", color::YELLOW, color::BOLD, reason_display, color::RESET),
+            _ => color::dim(&reason_display),
+        };
+
         println!(
-            "{:<10} {:<28} {:<10} {:<24} {}",
-            entry.event_seq,
+            "{} {:<24} {} {} {} {} {}",
+            color::seq(entry.event_seq),
             entry.timestamp,
-            format!("{:?}", entry.status),
-            format!("{}.{}", entry.category, entry.action),
-            entry.log_id
+            color::category(&entry.category),
+            color::action(&entry.action),
+            color::status_label(&format!("{:?}", entry.status)),
+            color::dim(&target_display),
+            reason_colored,
         );
+
+        // Show tool-specific info for tool_invoke events
+        if entry.category == "tool_invoke" {
+            if let Some(ref payload) = entry.payload {
+                if let Some(tool_name) = payload.get("tool_name").and_then(|v| v.as_str()) {
+                    let args_preview = payload.get("arguments")
+                        .and_then(|v| v.as_str())
+                        .map(|a| {
+                            if a.len() > 80 { format!("{}…", &a[..79]) } else { a.to_string() }
+                        })
+                        .unwrap_or_default();
+                    let result_preview = payload.get("result_preview")
+                        .and_then(|v| v.as_str())
+                        .map(|r| {
+                            if r.len() > 80 { format!("{}…", &r[..79]) } else { r.to_string() }
+                        })
+                        .unwrap_or_default();
+
+                    if entry.action == "requested" && !args_preview.is_empty() {
+                        println!("      {}├─ {}({}){}", color::DIM, color::tool_name(tool_name), color::dim(&args_preview), color::RESET);
+                    } else if entry.action == "completed" && !result_preview.is_empty() {
+                        println!("      {}├─ {} → {}{}", color::DIM, color::tool_name(tool_name), color::dim(&result_preview), color::RESET);
+                    } else {
+                        println!("      {}├─ {}{}", color::DIM, color::tool_name(tool_name), color::RESET);
+                    }
+                }
+            }
+        } else {
+            if let Some(ref payload) = entry.payload {
+                let payload_str = serde_json::to_string(payload).unwrap_or_default();
+                if payload_str.len() > 2 && payload_str != "null" {
+                    let truncated = if payload_str.len() > 120 { format!("{}…", &payload_str[..119]) } else { payload_str };
+                    println!("      {}├─ payload: {}{}{}", color::DIM, color::BRIGHT_BLUE, truncated, color::RESET);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -459,29 +587,34 @@ pub fn handle_trace_rebuild(
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("Session Reconstruction: {}", session_id);
-        println!("Total events: {}", all_events.len());
+        println!("{}Session Reconstruction: {}{}", color::BOLD, session_id, color::RESET);
+        println!("Total events: {}{}{}{}", color::BRIGHT_YELLOW, color::BOLD, all_events.len(), color::RESET);
         println!();
         
         if !integrity_issues.is_empty() {
-            println!("Integrity Issues:");
+            println!("{}{}⚠ Integrity Issues:{}{}", color::BRIGHT_RED, color::BOLD, color::RESET, color::RESET);
             for issue in &integrity_issues {
-                println!("  - {}", issue);
+                println!("  {}{}{}{}", color::RED, issue, color::RESET, color::RESET);
             }
             println!();
         }
         
-        println!("{:<10} {:<30} {:<30} {:<20} {:<15}",
-            "SEQ", "TIMESTAMP", "AGENT", "ACTION", "STATUS");
-        println!("{}", "-".repeat(105));
+        println!(
+            "{}{}{:<10} {:<30} {:<30} {:<20} {:<15}{}",
+            color::DIM, color::BOLD,
+            "SEQ", "TIMESTAMP", "AGENT", "ACTION", "STATUS",
+            color::RESET
+        );
+        println!("{}", color::separator(105));
         
         for te in &all_events {
-            println!("{:<10} {:<30} {:<30} {:<20} {:<15}",
-                te.entry.event_seq,
+            println!(
+                "{} {:<30} {} {} {}",
+                color::seq(te.entry.event_seq),
                 te.entry.timestamp,
-                te.agent_id,
-                te.entry.action,
-                format!("{:?}", te.entry.status)
+                color::agent(&te.agent_id),
+                color::action(&te.entry.action),
+                color::status_label(&format!("{:?}", te.entry.status)),
             );
         }
     }
@@ -505,8 +638,17 @@ pub async fn handle_trace_follow(
     let mut seen_log_ids: HashSet<String> = HashSet::new();
     let mut poll_interval = interval(Duration::from_secs(1));
 
-    println!("Following session '{}'. Press Ctrl+C to stop.", session_id);
+    println!("{}Following session '{}'.{} Press Ctrl+C to stop.", color::BOLD, session_id, color::RESET);
     println!();
+    if !json_output {
+        println!(
+            "{}{}{:<8} {:<24} {:<22} {:<15} {:<18} {:<15} {:<20} {}{}",
+            color::DIM, color::BOLD,
+            "SEQ", "TIMESTAMP", "AGENT", "CATEGORY", "ACTION", "STATUS", "TARGET", "REASON",
+            color::RESET
+        );
+        println!("{}", color::separator(160));
+    }
 
     loop {
         poll_interval.tick().await;
@@ -581,18 +723,76 @@ pub async fn handle_trace_follow(
                         serde_json::to_string(&serde_json::json!({
                             "agent_id": te.agent_id,
                             "timestamp": te.entry.timestamp,
+                            "category": te.entry.category,
                             "action": te.entry.action,
                             "status": te.entry.status,
                             "event_seq": te.entry.event_seq,
+                            "turn_id": te.entry.turn_id,
+                            "target": te.entry.target,
+                            "reason": te.entry.reason,
+                            "payload": te.entry.payload,
                         }))?
                     );
                 } else {
-                    println!("{:<30} {:<30} {:<20} {:<15}",
+                    let target_str = te.entry.target.as_deref().unwrap_or("-");
+                    let reason_str = te.entry.reason.as_deref().unwrap_or("-");
+                    let target_display = if target_str.len() > 19 { format!("{}…", &target_str[..18]) } else { target_str.to_string() };
+                    let reason_display = if reason_str.len() > 35 { format!("{}…", &reason_str[..34]) } else { reason_str.to_string() };
+
+                    // Highlight reason in red for errors/denials, dim otherwise
+                    let reason_colored = match &te.entry.status {
+                        EntryStatus::Error => format!("{}{}{}{}", color::BRIGHT_RED, color::BOLD, reason_display, color::RESET),
+                        EntryStatus::Denied => format!("{}{}{}{}", color::YELLOW, color::BOLD, reason_display, color::RESET),
+                        _ => color::dim(&reason_display),
+                    };
+
+                    println!(
+                        "{} {:<24} {} {} {} {} {}",
+                        color::seq(te.entry.event_seq),
                         te.entry.timestamp,
-                        te.agent_id,
-                        te.entry.action,
-                        format!("{:?}", te.entry.status)
+                        color::agent(&te.agent_id),
+                        color::category(&te.entry.category),
+                        color::action(&te.entry.action),
+                        color::status_label(&format!("{:?}", te.entry.status)),
+                        reason_colored,
                     );
+
+                    // Show tool-specific info for tool_invoke events
+                    if te.entry.category == "tool_invoke" {
+                        if let Some(ref payload) = te.entry.payload {
+                            if let Some(tool_name) = payload.get("tool_name").and_then(|v| v.as_str()) {
+                                let args_preview = payload.get("arguments")
+                                    .and_then(|v| v.as_str())
+                                    .map(|a| {
+                                        if a.len() > 80 { format!("{}…", &a[..79]) } else { a.to_string() }
+                                    })
+                                    .unwrap_or_default();
+                                let result_preview = payload.get("result_preview")
+                                    .and_then(|v| v.as_str())
+                                    .map(|r| {
+                                        if r.len() > 80 { format!("{}…", &r[..79]) } else { r.to_string() }
+                                    })
+                                    .unwrap_or_default();
+
+                                if te.entry.action == "requested" && !args_preview.is_empty() {
+                                    println!("      {}├─ {}({}){}", color::DIM, color::tool_name(tool_name), color::dim(&args_preview), color::RESET);
+                                } else if te.entry.action == "completed" && !result_preview.is_empty() {
+                                    println!("      {}├─ {} → {}{}", color::DIM, color::tool_name(tool_name), color::dim(&result_preview), color::RESET);
+                                } else {
+                                    println!("      {}├─ {}{}", color::DIM, color::tool_name(tool_name), color::RESET);
+                                }
+                            }
+                        }
+                    } else {
+                        // Generic payload for non-tool events
+                        if let Some(ref payload) = te.entry.payload {
+                            let payload_str = serde_json::to_string(payload).unwrap_or_default();
+                            if payload_str.len() > 2 && payload_str != "null" {
+                                let truncated = if payload_str.len() > 120 { format!("{}…", &payload_str[..119]) } else { payload_str };
+                                println!("      {}├─ payload: {}{}{}", color::DIM, color::BRIGHT_BLUE, truncated, color::RESET);
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -121,7 +121,7 @@ impl SandboxRunner {
         let (program, args) = match driver {
             SandboxDriverKind::Bubblewrap => {
                 if dependencies.is_some() {
-                    bubblewrap_shell_command(agent_dir, &composed_entrypoint)?
+                    bubblewrap_shell_command(agent_dir, &composed_entrypoint, &[])?
                 } else {
                     bubblewrap_command(agent_dir, entrypoint)?
                 }
@@ -141,6 +141,57 @@ impl SandboxRunner {
 
         // Expose local Python SDK to bubblewrap workers when available and provide
         // a thin local JSON-RPC bridge for SDK memory/state/event calls.
+        if driver == SandboxDriverKind::Bubblewrap {
+            if let Some(sdk_path) = resolve_python_sdk_path() {
+                inject_pythonpath(&mut command, &sdk_path);
+            }
+            let bridge = start_sdk_bridge(agent_dir)?;
+            command.env(CCOS_SOCKET_ENV, bridge.socket_path_sandbox);
+            sdk_bridge = Some(bridge.guard);
+        }
+
+        let child = command.spawn()?;
+        Ok(Self {
+            process: child,
+            driver,
+            _sdk_bridge: sdk_bridge,
+        })
+    }
+
+    /// Spawn sandbox with session content automatically mounted.
+    /// Session content files (from content.write) are mounted at their original paths.
+    pub fn spawn_with_session_content(
+        driver: SandboxDriverKind,
+        agent_dir: &str,
+        entrypoint: &str,
+        dependencies: Option<&DependencyPlan>,
+        session_content_mounts: Vec<SandboxMount>,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !entrypoint.trim().is_empty(),
+            "entrypoint must not be empty"
+        );
+        if dependencies.is_some() && driver == SandboxDriverKind::MicroVm {
+            anyhow::bail!("MicroVM dependency bootstrap is not implemented yet");
+        }
+        let composed_entrypoint = compose_entrypoint(entrypoint, dependencies)?;
+        let (program, args) = match driver {
+            SandboxDriverKind::Bubblewrap => {
+                bubblewrap_shell_command(agent_dir, &composed_entrypoint, &session_content_mounts)?
+            }
+            SandboxDriverKind::Docker => docker_command(agent_dir, &composed_entrypoint)?,
+            SandboxDriverKind::MicroVm => microvm_command(&composed_entrypoint)?,
+        };
+
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut sdk_bridge = None;
+
         if driver == SandboxDriverKind::Bubblewrap {
             if let Some(sdk_path) = resolve_python_sdk_path() {
                 inject_pythonpath(&mut command, &sdk_path);
@@ -585,15 +636,23 @@ fn bubblewrap_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(Stri
     Ok(("bwrap".to_string(), argv))
 }
 
+/// Extra bind mount for sandbox (source_path → dest_path).
+#[derive(Debug, Clone)]
+pub struct SandboxMount {
+    pub source: std::path::PathBuf,
+    pub dest: String, // Path inside sandbox
+}
+
 fn bubblewrap_shell_command(
     agent_dir: &str,
     shell_command: &str,
+    extra_mounts: &[SandboxMount],
 ) -> anyhow::Result<(String, Vec<String>)> {
     anyhow::ensure!(
         !shell_command.trim().is_empty(),
         "shell command must not be empty"
     );
-    let argv = vec![
+    let mut argv = vec![
         "--ro-bind".to_string(),
         "/".to_string(),
         "/".to_string(),
@@ -603,11 +662,33 @@ fn bubblewrap_shell_command(
         "--chdir".to_string(),
         BWRAP_WORKSPACE_DIR.to_string(),
         "--unshare-all".to_string(),
+    ];
+
+    // Add extra bind mounts for session content
+    for mount in extra_mounts {
+        // Create the source directory if needed
+        if let Some(parent) = mount.source.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Ensure the source file/directory exists (create empty if not)
+        if !mount.source.exists() {
+            if mount.source.extension().is_some() {
+                let _ = std::fs::write(&mount.source, "");
+            } else {
+                let _ = std::fs::create_dir_all(&mount.source);
+            }
+        }
+        argv.push("--bind".to_string());
+        argv.push(mount.source.to_string_lossy().to_string());
+        argv.push(mount.dest.clone());
+    }
+
+    argv.extend(vec![
         "--".to_string(),
         "sh".to_string(),
-        "-lc".to_string(),
+        "-c".to_string(),
         shell_command.to_string(),
-    ];
+    ]);
     Ok(("bwrap".to_string(), argv))
 }
 
@@ -626,7 +707,7 @@ fn docker_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(String, 
         "/workspace".to_string(),
         image,
         "sh".to_string(),
-        "-lc".to_string(),
+        "-c".to_string(), // Non-login shell - don't source /etc/profile.d/*
         entrypoint.to_string(),
     ];
     Ok(("docker".to_string(), argv))
@@ -648,25 +729,41 @@ fn compose_entrypoint(entrypoint: &str, deps: Option<&DependencyPlan>) -> anyhow
         return Ok(entrypoint.to_string());
     };
 
-    // If no packages needed, just run the entrypoint with the runtime
+    // Check if entrypoint already has the runtime command prepended
+    // This handles cases like "python3 /tmp/script.py" where the user already specified the runtime
+    let has_python = entrypoint.starts_with("python3 ") || entrypoint.starts_with("python ");
+    let has_node = entrypoint.starts_with("node ");
+
+    // If no packages needed, just run the entrypoint
     if plan.packages.is_empty() {
-        let cmd = match plan.runtime {
-            DependencyRuntime::Python => format!("python3 {entrypoint}"),
-            DependencyRuntime::NodeJs => format!("node {entrypoint}"),
-        };
-        return Ok(cmd);
+        // If entrypoint already starts with the runtime, use it as-is
+        match plan.runtime {
+            DependencyRuntime::Python if has_python => return Ok(entrypoint.to_string()),
+            DependencyRuntime::NodeJs if has_node => return Ok(entrypoint.to_string()),
+            DependencyRuntime::Python => return Ok(format!("python3 {entrypoint}")),
+            DependencyRuntime::NodeJs => return Ok(format!("node {entrypoint}")),
+        }
     }
 
     for pkg in &plan.packages {
         validate_dependency_package(pkg)?;
     }
     let joined = plan.packages.join(" ");
+
+    // If entrypoint already has runtime, just run it after installing packages
+    let run_cmd = match plan.runtime {
+        DependencyRuntime::Python if has_python => entrypoint.to_string(),
+        DependencyRuntime::NodeJs if has_node => entrypoint.to_string(),
+        DependencyRuntime::Python => format!("python3 {entrypoint}"),
+        DependencyRuntime::NodeJs => format!("node {entrypoint}"),
+    };
+
     let composed = match plan.runtime {
         DependencyRuntime::Python => format!(
-            "python3 -m venv .autonoetic_venv && ./.autonoetic_venv/bin/pip install --disable-pip-version-check --no-input --no-cache-dir {joined} && {entrypoint}"
+            "python3 -m venv .autonoetic_venv && ./.autonoetic_venv/bin/pip install --disable-pip-version-check --no-input --no-cache-dir {joined} && {run_cmd}"
         ),
         DependencyRuntime::NodeJs => format!(
-            "npm install --no-save --prefix .autonoetic_node {joined} && NODE_PATH=.autonoetic_node/node_modules {entrypoint}"
+            "npm install --no-save --prefix .autonoetic_node {joined} && NODE_PATH=.autonoetic_node/node_modules {run_cmd}"
         ),
     };
     Ok(composed)
@@ -788,9 +885,37 @@ mod tests {
     }
 
     #[test]
+    fn test_compose_preserves_existing_runtime_prefix() {
+        // When command already has python3 prefix and no packages needed
+        let plan = DependencyPlan {
+            runtime: DependencyRuntime::Python,
+            packages: vec![], // No packages
+        };
+        let cmd = compose_entrypoint("python3 /tmp/script.py", Some(&plan))
+            .expect("compose should succeed");
+        // Should NOT double-prefix: "python3 python3 /tmp/script.py"
+        assert_eq!(cmd, "python3 /tmp/script.py");
+    }
+
+    #[test]
+    fn test_compose_with_runtime_prefix_and_packages() {
+        // When command already has python3 prefix and packages need installing
+        let plan = DependencyPlan {
+            runtime: DependencyRuntime::Python,
+            packages: vec!["requests".to_string()],
+        };
+        let cmd = compose_entrypoint("python3 /tmp/script.py", Some(&plan))
+            .expect("compose should succeed");
+        assert!(cmd.contains("pip install"));
+        assert!(cmd.contains("requests"));
+        // Should end with original command, not "python3 python3"
+        assert!(cmd.ends_with("python3 /tmp/script.py"));
+    }
+
+    #[test]
     fn test_bubblewrap_shell_command_shape() {
-        let (_bin, argv) =
-            bubblewrap_shell_command("/tmp/agent", "echo hi").expect("shell command should build");
+        let (_bin, argv) = bubblewrap_shell_command("/tmp/agent", "echo hi", &[])
+            .expect("shell command should build");
         assert_eq!(argv[0], "--ro-bind");
         assert_eq!(argv[3], "--bind");
         assert_eq!(argv[4], "/tmp/agent");
@@ -799,7 +924,7 @@ mod tests {
         assert_eq!(argv[7], "/tmp");
         assert_eq!(argv[9], "--");
         assert_eq!(argv[10], "sh");
-        assert_eq!(argv[11], "-lc");
+        assert_eq!(argv[11], "-c"); // Non-login shell
         assert_eq!(argv[12], "echo hi");
     }
 

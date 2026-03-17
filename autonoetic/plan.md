@@ -1935,3 +1935,154 @@ Future sessions can discover and reuse via agent.discover
 - [x] Memory tools renamed: knowledge.store/recall/search
 - [x] Foundation instructions explain fuzzy content + two-tier validation
 - [x] All existing tests pass
+
+---
+
+## Phase 10: Automatic Capability Inference & Security Hardening (2026-03-17)
+
+**Problem:** The current `agent.install` security model has two critical flaws:
+
+1. **promotion_gate is security theater:** LLMs can bypass approval by setting `{"evaluator_pass": true, "auditor_pass": true}` directly in the install payload. There's no actual code review or evidence.
+
+2. **Missing capabilities go undetected:** When specialized_builder doesn't include `capabilities` in the install payload, the agent gets installed without proper permissions. The agent's code may USE network/files, but lacks the declared capability to do so.
+
+**Impact:** The weather_agent was installed without NetworkAccess capability, so it will fail at runtime when trying to call Open-Meteo APIs. The approval system didn't trigger because missing capabilities = "low-risk" classification.
+
+### Feature 10.1: Code Analysis for Capability Detection
+
+Create `autonoetic-gateway/src/runtime/capability_inference.rs`:
+
+```rust
+pub struct CapabilityInference {
+    pub inferred: Vec<Capability>,      // What the code NEEDS
+    pub confidence: f32,                 // 0.0 - 1.0
+    pub evidence: Vec<CapabilityEvidence>,
+}
+
+pub struct CapabilityEvidence {
+    pub file: String,
+    pub line: Option<usize>,
+    pub pattern: String,
+    pub capability: Capability,
+}
+```
+
+**Detection Rules:**
+
+| Code Pattern | Required Capability |
+|--------------|---------------------|
+| `urllib`, `requests`, `httpx`, `fetch(`, `axios` | `NetworkAccess` |
+| `open()`, `fs.readFile`, `fs.writeFile` | `ReadAccess`, `WriteAccess` |
+| `subprocess`, `exec(`, `spawn(`, `os.system` | `CodeExecution` |
+| `import socket`, `WebSocket`, `net.` | `NetworkAccess` |
+| `curl`, `wget`, `http://`, `https://` | `NetworkAccess` |
+
+**Tasks:**
+
+- [x] Create `capability_inference.rs` module
+- [x] Implement pattern-based detection for common network/file/process access
+- [x] Add confidence scoring based on pattern specificity
+- [x] Return evidence with file path, line number, and matched pattern
+
+### Feature 10.2: Validate Capabilities on Install
+
+Modify `agent.install` in `tools.rs`:
+
+- [x] Run `infer_capabilities()` on all `files[]` content
+- [x] Compare inferred vs declared capabilities
+- [x] If missing capabilities detected:
+  - `strict` mode: reject install with error
+  - `warn` mode: return warning with suggested fix
+  - `auto_fix` mode: modify payload, require user approval
+
+**Response format for capability mismatch:**
+```json
+{
+  "ok": false,
+  "validation_failed": true,
+  "missing_capabilities": [
+    {"type": "NetworkAccess", "hosts": ["geocoding-api.open-meteo.com", "api.open-meteo.com"]}
+  ],
+  "message": "Agent code requires NetworkAccess but it was not declared."
+}
+```
+
+### Feature 10.3: Fix promotion_gate Validation
+
+Replace empty boolean flags with actual analysis evidence:
+
+```rust
+pub struct PromotionGateEvidence {
+    pub security_analysis: SecurityAnalysisResult,  // REQUIRED
+    pub capability_analysis: CapabilityAnalysisResult,  // REQUIRED
+    pub evaluator_pass: bool,
+    pub evaluator_notes: Option<String>,
+    pub auditor_pass: bool,
+    pub auditor_notes: Option<String>,
+}
+```
+
+**Tasks:**
+
+- [x] Auto-run `SecurityAnalyzer` on all install files
+- [x] Auto-run `CapabilityInference` on all install files
+- [x] Populate `promotion_gate.security_analysis` with actual results
+- [x] Require `security_analysis` in promotion_gate validation
+- [x] Reject installs where security analysis fails
+
+### Feature 10.4: Require Capabilities in Install
+
+Make capabilities mandatory for `agent.install`:
+
+- [x] Reject install if `capabilities` array is empty
+- [x] Reject install if inferred capabilities don't match declared (strict mode)
+- [x] Update `specialized_builder.default/SKILL.md` with capability requirements
+- [x] Add capability inference table showing what patterns require what capabilities
+
+### Feature 10.5: Human Approval for Network Access
+
+Any agent with `NetworkAccess` capability should require human approval:
+
+- [x] Update `requires_human_approval()` to check for NetworkAccess
+- [x] Update approval request to show detected network hosts
+- [x] Show security analysis results in approval request
+
+### Feature 10.6: Testing
+
+- [x] Test: Capability inference detects urllib as NetworkAccess
+- [x] Test: Install rejects agent without declared capabilities
+- [x] Test: Install rejects agent with missing capabilities (strict mode)
+- [x] Test: promotion_gate with empty analysis is rejected
+- [x] Test: NetworkAccess capability triggers human approval
+- [x] Test: Valid capabilities + valid promotion_gate succeeds
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `autonoetic-gateway/src/runtime/capability_inference.rs` | NEW: capability detection module |
+| `autonoetic-gateway/src/runtime/tools.rs` | Updated agent.install validation, promotion_gate check |
+| `autonoetic-gateway/src/runtime/policy.rs` | May add capability inference integration |
+| `autonoetic/agents/evolution/specialized_builder.default/SKILL.md` | Updated capability requirements |
+
+### Security Considerations
+
+1. **False Positives:** String matching may detect patterns in comments/docs
+   - Mitigation: AST parsing for Python/JS
+   - Mitigation: Confidence threshold > 0.8
+
+2. **Evasion:** LLM may obfuscate code to avoid detection
+   - Mitigation: Also analyze eval'd/decoded strings
+   - Mitigation: Runtime monitoring for undeclared capabilities
+
+3. **Backward Compatibility:** Existing agents may break
+   - Mitigation: Add migration path
+   - Mitigation: Allow override with explicit human approval
+
+### Acceptance Criteria
+
+- [x] Every `agent.install` runs automatic capability inference
+- [x] Install is rejected if capabilities are missing (in strict mode)
+- [x] promotion_gate requires actual analysis evidence, not just boolean flags
+- [x] NetworkAccess capability triggers human approval
+- [x] All security tests pass

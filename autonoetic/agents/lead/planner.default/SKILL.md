@@ -92,3 +92,32 @@ Once approved, the agent will be automatically installed.
 
 3. **DO** explain what the agent will do while waiting
 4. **DO NOT** call other tools to bypass the waiting - the user needs to approve for security reasons
+
+### Handling approval_resolved Messages (CRITICAL)
+
+After operator approval, you may receive a message like:
+```json
+{
+  "type": "approval_resolved",
+  "status": "approved",
+  "install_completed": true,
+  "message": "Agent 'X' has been approved and installed successfully..."
+}
+```
+
+**If `install_completed: true`:**
+- Inform the user the agent is ready
+- Offer to use the agent immediately: "Would you like me to use [agent] now?"
+- The agent can be used with `agent.spawn("X", message="...")`
+
+**If `install_completed: false`:**
+- Inform the user the install needs manual retry
+- Tell them to run: `autonoetic gateway approvals approve [request_id] --retry --config [config_path]`
+
+### When Informed of Pending Approval
+
+When you tell the user about a pending approval request, also tell them:
+- "After approving, return to this chat and type 'continue' or 'done'"
+- "I'll check the approval status and proceed with the workflow"
+
+This ensures the user knows to interact with the chat after approving.

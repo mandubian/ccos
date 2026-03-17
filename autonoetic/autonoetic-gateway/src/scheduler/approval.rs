@@ -120,9 +120,10 @@ fn resume_session_after_approval(
         ApprovalStatus::Rejected => "rejected",
     };
     
-    let message = match &decision.action {
+    // Extract agent_id for signal and message
+    let (agent_id, status_message) = match &decision.action {
         autonoetic_types::background::ScheduledAction::AgentInstall { agent_id, .. } => {
-            let status_message = if install_succeeded {
+            let msg = if install_succeeded {
                 format!(
                     "Agent '{}' has been approved and installed successfully. You can now use it with agent.spawn('{}', message='...').",
                     agent_id, agent_id
@@ -133,18 +134,38 @@ fn resume_session_after_approval(
                     agent_id, status_str, decision.request_id
                 )
             };
-            
-            serde_json::json!({
-                "type": "approval_resolved",
-                "request_id": decision.request_id,
-                "agent_id": agent_id,
-                "status": status_str,
-                "install_completed": install_succeeded,
-                "message": status_message
-            }).to_string()
+            (agent_id.clone(), msg)
         }
-        _ => format!("Approval {} for request {}", status_str, decision.request_id),
+        _ => ("unknown".to_string(), format!("Approval {} for request {}", status_str, decision.request_id)),
     };
+    
+    let message = serde_json::json!({
+        "type": "approval_resolved",
+        "request_id": decision.request_id,
+        "agent_id": agent_id,
+        "status": status_str,
+        "install_completed": install_succeeded,
+        "message": status_message
+    }).to_string();
+    
+    // Write signal file for CLI to detect (enables auto-resume)
+    let signal = super::signal::Signal::ApprovalResolved {
+        request_id: decision.request_id.clone(),
+        agent_id: agent_id.clone(),
+        status: status_str.to_string(),
+        install_completed: install_succeeded,
+        message: status_message.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    
+    if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), session_id, &decision.request_id, &signal) {
+        tracing::warn!(
+            target: "approval",
+            request_id = %decision.request_id,
+            error = %e,
+            "Failed to write signal file"
+        );
+    }
     
     // Clone data needed for the thread
     let request_id = decision.request_id.clone();
