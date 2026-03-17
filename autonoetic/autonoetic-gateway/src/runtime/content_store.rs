@@ -18,7 +18,16 @@ pub struct SessionManifest {
     pub names: HashMap<String, ContentHandle>,
     /// Set of persisted handles (survive session cleanup)
     pub persisted: std::collections::HashSet<ContentHandle>,
+    /// Map of short alias (8 hex chars) → full handle for LLM-friendly lookup
+    pub aliases: HashMap<String, ContentHandle>,
+    /// Parent session ID for hierarchical content visibility.
+    /// If set, content in this session is visible to the parent.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
 }
+
+/// Short alias prefix length (8 hex chars = 32 bits, collision probability < 1/4B)
+pub const SHORT_ALIAS_LEN: usize = 8;
 
 /// Content-addressable store for agent artifacts.
 ///
@@ -57,6 +66,16 @@ impl ContentStore {
         let mut hasher = Sha256::new();
         hasher.update(content);
         format!("sha256:{:x}", hasher.finalize())
+    }
+
+    /// Extracts short alias from a handle (first 8 hex chars after "sha256:").
+    /// LLMs can reliably copy/reproduce this shorter identifier.
+    pub fn handle_to_short_alias(handle: &ContentHandle) -> String {
+        handle
+            .strip_prefix("sha256:")
+            .and_then(|h| h.get(..SHORT_ALIAS_LEN))
+            .unwrap_or(handle)
+            .to_string()
     }
 
     /// Computes the storage path for a content handle.
@@ -174,7 +193,8 @@ impl ContentStore {
         self.sessions_dir.join(session_id).join("manifest.json")
     }
 
-    /// Registers a content name in a session manifest.
+    /// Registers a content name and short alias in a session manifest.
+    /// The short alias (8 hex chars) is LLM-friendly for easy retrieval.
     pub fn register_name(
         &self,
         session_id: &str,
@@ -184,8 +204,173 @@ impl ContentStore {
         let mut manifests = self.manifests.lock().unwrap();
         let manifest = manifests.entry(session_id.to_string()).or_default();
         manifest.names.insert(name.to_string(), handle.clone());
+
+        // Also register the short alias for LLM-friendly lookup
+        let short_alias = Self::handle_to_short_alias(handle);
+        manifest.aliases.insert(short_alias, handle.clone());
+
         self.save_manifest(session_id, manifest)?;
         Ok(())
+    }
+
+    /// Sets the parent session ID for hierarchical content visibility.
+    /// Content written to this session will be visible to the parent.
+    pub fn set_parent_session(
+        &self,
+        session_id: &str,
+        parent_session_id: &str,
+    ) -> anyhow::Result<()> {
+        let mut manifests = self.manifests.lock().unwrap();
+        let manifest = manifests.entry(session_id.to_string()).or_default();
+        manifest.parent_session_id = Some(parent_session_id.to_string());
+        self.save_manifest(session_id, manifest)?;
+        Ok(())
+    }
+
+    /// Registers content in both the current session AND its parent session.
+    /// This enables hierarchical content visibility where parent agents can
+    /// read content written by their child agents.
+    ///
+    /// For example, if coder (session: "demo-session-1") writes "weather.py":
+    /// - It's registered in "demo-session-1" (current session)
+    /// - It's also registered in "demo-session-1" (parent = planner's session)
+    ///
+    /// This allows the planner to read the coder's files via content.read.
+    pub fn register_name_in_hierarchy(
+        &self,
+        session_id: &str,
+        name: &str,
+        handle: &ContentHandle,
+    ) -> anyhow::Result<()> {
+        // Always register in current session
+        self.register_name(session_id, name, handle)?;
+
+        // If there's a parent session, also register there for visibility
+        let parent = {
+            let manifests = self.manifests.lock().unwrap();
+            manifests
+                .get(session_id)
+                .and_then(|m| m.parent_session_id.clone())
+        };
+
+        if let Some(parent_session_id) = parent {
+            // Register with a namespaced key to avoid collisions
+            let hierarchical_name = format!("{}/{}", session_id, name);
+            self.register_name(&parent_session_id, &hierarchical_name, handle)?;
+
+            tracing::debug!(
+                target: "content_store",
+                session_id = %session_id,
+                parent_session_id = %parent_session_id,
+                name = %name,
+                hierarchical_name = %hierarchical_name,
+                "Registered content in parent session for visibility"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Resolves a name by walking up the delegation chain.
+    /// First checks the current session, then parent sessions.
+    pub fn resolve_name_hierarchical(
+        &self,
+        session_id: &str,
+        name: &str,
+    ) -> anyhow::Result<ContentHandle> {
+        // First try current session directly
+        if let Ok(handle) = self.resolve_name(session_id, name) {
+            return Ok(handle);
+        }
+
+        // Try with hierarchical prefix (parent searching for "child_session/name")
+        let mut current_session = session_id.to_string();
+        loop {
+            let manifest = self.load_manifest(&current_session)?;
+            let parent = manifest.parent_session_id.clone();
+
+            if let Some(parent_id) = parent {
+                // Check if parent has content with hierarchical name
+                let hierarchical_name = format!("{}/{}", current_session, name);
+                if let Some(handle) = manifest.names.get(&hierarchical_name) {
+                    return Ok(handle.clone());
+                }
+
+                // Try reading directly from parent (for aliases/handles)
+                if let Ok(handle) = self.resolve_name(&parent_id, name) {
+                    return Ok(handle);
+                }
+
+                current_session = parent_id;
+            } else {
+                break;
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Content name '{}' not found in session '{}' or parent sessions",
+            name,
+            session_id
+        ))
+    }
+
+    /// Reads content by name, handle, or short alias with hierarchical lookup.
+    /// If not found in current session, walks up the parent chain.
+    pub fn read_by_name_or_handle_hierarchical(
+        &self,
+        session_id: &str,
+        name_or_handle: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        if name_or_handle.starts_with("sha256:") {
+            // Full handle - read directly from content store
+            self.read(&name_or_handle.to_string())
+        } else if name_or_handle.len() == SHORT_ALIAS_LEN
+            && name_or_handle.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            // Short alias - try current session first, then walk up parent chain
+            self.resolve_alias_hierarchical(session_id, name_or_handle)
+                .and_then(|handle| self.read(&handle))
+        } else {
+            // Name lookup - use hierarchical resolution
+            self.resolve_name_hierarchical(session_id, name_or_handle)
+                .and_then(|handle| self.read(&handle))
+        }
+    }
+
+    /// Resolves an alias by walking up the delegation chain.
+    fn resolve_alias_hierarchical(
+        &self,
+        session_id: &str,
+        alias: &str,
+    ) -> anyhow::Result<ContentHandle> {
+        let mut current_session = session_id.to_string();
+
+        loop {
+            let manifest = self.load_manifest(&current_session)?;
+
+            // Check alias in current session
+            if let Some(handle) = manifest.aliases.get(alias) {
+                return Ok(handle.clone());
+            }
+
+            // Walk up to parent
+            if let Some(parent_id) = manifest.parent_session_id.clone() {
+                current_session = parent_id;
+            } else {
+                break;
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Content alias '{}' not found in session '{}' or parent sessions",
+            alias,
+            session_id
+        ))
+    }
+
+    /// Returns the short alias for a handle (for inclusion in API responses).
+    pub fn get_short_alias(handle: &ContentHandle) -> String {
+        Self::handle_to_short_alias(handle)
     }
 
     /// Resolves a name to a handle within a session.
@@ -206,18 +391,40 @@ impl ContentStore {
         self.read(&handle)
     }
 
-    /// Reads content by name or handle.
+    /// Reads content by name, handle, or short alias.
     ///
-    /// If the input starts with "sha256:", treats it as a handle.
-    /// Otherwise, treats it as a session-relative name.
+    /// Resolution order:
+    /// 1. If starts with "sha256:" → full handle lookup
+    /// 2. If 8 hex chars → short alias lookup
+    /// 3. Otherwise → session name lookup
     pub fn read_by_name_or_handle(
         &self,
         session_id: &str,
         name_or_handle: &str,
     ) -> anyhow::Result<Vec<u8>> {
         if name_or_handle.starts_with("sha256:") {
+            // Full handle
             self.read(&name_or_handle.to_string())
+        } else if name_or_handle.len() == SHORT_ALIAS_LEN
+            && name_or_handle.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            // Short alias (8 hex chars) - lookup in session manifest
+            // Use load_manifest to ensure we load from disk if not in memory cache
+            let manifest = self.load_manifest(session_id)?;
+            let handle = manifest
+                .aliases
+                .get(name_or_handle)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Content alias '{}' not found in session '{}'",
+                        name_or_handle,
+                        session_id
+                    )
+                })?;
+            self.read(&handle)
         } else {
+            // Name lookup
             self.read_by_name(session_id, name_or_handle)
         }
     }
@@ -468,13 +675,114 @@ Retrieves current or forecast weather.
     }
 
     #[test]
-    fn test_content_store_missing_content() {
+    fn test_hierarchical_content_visibility() {
         let temp = tempdir().unwrap();
         let store = ContentStore::new(temp.path()).unwrap();
 
-        let result = store.read(
-            &"sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        );
-        assert!(result.is_err());
+        // Set up parent-child relationship
+        // Parent session: "planner-session"
+        // Child session: "planner-session/coder-abc123"
+        let parent_session = "planner-session";
+        let child_session = "planner-session/coder-abc123";
+
+        store.set_parent_session(child_session, parent_session).unwrap();
+
+        // Child writes content using hierarchical registration
+        let content = b"print('Hello from coder')";
+        let handle = store.write(content).unwrap();
+        store.register_name_in_hierarchy(child_session, "weather.py", &handle).unwrap();
+
+        // Child can read its own content directly
+        let child_read = store.read_by_name_or_handle_hierarchical(child_session, "weather.py").unwrap();
+        assert_eq!(child_read, content);
+
+        // Parent can read child's content using hierarchical name (child_session/name)
+        let hierarchical_name = format!("{}/{}", child_session, "weather.py");
+        let parent_read = store.read_by_name_or_handle_hierarchical(parent_session, &hierarchical_name).unwrap();
+        assert_eq!(parent_read, content);
+
+        // Short alias should also work for parent (aliases are global to content store)
+        let short_alias = ContentStore::get_short_alias(&handle);
+        let parent_read_alias = store.read_by_name_or_handle_hierarchical(parent_session, &short_alias).unwrap();
+        assert_eq!(parent_read_alias, content);
+
+        // Full handle should also work
+        let parent_read_handle = store.read_by_name_or_handle_hierarchical(parent_session, &handle).unwrap();
+        assert_eq!(parent_read_handle, content);
+    }
+
+    #[test]
+    fn test_hierarchical_content_isolation() {
+        let temp = tempdir().unwrap();
+        let store = ContentStore::new(temp.path()).unwrap();
+
+        // Two sibling sessions with same parent
+        let parent_session = "planner-session";
+        let child1_session = "planner-session/coder-abc";
+        let child2_session = "planner-session/coder-def";
+
+        store.set_parent_session(child1_session, parent_session).unwrap();
+        store.set_parent_session(child2_session, parent_session).unwrap();
+
+        // Child1 writes content
+        let content1 = b"child1 content";
+        let handle1 = store.write(content1).unwrap();
+        store.register_name_in_hierarchy(child1_session, "file1.py", &handle1).unwrap();
+
+        // Child2 writes content
+        let content2 = b"child2 content";
+        let handle2 = store.write(content2).unwrap();
+        store.register_name_in_hierarchy(child2_session, "file2.py", &handle2).unwrap();
+
+        // Parent can read both children's content using hierarchical names
+        let parent_read1 = store.read_by_name_or_handle_hierarchical(
+            parent_session,
+            &format!("{}/{}", child1_session, "file1.py")
+        ).unwrap();
+        assert_eq!(parent_read1, content1);
+
+        let parent_read2 = store.read_by_name_or_handle_hierarchical(
+            parent_session,
+            &format!("{}/{}", child2_session, "file2.py")
+        ).unwrap();
+        assert_eq!(parent_read2, content2);
+
+        // Each child can read its own content directly
+        let child1_read = store.read_by_name_or_handle_hierarchical(child1_session, "file1.py").unwrap();
+        assert_eq!(child1_read, content1);
+
+        let child2_read = store.read_by_name_or_handle_hierarchical(child2_session, "file2.py").unwrap();
+        assert_eq!(child2_read, content2);
+
+        // Siblings cannot read each other's content by direct name
+        let sibling_attempt = store.read_by_name_or_handle_hierarchical(child1_session, "file2.py");
+        assert!(sibling_attempt.is_err());
+    }
+
+    #[test]
+    fn test_content_store_short_alias() {
+        let temp = tempdir().unwrap();
+        let store = ContentStore::new(temp.path()).unwrap();
+
+        let content = b"test content for alias";
+        let handle = store.write(content).unwrap();
+        store
+            .register_name("session-1", "test.txt", &handle)
+            .unwrap();
+
+        // Get the short alias
+        let short_alias = ContentStore::get_short_alias(&handle);
+        assert_eq!(short_alias.len(), SHORT_ALIAS_LEN);
+        assert!(short_alias.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Read using short alias
+        let result = store
+            .read_by_name_or_handle("session-1", &short_alias)
+            .unwrap();
+        assert_eq!(result, content);
+
+        // Verify full handle still works
+        let result2 = store.read_by_name_or_handle("session-1", &handle).unwrap();
+        assert_eq!(result2, content);
     }
 }
