@@ -479,10 +479,43 @@ impl NativeTool for SandboxExecTool {
             !args.command.trim().is_empty(),
             "sandbox command must not be empty"
         );
-        anyhow::ensure!(
-            policy.can_exec_shell(&args.command),
-            "sandbox command denied by CodeExecution policy"
-        );
+
+        // Check policy with detailed security analysis
+        let (allowed, analysis) = policy.can_exec_shell_detailed(&args.command);
+        if !allowed {
+            let reason = match &analysis {
+                Some(a) if !a.threats.is_empty() => {
+                    format!(
+                        "sandbox command denied by security policy: {}",
+                        a.reason.as_deref().unwrap_or("security threats detected")
+                    )
+                }
+                _ => "sandbox command denied by CodeExecution policy".to_string()
+            };
+            anyhow::bail!(reason);
+        }
+
+        // Static analysis for remote access detection
+        // This runs deterministic pattern matching to detect code that requires
+        // network access, regardless of what the LLM self-declares.
+        let remote_analysis = crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&args.command);
+        if remote_analysis.requires_approval {
+            tracing::warn!(
+                target: "sandbox",
+                patterns = ?remote_analysis.detected_patterns,
+                "Code requires remote access - operator approval required"
+            );
+            return serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "exit_code": null,
+                "stdout": "",
+                "stderr": format!("Remote access detected: {}. Operator approval required to execute code with network access.", remote_analysis.summary),
+                "approval_required": true,
+                "remote_access_detected": true,
+                "detected_patterns": remote_analysis.detected_patterns,
+            }))
+            .map_err(Into::into);
+        }
 
         let dep_plan = dependency_plan_from_args_or_lock(manifest, agent_dir, args.dependencies)?;
         let driver = SandboxDriverKind::parse(&manifest.runtime.sandbox)?;
@@ -1500,11 +1533,16 @@ impl NativeTool for ContentWriteTool {
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
         let handle = store.write(args.content.as_bytes())?;
-        store.register_name(sid, &args.name, &handle)?;
+        // Use hierarchical registration so parent sessions can see this content
+        store.register_name_in_hierarchy(sid, &args.name, &handle)?;
+        
+        // Return short alias (8 hex chars) for LLM-friendly retrieval
+        let short_alias = crate::runtime::content_store::ContentStore::get_short_alias(&handle);
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
             "handle": handle,
+            "alias": short_alias,
             "name": args.name,
             "bytes_written": args.content.len(),
         }))
@@ -1589,7 +1627,8 @@ impl NativeTool for ContentReadTool {
         let sid = session_id.unwrap_or(&manifest.agent.id);
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
-        let content = store.read_by_name_or_handle(sid, &args.name_or_handle)?;
+        // Use hierarchical lookup so parent can read child's content
+        let content = store.read_by_name_or_handle_hierarchical(sid, &args.name_or_handle)?;
 
         let content_str = String::from_utf8(content)
             .map_err(|e| anyhow::anyhow!("Content is not valid UTF-8: {}", e))?;
@@ -2670,12 +2709,35 @@ impl NativeTool for AgentSpawnTool {
             Some(value) => format!("{}\n\nDelegation metadata: {}", args.message, value),
             None => args.message.clone(),
         };
+
+        // Set up hierarchical content namespace for the child agent
+        // The child gets a unique delegation path (e.g., "demo-session-1/coder-abc123")
+        // so content written by the child is visible to the parent via the hierarchy
+        let child_delegation_path = format!("{}/{}-{}", resolved_session_id, args.agent_id, &uuid::Uuid::new_v4().to_string()[..8]);
+
+        if let Ok(gw_dir) = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory missing parent"))
+            .and_then(|p| p.parent().ok_or_else(|| anyhow::anyhow!("Agents dir missing parent")))
+        {
+            if let Ok(store) = crate::runtime::content_store::ContentStore::new(&gw_dir.join(".gateway")) {
+                // Set parent relationship so child's content is visible to parent
+                let _ = store.set_parent_session(&child_delegation_path, &resolved_session_id);
+                tracing::info!(
+                    target: "content_store",
+                    parent_session = %resolved_session_id,
+                    child_delegation = %child_delegation_path,
+                    "Set up hierarchical content namespace for child agent"
+                );
+            }
+        }
+
         let spawn_future = async move {
             execution
                 .spawn_agent_once(
                     &target_agent_id,
                     &kickoff_message,
-                    &resolved_session_id,
+                    &child_delegation_path,  // Use delegation path as session_id for content namespace
                     Some(&source_agent_id),
                     false,
                     None,
