@@ -4,6 +4,7 @@
 //! managing Tier 1 and Tier 2 memory, and enforcing the execution lifecycle.
 
 pub mod artifact;
+pub mod capability_inference;
 pub mod content_store;
 pub mod crypto;
 pub mod disclosure;

@@ -2291,10 +2291,11 @@ impl NativeTool for KnowledgeShareTool {
 // Agent Install Tool
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Serialize)]
-struct InstallAgentFile {
-    path: String,
-    content: String,
+/// A file to be installed as part of an agent.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct InstallAgentFile {
+    pub path: String,
+    pub content: String,
 }
 
 fn collect_paths_with_prefix(files: &[InstallAgentFile], prefix: &str) -> Vec<String> {
@@ -2391,14 +2392,48 @@ struct InstallAgentArgs {
     gateway_token: Option<String>,
 }
 
+/// Promotion gate evidence for agent.install from evolution roles.
+///
+/// The `security_analysis` and `capability_analysis` fields are optional but
+/// recommended. When present, they provide actual evidence from automated analysis.
+/// When absent, only the boolean flags are checked (legacy behavior).
 #[derive(Debug, Deserialize, Serialize)]
-struct InstallPromotionGate {
-    evaluator_pass: bool,
-    auditor_pass: bool,
+pub struct InstallPromotionGate {
+    /// Evaluator passed (automated or human)
+    pub evaluator_pass: bool,
+    /// Auditor passed (automated or human)
+    pub auditor_pass: bool,
+    /// Override approval reference (for exceptional cases)
     #[serde(default)]
-    override_approval_ref: Option<String>,
+    pub override_approval_ref: Option<String>,
+    /// Human approval reference (after operator approval)
     #[serde(default)]
-    install_approval_ref: Option<String>,
+    pub install_approval_ref: Option<String>,
+    /// Security analysis results (recommended: actual evidence)
+    #[serde(default)]
+    pub security_analysis: Option<SecurityAnalysisEvidence>,
+    /// Capability analysis results (recommended: actual evidence)
+    #[serde(default)]
+    pub capability_analysis: Option<CapabilityAnalysisEvidence>,
+}
+
+/// Security analysis evidence from automated code scanning.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SecurityAnalysisEvidence {
+    pub passed: bool,
+    pub threats_detected: Vec<String>,
+    pub remote_access_detected: bool,
+    #[serde(default)]
+    pub analyzer_version: Option<String>,
+}
+
+/// Capability analysis evidence from automated inference.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CapabilityAnalysisEvidence {
+    pub inferred_capabilities: Vec<String>,
+    pub missing_capabilities: Vec<String>,
+    pub declared_capabilities: Vec<String>,
+    pub analysis_passed: bool,
 }
 
 fn parse_install_scheduled_action(
@@ -3167,6 +3202,47 @@ impl NativeTool for AgentInstallTool {
             !args.instructions.trim().is_empty(),
             "instructions must not be empty"
         );
+
+        // ─────────────────────────────────────────────────────────────────
+        // Capability Inference: Analyze code to detect required capabilities
+        // ─────────────────────────────────────────────────────────────────
+        let capability_validation = {
+            // Combine files + instructions for analysis
+            let mut all_files: Vec<crate::runtime::capability_inference::AnalyzableFile> =
+                args.files.iter()
+                    .map(|f| crate::runtime::capability_inference::AnalyzableFile {
+                        path: f.path.clone(),
+                        content: f.content.clone(),
+                    })
+                    .collect();
+
+            // Also analyze instructions as a potential source of capability hints
+            all_files.push(crate::runtime::capability_inference::AnalyzableFile {
+                path: "SKILL.md".to_string(),
+                content: args.instructions.clone(),
+            });
+
+            crate::runtime::capability_inference::validate_capabilities(
+                &args.capabilities,
+                &all_files,
+            )
+        };
+
+        // Check for missing capabilities
+        if !capability_validation.missing.is_empty() {
+            let missing_str = capability_validation.missing.join(", ");
+            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                "Capability mismatch: code requires {} but {} not declared in capabilities. \
+                 Add these capabilities to your install request.",
+                missing_str,
+                if capability_validation.missing.len() == 1 { "it was" } else { "they were" }
+            ))
+            .into());
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Promotion Gate validation (for evolution roles)
+        // ─────────────────────────────────────────────────────────────────
         if requires_promotion_gate(&manifest.agent.id) {
             let gate = args.promotion_gate.as_ref().ok_or_else(|| {
                 tagged::Tagged::validation(anyhow::anyhow!(
@@ -4874,6 +4950,10 @@ mod tests {
             "name": "fib_worker",
             "description": "Computes Fibonacci values on a schedule",
             "instructions": "# Fibonacci Worker\nMaintain the worker assets already installed in this directory.",
+            "capabilities": [
+                {"type": "ReadAccess", "scopes": ["self.*"]},
+                {"type": "WriteAccess", "scopes": ["self.*"]}
+            ],
             "background": {
                 "enabled": true,
                 "interval_secs": 20,
