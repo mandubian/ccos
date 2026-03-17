@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod memory;
 pub mod parser;
 pub mod reevaluation_state;
+pub mod remote_access;
 pub mod session_context;
 pub mod session_snapshot;
 pub mod session_tracer;
