@@ -96,8 +96,20 @@ fn resume_session_after_approval(
 ) -> anyhow::Result<()> {
     use crate::router::JsonRpcRequest;
     
-    // Only resume for agent_install actions - these have a caller waiting
-    if !matches!(&decision.action, autonoetic_types::background::ScheduledAction::AgentInstall { .. }) {
+    // Resume for agent_install and sandbox_exec actions - both have a caller waiting
+    let is_supported_action = matches!(
+        &decision.action,
+        autonoetic_types::background::ScheduledAction::AgentInstall { .. } |
+        autonoetic_types::background::ScheduledAction::SandboxExec { .. }
+    );
+    
+    if !is_supported_action {
+        tracing::warn!(
+            target: "approval",
+            request_id = %decision.request_id,
+            action = ?std::mem::discriminant(&decision.action),
+            "Unsupported action type for auto-execute"
+        );
         return Ok(());
     }
     
@@ -120,7 +132,7 @@ fn resume_session_after_approval(
         ApprovalStatus::Rejected => "rejected",
     };
     
-    // Extract agent_id for signal and message
+    // Extract agent_id and build status message based on action type
     let (agent_id, status_message) = match &decision.action {
         autonoetic_types::background::ScheduledAction::AgentInstall { agent_id, .. } => {
             let msg = if install_succeeded {
@@ -135,6 +147,25 @@ fn resume_session_after_approval(
                 )
             };
             (agent_id.clone(), msg)
+        }
+        autonoetic_types::background::ScheduledAction::SandboxExec { command, .. } => {
+            let msg = if decision.status == ApprovalStatus::Approved {
+                format!(
+                    "Sandbox execution approved! Retry sandbox.exec with the SAME command PLUS approval_ref='{}' to execute:\n  Command: {}",
+                    decision.request_id, command
+                )
+            } else {
+                format!(
+                    "Sandbox execution was rejected. Request: {}",
+                    decision.request_id
+                )
+            };
+            // Use the session_id to extract the agent_id (format: parent/agent-id-uuid)
+            let agent_id = session_id.split('/').last()
+                .and_then(|s| s.rsplit('-').nth(1))
+                .unwrap_or("unknown")
+                .to_string();
+            (agent_id, msg)
         }
         _ => ("unknown".to_string(), format!("Approval {} for request {}", status_str, decision.request_id)),
     };
