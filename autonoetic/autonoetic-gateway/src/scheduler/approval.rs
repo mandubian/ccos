@@ -189,6 +189,7 @@ fn resume_session_after_approval(
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     
+    // Write signal to the child session (so the child can resume)
     if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), session_id, &decision.request_id, &signal) {
         tracing::warn!(
             target: "approval",
@@ -198,13 +199,50 @@ fn resume_session_after_approval(
         );
     }
     
+    // For agent_install actions, ALSO notify the parent session (planner)
+    // Session ID format: "parent_session/child_agent-uuid"
+    let parent_session_id = session_id.split('/').next().unwrap_or(session_id);
+    if parent_session_id != session_id {
+        tracing::info!(
+            target: "approval",
+            parent_session = %parent_session_id,
+            "Also notifying parent session of approval resolution"
+        );
+        
+        // Write signal to parent session too
+        let parent_signal = super::signal::Signal::ApprovalResolved {
+            request_id: decision.request_id.clone(),
+            agent_id: agent_id.clone(),
+            status: status_str.to_string(),
+            install_completed: install_succeeded,
+            message: status_message.clone(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        
+        if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), parent_session_id, &decision.request_id, &parent_signal) {
+            tracing::warn!(
+                target: "approval",
+                request_id = %decision.request_id,
+                parent_session = %parent_session_id,
+                error = %e,
+                "Failed to write signal file to parent session"
+            );
+        }
+    }
+    
     // Clone data needed for the thread
     let request_id = decision.request_id.clone();
     let session_id_owned = session_id.to_string();
+    let parent_session_id_owned = parent_session_id.to_string();
     
     // Create the JSON-RPC event to send to the gateway
-    // Note: We do NOT specify target_agent_id - let the router resolve it from session binding
-    // The session binding points to the planner (who spawned specialized_builder)
+    // For agent_install, send to PARENT session (planner) so it knows the agent is ready
+    // For other actions, send to the child session
+    let target_session = match &decision.action {
+        autonoetic_types::background::ScheduledAction::AgentInstall { .. } => parent_session_id_owned.clone(),
+        _ => session_id_owned.clone(),
+    };
+    
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
         id: format!("approval-resume-{}", request_id),
@@ -212,7 +250,7 @@ fn resume_session_after_approval(
         params: serde_json::json!({
             "event_type": "chat",
             "message": message,
-            "session_id": session_id_owned,
+            "session_id": target_session,
             "metadata": {
                 "sender_id": "gateway-approval",
                 "channel_id": format!("gateway-approval-{}", session_id),
@@ -268,6 +306,12 @@ fn resume_session_after_approval(
                                 );
                                 return;
                             }
+                            
+                            tracing::info!(
+                                target: "approval",
+                                target_session = %request.params["session_id"],
+                                "Approval resume event sent to gateway"
+                            );
                             
                             // Read response (don't block forever)
                             let mut response_line = String::new();
