@@ -282,12 +282,22 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
                     text_line.len()
                 };
 
+                // Normalize selection order (handle backwards selection)
+                let (sel_start, sel_end) = if sel_col_start <= sel_col_end {
+                    (sel_col_start, sel_col_end)
+                } else {
+                    (sel_col_end, sel_col_start)
+                };
+
                 let mut spans: Vec<Span> = Vec::new();
                 spans.push(Span::raw(prefix));
 
-                let before_sel = &text_line[..sel_col_start.min(text_line.len())];
-                let in_sel = &text_line[sel_col_start.min(text_line.len())..sel_col_end.min(text_line.len())];
-                let after_sel = &text_line[sel_col_end.min(text_line.len())..];
+                let sel_start_clamped = sel_start.min(text_line.len());
+                let sel_end_clamped = sel_end.min(text_line.len());
+
+                let before_sel = &text_line[..sel_start_clamped];
+                let in_sel = &text_line[sel_start_clamped..sel_end_clamped];
+                let after_sel = &text_line[sel_end_clamped..];
 
                 if !before_sel.is_empty() {
                     spans.push(Span::styled(before_sel.to_string(), style));
