@@ -67,3 +67,35 @@ When `sandbox.exec` fails (exit code != 0):
 Common false positives to ignore:
 - `/etc/profile.d/` errors - sandbox environment issues, not your code
 - `/dev/null: Permission denied` - sandbox restriction, not a code error
+
+## Clarification Protocol
+
+When debugging is blocked by missing context, request clarification.
+
+### When to Request Clarification
+
+- **Cannot reproduce the issue**: The failure environment or steps are not specified
+- **Multiple possible root causes**: Different causes require different debugging paths
+- **Missing error context**: The reported error is incomplete or ambiguous
+
+### When to Proceed Without Clarification
+
+- **Standard debugging applies**: Start with logs, stack traces, and error messages
+- **Obvious reproduction path**: The issue description includes clear steps
+- **Most likely cause**: One root cause is far more likely given the evidence
+
+### Output Format
+
+When requesting clarification, output this structure:
+
+```json
+{
+  "status": "clarification_needed",
+  "clarification_request": {
+    "question": "Can you provide the exact error message or stack trace?",
+    "context": "Report says 'it crashes' but no error details provided"
+  }
+}
+```
+
+If you can proceed, produce your normal debugging analysis.
