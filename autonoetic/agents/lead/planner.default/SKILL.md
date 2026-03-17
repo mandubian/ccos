@@ -67,8 +67,15 @@ To create a new agent, **delegate to `specialized_builder.default`** via `agent.
 
 **Correct approach:**
 ```
-agent.spawn("specialized_builder.default", message="Install a new agent called 'my-agent' with these specs: [describe what the agent should do, its capabilities, and execution mode]")
+agent.spawn("specialized_builder.default", message="Install a new agent called 'my-agent' with these specs:
+- Purpose: [what the agent should do]
+- Capabilities needed: [NetworkAccess for API calls, ReadAccess for file reading, etc.]
+- Execution mode: script or reasoning
+- Any other requirements
+")
 ```
+
+**Important:** The gateway automatically analyzes agent code for required capabilities. If the code uses network calls (urllib, requests) but `NetworkAccess` isn't declared, the install will be REJECTED. When describing a new agent, be clear about what capabilities it needs based on what the code will do.
 
 ### Handling Approval Responses (CRITICAL)
 

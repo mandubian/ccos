@@ -69,6 +69,52 @@ The `agent.install` tool creates a complete agent with SKILL.md. **DO NOT pass a
 2. **DO NOT** include a file named "SKILL.md" in the `files` array - it will be rejected
 3. **Frontmatter is auto-generated** from agent_id, name, description, capabilities, llm_config
 
+### Required: Capabilities (CRITICAL)
+
+**The gateway automatically analyzes code to detect required capabilities.** If your `capabilities` don't match what the code actually uses, the install will be REJECTED.
+
+**Capability Detection Rules:**
+
+| Code Pattern | Required Capability |
+|--------------|---------------------|
+| `urllib`, `requests`, `httpx`, `fetch()`, `http://`, `https://` | `NetworkAccess` |
+| `with open(`, `pathlib.Path(`, `fs.readFile`, `.read_text()` | `ReadAccess` |
+| `os.remove`, `fs.unlink`, `os.makedirs`, `.write_text()` | `WriteAccess` |
+| `subprocess.run`, `os.system`, `shell=True`, `exec(` | `CodeExecution` |
+
+**Example: Code with network access requires NetworkAccess:**
+```python
+import urllib.request  # ← This means you MUST declare NetworkAccess!
+
+def fetch_weather(location):
+    url = f"https://api.open-meteo.com/v1/forecast?location={location}"
+    return urllib.request.urlopen(url).read()
+```
+
+**Install payload must include:**
+```json
+{
+  "capabilities": [
+    {"type": "NetworkAccess", "hosts": ["*.open-meteo.com", "*.open-meteo.org"]},
+    {"type": "ReadAccess", "scopes": ["self.*"]},
+    {"type": "WriteAccess", "scopes": ["self.*"]}
+  ]
+}
+```
+
+**If capabilities are missing, you'll get an error like:**
+```
+Capability mismatch: code requires NetworkAccess but it was not declared in capabilities.
+Add these capabilities to your install request.
+```
+
+**How to determine required capabilities:**
+1. Read the code files you're about to install
+2. Check for network calls → add `NetworkAccess`
+3. Check for file reads → add `ReadAccess`
+4. Check for file writes → add `WriteAccess`
+5. Check for subprocess calls → add `CodeExecution`
+
 ### Script Agent Requirements (CRITICAL)
 For `execution_mode: "script"`, you MUST include ALL of:
 ```json
@@ -93,10 +139,23 @@ Evolution roles MUST include `promotion_gate`:
   "capabilities": [...],
   "promotion_gate": {
     "evaluator_pass": true,
-    "auditor_pass": true
+    "auditor_pass": true,
+    "security_analysis": {           // RECOMMENDED: actual evidence
+      "passed": true,
+      "threats_detected": [],
+      "remote_access_detected": false
+    },
+    "capability_analysis": {         // RECOMMENDED: actual evidence
+      "inferred_capabilities": ["NetworkAccess"],
+      "missing_capabilities": [],
+      "declared_capabilities": ["NetworkAccess", "ReadAccess"],
+      "analysis_passed": true
+    }
   }
 }
 ```
+
+**Note:** The gateway runs automatic code analysis during `agent.install`. Adding `security_analysis` and `capability_analysis` provides evidence that the code was reviewed. While `evaluator_pass: true` + `auditor_pass: true` still works, providing analysis evidence is recommended for auditability.
 
 ### Approval Flow
 1. First call will fail with "requires promotion_gate" OR return "approval_required: true"
