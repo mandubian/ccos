@@ -28,6 +28,21 @@ pub struct ArtifactMetadata {
     pub io: Option<serde_json::Value>,
 }
 
+/// A single named content item written by a child agent during a spawn.
+///
+/// Included in `SpawnResult.files` so the caller (parent agent / planner) gets
+/// a structured manifest of everything the child produced — no need to mine
+/// handles from the free-text reply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentFile {
+    /// The name the child registered the content under (e.g. "weather_fetcher.py").
+    pub name: String,
+    /// Full SHA-256 content handle (e.g. "sha256:838ddf76...").
+    pub handle: String,
+    /// Short 8-hex-char alias for LLM-friendly lookup (e.g. "838ddf76").
+    pub alias: String,
+}
+
 /// Knowledge shared during execution that the caller can access.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharedKnowledge {
@@ -38,7 +53,7 @@ pub struct SharedKnowledge {
     pub created_at: String,
 }
 
-/// Extracts artifacts from the content store by looking for SKILL.md files.
+/// Extracts structured-agent artifacts from the content store by looking for SKILL.md files.
 ///
 /// This function:
 /// 1. Lists all content names in the session
@@ -78,6 +93,52 @@ pub fn extract_artifacts_from_content_store(
     }
     
     Ok(artifacts)
+}
+
+/// Collects all named content written by an agent during a spawn session.
+///
+/// Returns one `ContentFile` per named entry in the session manifest.
+/// Namespaced names (containing `/` with the shape of a session path) are excluded
+/// because those are parent-propagation copies, not original child outputs.
+///
+/// This gives the calling agent (planner) a structured manifest of everything the
+/// child produced — with names, handles, and short aliases — without having to parse
+/// the child's free-text reply.
+pub fn collect_named_content(
+    gateway_dir: &std::path::Path,
+    session_id: &str,
+) -> Vec<ContentFile> {
+    let Ok(store) = crate::runtime::content_store::ContentStore::new(gateway_dir) else {
+        return Vec::new();
+    };
+    let Ok(entries) = store.list_names_with_handles(session_id) else {
+        return Vec::new();
+    };
+
+    entries
+        .into_iter()
+        .filter_map(|(name, handle)| {
+            // Exclude internal session-snapshot names and namespaced propagation copies.
+            // A namespaced copy looks like "some-session-id/filename" where the prefix
+            // contains a UUID fragment (hex chars and hyphens). We skip any name whose
+            // first path component looks like a session path segment.
+            if name.starts_with("snapshot:") {
+                return None;
+            }
+            // If the name contains a '/' and the part before the first '/' looks like a
+            // session ID fragment (contains '-' or is long), treat it as a namespaced
+            // propagation copy and skip it — the flat version is also registered.
+            if let Some(slash_pos) = name.find('/') {
+                let prefix = &name[..slash_pos];
+                // Session ID segments contain hyphens (e.g. "demo-session", "coder-abc123")
+                if prefix.contains('-') || prefix.len() > 12 {
+                    return None;
+                }
+            }
+            let alias = crate::runtime::content_store::ContentStore::get_short_alias(&handle);
+            Some(ContentFile { name, handle, alias })
+        })
+        .collect()
 }
 
 /// Collects knowledge that was shared with a specific agent during execution.
@@ -239,6 +300,10 @@ pub struct SpawnResult {
     pub assistant_reply: Option<String>,
     pub should_signal_background: bool,
     pub artifacts: Vec<ArtifactMetadata>,
+    /// All named content written by the child agent during this spawn.
+    /// The calling agent (e.g. planner) can use `name`, `handle`, or `alias`
+    /// to read any of these files via `content.read` without parsing reply text.
+    pub files: Vec<ContentFile>,
     pub shared_knowledge: Vec<SharedKnowledge>,
 }
 
@@ -461,6 +526,12 @@ impl GatewayExecutionService {
                     session_id,
                 ).unwrap_or_default();
 
+                // Collect all named content written by the child agent
+                let files = collect_named_content(
+                    &self.config.agents_dir.join(".gateway"),
+                    session_id,
+                );
+
                 // Collect shared knowledge (for script mode, typically empty)
                 let shared_knowledge = collect_shared_knowledge(
                     &self.config.agents_dir.join(".gateway"),
@@ -474,6 +545,7 @@ impl GatewayExecutionService {
                     assistant_reply: Some(script_result),
                     should_signal_background,
                     artifacts,
+                    files,
                     shared_knowledge,
                 });
             }
@@ -528,6 +600,12 @@ impl GatewayExecutionService {
                 &resolved_session_id,
             ).unwrap_or_default();
 
+            // Collect all named content written by the child agent
+            let files = collect_named_content(
+                &self.config.agents_dir.join(".gateway"),
+                &resolved_session_id,
+            );
+
             // Collect knowledge shared with the caller
             let shared_knowledge = collect_shared_knowledge(
                 &self.config.agents_dir.join(".gateway"),
@@ -541,6 +619,7 @@ impl GatewayExecutionService {
                 assistant_reply,
                 should_signal_background,
                 artifacts,
+                files,
                 shared_knowledge,
             })
         })
