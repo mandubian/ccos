@@ -15,6 +15,8 @@ pub enum SecurityThreat {
     Destructive,
     /// Command attempts privilege escalation (e.g., sudo, su)
     PrivilegeEscalation,
+    /// Command reads or prints environment/process secrets (e.g., env, printenv)
+    EnvironmentDisclosure,
     /// Command may exfiltrate data or make unauthorized network calls
     NetworkExfiltration,
     /// Command attempts to escape sandbox (e.g., accessing /proc, /sys)
@@ -65,6 +67,11 @@ impl SecurityAnalyzer {
                 threats.push(SecurityThreat::PrivilegeEscalation);
             }
 
+            // Check for environment disclosure patterns
+            if Self::is_environment_disclosure(trimmed) {
+                threats.push(SecurityThreat::EnvironmentDisclosure);
+            }
+
             // Check for sandbox escape attempts
             if Self::is_sandbox_escape(trimmed) {
                 threats.push(SecurityThreat::SandboxEscape);
@@ -102,12 +109,18 @@ impl SecurityAnalyzer {
 
     /// Check for destructive commands that can destroy data.
     fn is_destructive(cmd: &str) -> bool {
+        let cmd_lower = cmd.to_lowercase();
+
+        // Block direct destructive shell/file operations, even outside extreme forms like rm -rf /
+        if Self::contains_shell_word(&cmd_lower, "rm")
+            || Self::contains_shell_word(&cmd_lower, "rmdir")
+            || Self::contains_shell_word(&cmd_lower, "unlink")
+            || cmd_lower.contains("find ") && cmd_lower.contains(" -delete")
+        {
+            return true;
+        }
+
         let destructive_patterns = &[
-            "rm -rf /",
-            "rm -rf /*",
-            "rm -rf ~",
-            "rm -rf .",
-            "rm -rf ..",
             "dd if=",
             "dd of=/dev/",
             "mkfs",
@@ -118,16 +131,21 @@ impl SecurityAnalyzer {
             "wipefs",
         ];
 
-        let cmd_lower = cmd.to_lowercase();
         destructive_patterns.iter().any(|p| cmd_lower.contains(p))
     }
 
     /// Check for privilege escalation attempts.
     fn is_privilege_escalation(cmd: &str) -> bool {
+        let cmd_lower = cmd.to_lowercase();
+
+        if Self::contains_shell_word(&cmd_lower, "sudo")
+            || Self::contains_shell_word(&cmd_lower, "su")
+            || Self::contains_shell_word(&cmd_lower, "doas")
+        {
+            return true;
+        }
+
         let escalation_patterns = &[
-            "sudo ",
-            "su ",
-            "su -",
             "setuid",
             "setgid",
             "chmod +s",
@@ -136,8 +154,24 @@ impl SecurityAnalyzer {
             "visudo",
         ];
 
-        let cmd_lower = cmd.to_lowercase();
         escalation_patterns.iter().any(|p| cmd_lower.contains(p))
+    }
+
+    /// Check for environment disclosure patterns.
+    fn is_environment_disclosure(cmd: &str) -> bool {
+        let cmd_lower = cmd.to_lowercase();
+
+        if Self::contains_shell_word(&cmd_lower, "env")
+            || cmd_lower.contains("printenv")
+            || cmd_lower.contains("declare -x")
+            || cmd_lower.contains("/proc/self/environ")
+            || cmd_lower.contains("/proc/1/environ")
+            || cmd_lower.contains("/etc/environment")
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Check for sandbox escape attempts.
@@ -210,6 +244,38 @@ impl SecurityAnalyzer {
         ];
 
         exhaustion_patterns.iter().any(|p| cmd.contains(p))
+    }
+
+    fn contains_shell_word(cmd: &str, word: &str) -> bool {
+        let mut offset = 0usize;
+        while let Some(found) = cmd[offset..].find(word) {
+            let start = offset + found;
+            let end = start + word.len();
+
+            let prev = if start == 0 {
+                None
+            } else {
+                cmd[..start].chars().next_back()
+            };
+            let next = if end >= cmd.len() {
+                None
+            } else {
+                cmd[end..].chars().next()
+            };
+
+            let prev_is_boundary = prev.map(Self::is_word_boundary).unwrap_or(true);
+            let next_is_boundary = next.map(Self::is_word_boundary).unwrap_or(true);
+
+            if prev_is_boundary && next_is_boundary {
+                return true;
+            }
+            offset = end;
+        }
+        false
+    }
+
+    fn is_word_boundary(ch: char) -> bool {
+        !ch.is_ascii_alphanumeric() && ch != '_'
     }
 
     /// Analyze Python script content for security threats.
@@ -609,6 +675,13 @@ mod tests {
     }
 
     #[test]
+    fn test_security_analyzer_destructive_rm_file() {
+        let analysis = SecurityAnalyzer::analyze_command("rm /tmp/test.txt");
+        assert!(!analysis.is_safe);
+        assert!(analysis.threats.contains(&SecurityThreat::Destructive));
+    }
+
+    #[test]
     fn test_security_analyzer_destructive_dd() {
         let analysis = SecurityAnalyzer::analyze_command("dd if=/dev/zero of=/dev/sda");
         assert!(!analysis.is_safe);
@@ -622,6 +695,24 @@ mod tests {
         assert!(analysis
             .threats
             .contains(&SecurityThreat::PrivilegeEscalation));
+    }
+
+    #[test]
+    fn test_security_analyzer_environment_disclosure_env() {
+        let analysis = SecurityAnalyzer::analyze_command("bash -c 'env'");
+        assert!(!analysis.is_safe);
+        assert!(analysis
+            .threats
+            .contains(&SecurityThreat::EnvironmentDisclosure));
+    }
+
+    #[test]
+    fn test_security_analyzer_environment_disclosure_printenv() {
+        let analysis = SecurityAnalyzer::analyze_command("printenv");
+        assert!(!analysis.is_safe);
+        assert!(analysis
+            .threats
+            .contains(&SecurityThreat::EnvironmentDisclosure));
     }
 
     #[test]
@@ -655,5 +746,45 @@ mod tests {
             "echo '{\"place\": \"London\"}' | python3 weather.py",
         );
         assert!(analysis.is_safe);
+    }
+
+    #[test]
+    fn test_policy_allows_safe_bash_when_pattern_matches() {
+        let manifest = manifest_with_caps(vec![Capability::CodeExecution {
+            patterns: vec!["bash -c ".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest);
+
+        let (allowed, analysis) = policy.can_exec_shell_detailed("bash -c 'printf hello'");
+        assert!(allowed);
+        assert!(analysis.is_none());
+    }
+
+    #[test]
+    fn test_policy_denies_bash_rm_even_when_pattern_matches() {
+        let manifest = manifest_with_caps(vec![Capability::CodeExecution {
+            patterns: vec!["bash -c ".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest);
+
+        let (allowed, analysis) = policy.can_exec_shell_detailed("bash -c 'rm /tmp/a'");
+        assert!(!allowed);
+        let analysis = analysis.expect("security analysis should be present for denial");
+        assert!(analysis.threats.contains(&SecurityThreat::Destructive));
+    }
+
+    #[test]
+    fn test_policy_denies_bash_printenv_even_when_pattern_matches() {
+        let manifest = manifest_with_caps(vec![Capability::CodeExecution {
+            patterns: vec!["bash -c ".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest);
+
+        let (allowed, analysis) = policy.can_exec_shell_detailed("bash -c 'printenv'");
+        assert!(!allowed);
+        let analysis = analysis.expect("security analysis should be present for denial");
+        assert!(analysis
+            .threats
+            .contains(&SecurityThreat::EnvironmentDisclosure));
     }
 }
