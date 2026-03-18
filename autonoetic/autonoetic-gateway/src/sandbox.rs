@@ -20,6 +20,8 @@ const PYTHONPATH_ENV: &str = "PYTHONPATH";
 const PYTHON_SDK_PATH_ENV: &str = "AUTONOETIC_PYTHON_SDK_PATH";
 const CCOS_SOCKET_ENV: &str = "CCOS_SOCKET_PATH";
 const SDK_SOCKET_BASENAME: &str = ".autonoetic_sdk.sock";
+const BWRAP_SHARE_NET_ENV: &str = "AUTONOETIC_BWRAP_SHARE_NET";
+const BWRAP_DEV_MODE_ENV: &str = "AUTONOETIC_BWRAP_DEV_MODE";
 
 struct SdkBridgeGuard {
     stop: Arc<AtomicBool>,
@@ -628,10 +630,10 @@ fn bubblewrap_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(Stri
         BWRAP_WORKSPACE_DIR.to_string(),
         "--chdir".to_string(),
         BWRAP_WORKSPACE_DIR.to_string(),
-        "--unshare-all".to_string(),
-        "--".to_string(),
-        program,
     ];
+    append_bwrap_isolation_flags(&mut argv);
+    argv.push("--".to_string());
+    argv.push(program);
     argv.extend(args);
     Ok(("bwrap".to_string(), argv))
 }
@@ -661,8 +663,8 @@ fn bubblewrap_shell_command(
         BWRAP_WORKSPACE_DIR.to_string(),
         "--chdir".to_string(),
         BWRAP_WORKSPACE_DIR.to_string(),
-        "--unshare-all".to_string(),
     ];
+    append_bwrap_isolation_flags(&mut argv);
 
     // Add extra bind mounts for session content
     for mount in extra_mounts {
@@ -690,6 +692,74 @@ fn bubblewrap_shell_command(
         shell_command.to_string(),
     ]);
     Ok(("bwrap".to_string(), argv))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BwrapDevMode {
+    /// Keep legacy behavior (no explicit /dev mount override).
+    Legacy,
+    /// Mount bubblewrap minimal writable /dev.
+    Minimal,
+    /// Bind host /dev into sandbox (least isolated, most compatible).
+    HostBind,
+}
+
+fn append_bwrap_isolation_flags(argv: &mut Vec<String>) {
+    argv.push("--unshare-all".to_string());
+    if bwrap_share_net_enabled() {
+        argv.push("--share-net".to_string());
+    }
+
+    match bwrap_dev_mode() {
+        BwrapDevMode::Legacy => {}
+        BwrapDevMode::Minimal => {
+            argv.push("--dev".to_string());
+            argv.push("/dev".to_string());
+        }
+        BwrapDevMode::HostBind => {
+            argv.push("--dev-bind".to_string());
+            argv.push("/dev".to_string());
+            argv.push("/dev".to_string());
+        }
+    }
+}
+
+fn bwrap_share_net_enabled() -> bool {
+    parse_env_bool(std::env::var(BWRAP_SHARE_NET_ENV).ok().as_deref()).unwrap_or(false)
+}
+
+fn bwrap_dev_mode() -> BwrapDevMode {
+    parse_bwrap_dev_mode(std::env::var(BWRAP_DEV_MODE_ENV).ok().as_deref())
+}
+
+fn parse_env_bool(value: Option<&str>) -> Option<bool> {
+    match value.map(|v| v.trim().to_ascii_lowercase()) {
+        None => None,
+        Some(v) if v.is_empty() => None,
+        Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => Some(true),
+        Some(v) if matches!(v.as_str(), "0" | "false" | "no" | "off") => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_bwrap_dev_mode(value: Option<&str>) -> BwrapDevMode {
+    match value.map(|v| v.trim().to_ascii_lowercase()) {
+        None => BwrapDevMode::Legacy,
+        Some(v) if v.is_empty() => BwrapDevMode::Legacy,
+        Some(v) if matches!(v.as_str(), "legacy" | "none") => BwrapDevMode::Legacy,
+        Some(v) if matches!(v.as_str(), "minimal" | "dev") => BwrapDevMode::Minimal,
+        Some(v) if matches!(v.as_str(), "host" | "host-bind" | "dev-bind") => {
+            BwrapDevMode::HostBind
+        }
+        Some(other) => {
+            tracing::warn!(
+                env = BWRAP_DEV_MODE_ENV,
+                value = %other,
+                "Unknown bwrap dev mode, falling back to legacy"
+            );
+            BwrapDevMode::Legacy
+        }
+    }
 }
 
 fn docker_command(agent_dir: &str, entrypoint: &str) -> anyhow::Result<(String, Vec<String>)> {
@@ -817,6 +887,7 @@ mod tests {
         assert_eq!(argv[5], "/tmp");
         assert_eq!(argv[6], "--chdir");
         assert_eq!(argv[7], "/tmp");
+        assert_eq!(argv[8], "--unshare-all");
         assert_eq!(argv[9], "--");
         assert_eq!(argv[10], "python");
         assert_eq!(argv[11], "main.py");
@@ -922,10 +993,38 @@ mod tests {
         assert_eq!(argv[5], "/tmp");
         assert_eq!(argv[6], "--chdir");
         assert_eq!(argv[7], "/tmp");
+        assert_eq!(argv[8], "--unshare-all");
         assert_eq!(argv[9], "--");
         assert_eq!(argv[10], "sh");
         assert_eq!(argv[11], "-c"); // Non-login shell
         assert_eq!(argv[12], "echo hi");
+    }
+
+    #[test]
+    fn test_parse_env_bool() {
+        assert_eq!(parse_env_bool(Some("1")), Some(true));
+        assert_eq!(parse_env_bool(Some("true")), Some(true));
+        assert_eq!(parse_env_bool(Some("yes")), Some(true));
+        assert_eq!(parse_env_bool(Some("on")), Some(true));
+        assert_eq!(parse_env_bool(Some("0")), Some(false));
+        assert_eq!(parse_env_bool(Some("false")), Some(false));
+        assert_eq!(parse_env_bool(Some("no")), Some(false));
+        assert_eq!(parse_env_bool(Some("off")), Some(false));
+        assert_eq!(parse_env_bool(Some("wat")), None);
+        assert_eq!(parse_env_bool(None), None);
+    }
+
+    #[test]
+    fn test_parse_bwrap_dev_mode() {
+        assert_eq!(parse_bwrap_dev_mode(None), BwrapDevMode::Legacy);
+        assert_eq!(parse_bwrap_dev_mode(Some("legacy")), BwrapDevMode::Legacy);
+        assert_eq!(parse_bwrap_dev_mode(Some("none")), BwrapDevMode::Legacy);
+        assert_eq!(parse_bwrap_dev_mode(Some("minimal")), BwrapDevMode::Minimal);
+        assert_eq!(parse_bwrap_dev_mode(Some("dev")), BwrapDevMode::Minimal);
+        assert_eq!(parse_bwrap_dev_mode(Some("host")), BwrapDevMode::HostBind);
+        assert_eq!(parse_bwrap_dev_mode(Some("host-bind")), BwrapDevMode::HostBind);
+        assert_eq!(parse_bwrap_dev_mode(Some("dev-bind")), BwrapDevMode::HostBind);
+        assert_eq!(parse_bwrap_dev_mode(Some("unknown")), BwrapDevMode::Legacy);
     }
 
     #[test]
