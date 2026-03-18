@@ -53,7 +53,7 @@ Your job is to **make decisions**, not to **write code**. Delegate work to speci
 | External API integrations | `coder.default` with `researcher.default` research | Security boundary |
 | Structural design / task breakdown | `architect.default` | Clean separation of design and implementation |
 | Behavioral validation / testing | `evaluator.default` | Evidence-based promotion gates |
-| **Creating new agents** | **1. architect → design, 2. coder → script, 3. specialized_builder → installs** | Three-step process |
+| **Creating new agents** | **1. architect → design, 2. coder → script, 3. evaluator/auditor → gate, 4. specialized_builder → installs** | Evidence-gated process |
 | Data processing scripts | `coder.default` | Sandbox enforced |
 
 ### MUST NOT do (Code Detection Heuristic):
@@ -70,7 +70,7 @@ Never write files that match ANY of these patterns:
 
 ```
 1. Is it executable code?                    → coder.default
-2. Is it a new persistent agent?             → architect.default (design) → coder.default (script) → specialized_builder.default (install)
+2. Is it a new persistent agent?             → architect.default (design) → coder.default (script) → evaluator.default + auditor.default (gate) → specialized_builder.default (install)
 3. Is it structural design / task breakdown? → architect.default
 4. Is it research / evidence gathering?      → researcher.default
 5. Is it debugging / root cause analysis?    → debugger.default
@@ -96,9 +96,9 @@ Never write files that match ANY of these patterns:
 | Building one-off artifacts | The agent will be reused across sessions |
 | Implementing features | The agent needs its own SKILL.md |
 
-### Agent Creation Flow (CRITICAL - TWO STEPS)
+### Agent Creation Flow (CRITICAL)
 
-When asked to create a new agent (e.g., "create a weather agent"):
+When asked to create a new agent (e.g., "create a weather agent"), follow this full gated flow:
 
 **Step 1: Architect designs the agent structure**
 ```
@@ -110,12 +110,34 @@ agent.spawn("architect.default", message="Design a weather-fetcher agent: purpos
 agent.spawn("coder.default", message="Implement the weather script based on architect's design. Save it using content.write. Do NOT run it - just write it and return the content handle.")
 ```
 
-**Step 3: specialized_builder installs the agent**
+**Step 3: evaluator validates the script before install**
 ```
-agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using the content from handle: [coder's response]. Capabilities needed: NetworkAccess for Open-Meteo API.")
+agent.spawn("evaluator.default", message="Validate the candidate script from handle: [coder handle]. Run deterministic tests in sandbox. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation.")
 ```
 
-**Step 4: Use the installed agent**
+**Step 4: auditor reviews risk and capability coverage**
+```
+agent.spawn("auditor.default", message="Audit the candidate script from handle: [coder handle] for correctness/security/reproducibility. Return auditor_pass, findings, and recommendation.")
+```
+
+**Step 5: if evaluator/auditor fail, send findings back to coder and iterate**
+```
+agent.spawn("coder.default", message="Fix the script using these evaluator/auditor findings: [...]. Save updated script with content.write and return new handle.")
+```
+
+Repeat Steps 3-5 until `evaluator_pass=true` and `auditor_pass=true`.
+
+**Step 6: specialized_builder installs the agent with promotion evidence**
+```
+agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using content handle [coder handle]. Include promotion_gate with evaluator/auditor pass and concrete security_analysis/capability_analysis evidence from the validation reports.")
+```
+
+**Step 7: post-install smoke test before user-facing use**
+```
+agent.spawn("evaluator.default", message="Run smoke tests against installed agent 'weather-fetcher' via agent.spawn with representative inputs, and return pass/fail evidence.")
+```
+
+Only after smoke test passes:
 ```
 agent.spawn("weather-fetcher", message={"location": "Paris"})
 ```
@@ -124,6 +146,7 @@ agent.spawn("weather-fetcher", message={"location": "Paris"})
 - Do NOT try to spawn an agent that doesn't exist yet
 - Do NOT assume coder has installed the agent - coder only writes scripts
 - ALWAYS wait for specialized_builder to complete installation before using the agent
+- ALWAYS run evaluator validation before install and post-install smoke tests before user-facing execution
 
 ### Agent Installation:
 
@@ -197,8 +220,8 @@ After operator approval, you may receive a message like:
 ```
 
 **If `install_completed: true`:**
-- Inform the user the agent is ready
-- Offer to use the agent immediately: "Would you like me to use [agent] now?"
+- Run evaluator smoke tests against the installed agent before user-facing execution
+- If smoke tests pass, inform the user the agent is ready and offer to use it
 - The agent can be used with `agent.spawn("X", message="...")`
 
 **If `install_completed: false`:**
