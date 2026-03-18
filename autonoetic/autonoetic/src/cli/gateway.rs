@@ -208,11 +208,12 @@ pub fn handle_gateway_approvals(
                 decision.action.kind()
             );
             println!();
-            println!("The approval has been processed and a notification was sent to the");
-            println!("planner session. Return to your chat session and type a message");
-            println!("(e.g., 'continue' or 'done') to trigger the planner to respond.");
+            println!("The approval has been processed and a notification was queued for");
+            println!("the target session. If chat is open, it should auto-resume and");
+            println!("display the planner continuation without requiring a manual prompt.");
             println!();
-            println!("The planner will see the approval result and continue the workflow.");
+            println!("If no chat is currently connected, the notification remains pending");
+            println!("until a consumer acknowledges it.");
         }
         super::common::GatewayApprovalCommands::Reject { request_id, reason } => {
             let decision = autonoetic_gateway::scheduler::reject_request(

@@ -1,11 +1,11 @@
 //! TUI Chat interface using ratatui + crossterm.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use arboard::Clipboard;
 use tokio::net::TcpStream;
 
 use crossterm::{
@@ -71,6 +71,12 @@ struct App {
     selecting: bool,
     sel_start: Option<(u16, u16)>,
     sel_end: Option<(u16, u16)>,
+    signal_resume_by_internal_id: HashMap<u64, String>,
+    signal_resume_inflight: HashSet<String>,
+    awaiting_approvals: HashSet<String>,
+    // Persistent clipboard — must stay alive so arboard's background ownership
+    // thread keeps running and clipboard managers have time to capture the content.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -88,6 +94,11 @@ impl App {
             selecting: false,
             sel_start: None,
             sel_end: None,
+            signal_resume_by_internal_id: HashMap::new(),
+            signal_resume_inflight: HashSet::new(),
+            awaiting_approvals: HashSet::new(),
+            // Initialize once; kept alive so arboard's ownership thread persists.
+            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 
@@ -130,6 +141,28 @@ impl App {
         SPINNER_FRAMES[self.spinner_frame]
     }
 
+    fn add_awaiting_approval(&mut self, request_id: String) {
+        self.awaiting_approvals.insert(request_id);
+    }
+
+    fn resolve_awaiting_approval(&mut self, request_id: &str) {
+        self.awaiting_approvals.remove(request_id);
+    }
+
+    fn awaiting_approval_preview(&self) -> String {
+        if self.awaiting_approvals.is_empty() {
+            return String::new();
+        }
+        let mut ids: Vec<&str> = self.awaiting_approvals.iter().map(|s| s.as_str()).collect();
+        ids.sort_unstable();
+        let shown: Vec<&str> = ids.iter().take(2).copied().collect();
+        if ids.len() > shown.len() {
+            format!("{}, +{}", shown.join(", "), ids.len() - shown.len())
+        } else {
+            shown.join(", ")
+        }
+    }
+
     fn insert_char(&mut self, c: char) {
         self.input.insert(self.cursor_pos, c);
         self.cursor_pos += c.len_utf8();
@@ -160,7 +193,7 @@ impl App {
 }
 
 // ============================================================================
-// UUID extraction (for approval notifications)
+// Approval request id extraction (apr-* and UUID fallback)
 // ============================================================================
 
 fn extract_approval_request_id(text: &str) -> Option<String> {
@@ -172,12 +205,48 @@ fn extract_approval_request_id(text: &str) -> Option<String> {
     for prefix in &prefixes {
         if let Some(start) = lower.find(prefix) {
             let after = &text[start + prefix.len()..].trim();
-            if let Some(uuid) = extract_uuid(after) {
-                return Some(uuid);
+            if let Some(request_id) = extract_request_id(after) {
+                return Some(request_id);
             }
         }
     }
-    extract_uuid(text)
+    extract_request_id(text)
+}
+
+fn extract_request_id(text: &str) -> Option<String> {
+    extract_short_approval_id(text).or_else(|| extract_uuid(text))
+}
+
+fn extract_short_approval_id(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i + 4 <= chars.len() {
+        let is_prefix = chars[i].eq_ignore_ascii_case(&'a')
+            && chars[i + 1].eq_ignore_ascii_case(&'p')
+            && chars[i + 2].eq_ignore_ascii_case(&'r')
+            && chars[i + 3] == '-';
+        if !is_prefix {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 4;
+        while j < chars.len() && chars[j].is_ascii_hexdigit() {
+            j += 1;
+        }
+
+        // Current approval IDs are short ids like apr-1234abcd.
+        if j >= i + 12 {
+            let before_ok = i == 0 || !chars[i - 1].is_ascii_alphanumeric();
+            let after_ok = j == chars.len() || !chars[j].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return Some(chars[i..j].iter().collect());
+            }
+        }
+
+        i += 1;
+    }
+    None
 }
 
 fn extract_uuid(text: &str) -> Option<String> {
@@ -240,18 +309,34 @@ fn draw(f: &mut Frame, app: &App) {
 
     // Input
     draw_input(f, app, chunks[3]);
+
+    // Pin the terminal cursor inside the input box so it never wanders to the
+    // last mouse position during a drag-selection.
+    // Layout: top border = +1 row, "> " prefix = +2 cols, cursor_pos = byte offset.
+    let before_cursor_display_width = app.input[..app.cursor_pos].chars().count() as u16;
+    let cursor_x = (chunks[3].x + 2 + before_cursor_display_width)
+        .min(chunks[3].x + chunks[3].width.saturating_sub(1));
+    let cursor_y = chunks[3].y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
 }
 
 fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
-    let mut row: u16 = 0;
+    // `row` is the absolute content-line index (0 = very first line of all messages).
+    let mut row: usize = 0;
 
-    // Get selection bounds (if any)
+    // Selection bounds come from mouse screen-row coordinates.
+    // Screen row r → content row (r + scroll_offset).
+    // Convert here so the inner loop compares against content rows only.
     let sel_start = app.sel_start.map(|(_, r)| r);
     let sel_end = app.sel_end.map(|(_, r)| r);
-    let (sel_top, sel_bot) = match (sel_start, sel_end) {
-        (Some(a), Some(b)) => (a.min(b), a.max(b)),
-        _ => (u16::MAX, u16::MAX),
+    let (content_sel_top, content_sel_bot) = match (sel_start, sel_end) {
+        (Some(a), Some(b)) => {
+            let lo = a.min(b) as usize + app.scroll_offset;
+            let hi = a.max(b) as usize + app.scroll_offset;
+            (lo, hi)
+        }
+        _ => (usize::MAX, usize::MAX),
     };
 
     for msg in &app.messages {
@@ -264,20 +349,23 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
 
         for (i, text_line) in msg.content.lines().enumerate() {
             let prefix = if i == 0 { icon } else { "  " };
-            let prefix_len = prefix.len();
 
-            // Check if this line is in selection range
-            let is_selected = row >= sel_top && row <= sel_bot && sel_top != u16::MAX;
+            // Compare content row against content-row selection bounds.
+            let is_selected =
+                row >= content_sel_top && row <= content_sel_bot && content_sel_top != usize::MAX;
 
             if is_selected {
-                // For selected lines, render with highlight
-                let sel_col_start = if row == sel_top {
+                // For selected lines, render with highlight.
+                // Column bounds only apply at the first and last selected lines.
+                let sel_col_start = if row == content_sel_top {
                     app.sel_start.map(|(c, _)| c).unwrap_or(0) as usize
                 } else {
                     0
                 };
-                let sel_col_end = if row == sel_bot {
-                    app.sel_end.map(|(c, _)| c).unwrap_or(text_line.len() as u16) as usize
+                let sel_col_end = if row == content_sel_bot {
+                    app.sel_end
+                        .map(|(c, _)| c)
+                        .unwrap_or(text_line.len() as u16) as usize
                 } else {
                     text_line.len()
                 };
@@ -303,10 +391,7 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(before_sel.to_string(), style));
                 }
                 if !in_sel.is_empty() {
-                    spans.push(Span::styled(
-                        in_sel.to_string(),
-                        style.bg(Color::DarkGray),
-                    ));
+                    spans.push(Span::styled(in_sel.to_string(), style.bg(Color::DarkGray)));
                 }
                 if !after_sel.is_empty() {
                     spans.push(Span::styled(after_sel.to_string(), style));
@@ -320,25 +405,37 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
                 ]));
             }
 
-            row += 1;
+            row = row.saturating_add(1);
         }
         lines.push(Line::raw(""));
-        row += 1;
+        row = row.saturating_add(1);
     }
 
     // Pending indicator
     if !app.pending.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(
-                    "{} Working... ({} pending, {}s)",
-                    app.spinner(),
-                    app.pending.len(),
-                    app.oldest_secs()
-                ),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "{} Working... ({} pending, {}s)",
+                app.spinner(),
+                app.pending.len(),
+                app.oldest_secs()
             ),
-        ]));
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    }
+    if !app.awaiting_approvals.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "⏸ Waiting operator approval ({}): {}",
+                app.awaiting_approvals.len(),
+                app.awaiting_approval_preview()
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::ITALIC),
+        )]));
     }
 
     let p = Paragraph::new(Text::from(lines))
@@ -353,10 +450,22 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let text = if !app.pending.is_empty() {
+        let waiting = if app.awaiting_approvals.is_empty() {
+            String::new()
+        } else {
+            format!(" | waiting approvals: {}", app.awaiting_approvals.len())
+        };
         format!(
-            "{} {} pending | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
+            "{} {} pending{} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
             app.spinner(),
-            app.pending.len()
+            app.pending.len(),
+            waiting
+        )
+    } else if !app.awaiting_approvals.is_empty() {
+        format!(
+            "Waiting approvals: {} ({}) | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
+            app.awaiting_approvals.len(),
+            app.awaiting_approval_preview()
         )
     } else {
         format!(
@@ -374,10 +483,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Green))];
 
     if app.input.is_empty() {
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(Color::White),
-        ));
+        spans.push(Span::styled(" ", Style::default().bg(Color::White)));
     } else {
         let before = &app.input[..app.cursor_pos];
         let after = &app.input[app.cursor_pos..];
@@ -391,8 +497,11 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let p = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray)));
+    let p = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     f.render_widget(p, area);
 }
 
@@ -407,7 +516,10 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
         .session_id
         .clone()
         .unwrap_or_else(|| format!("session-{}", &uuid::Uuid::new_v4().to_string()[..8]));
-    let sender_id = args.sender_id.clone().unwrap_or_else(default_terminal_sender_id);
+    let sender_id = args
+        .sender_id
+        .clone()
+        .unwrap_or_else(default_terminal_sender_id);
     let channel_id = args
         .channel_id
         .clone()
@@ -415,9 +527,9 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     let gateway_addr = format!("127.0.0.1:{}", config.port);
 
     // Connect
-    let stream = TcpStream::connect(&gateway_addr).await.map_err(|e| {
-        anyhow::anyhow!("Failed to connect to {}: {}", gateway_addr, e)
-    })?;
+    let stream = TcpStream::connect(&gateway_addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", gateway_addr, e))?;
     let (read_half, write_half) = stream.into_split();
     let mut gateway_lines = BufReader::new(read_half).lines();
     let envelope = terminal_channel_envelope(&channel_id, &sender_id, &session_id);
@@ -432,7 +544,10 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     terminal.clear()?;
 
     let mut app = App::new(session_id.clone(), target_hint.to_string());
-    app.add_message(MessageRole::System, format!("Connected to {}", gateway_addr));
+    app.add_message(
+        MessageRole::System,
+        format!("Connected to {}", gateway_addr),
+    );
 
     // Channel for sending messages from TUI to gateway
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, String)>();
@@ -462,7 +577,11 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
 
     // Cleanup
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -508,6 +627,11 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         if let Ok(resp) = serde_json::from_str::<GatewayJsonRpcResponse>(&line) {
                             if let Some(internal_id) = pending_map.remove(&resp.id) {
                                 app.remove_pending(internal_id);
+                                let signal_resume_request_id =
+                                    app.signal_resume_by_internal_id.remove(&internal_id);
+                                if let Some(request_id) = &signal_resume_request_id {
+                                    app.signal_resume_inflight.remove(request_id);
+                                }
 
                                 if let Some(error) = resp.error {
                                     app.add_message(MessageRole::System, format!("Error: {}", error.message));
@@ -518,10 +642,28 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                         .unwrap_or_else(|| "[No response]".to_string());
 
                                     if let Some(req_id) = extract_approval_request_id(&reply) {
+                                        app.add_awaiting_approval(req_id.clone());
                                         app.add_message(MessageRole::Signal, format!("Approval required: {}", req_id));
                                     }
 
                                     app.add_message(MessageRole::Assistant, reply);
+
+                                    if let Some(request_id) = signal_resume_request_id {
+                                        let gateway_dir = config.agents_dir.join(".gateway");
+                                        if let Err(e) = autonoetic_gateway::scheduler::signal::consume_signal(
+                                            &gateway_dir,
+                                            session_id,
+                                            &request_id,
+                                        ) {
+                                            app.add_message(
+                                                MessageRole::System,
+                                                format!(
+                                                    "Approval resume processed but signal cleanup failed for {}: {}",
+                                                    request_id, e
+                                                ),
+                                            );
+                                        }
+                                    }
                                 }
                                 needs_redraw = true;
                             }
@@ -570,7 +712,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
             // Signal check
             _ = signal_interval.tick() => {
-                if check_signals(app, config, session_id).await {
+                if check_signals(app, config, session_id, tx).await {
                     needs_redraw = true;
                 }
             }
@@ -686,10 +828,16 @@ fn handle_key(
         }
 
         // Scroll (Shift or Ctrl)
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Up
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
             app.scroll_offset += 3;
         }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Down
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
             app.scroll_offset = app.scroll_offset.saturating_sub(3);
         }
 
@@ -704,25 +852,68 @@ async fn check_signals(
     app: &mut App,
     config: &autonoetic_types::config::GatewayConfig,
     session_id: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<(u64, String)>,
 ) -> bool {
     let gateway_dir = config.agents_dir.join(".gateway");
-    let Ok(signals) = autonoetic_gateway::scheduler::signal::check_pending_signals(&gateway_dir, session_id) else {
+    let Ok(signals) =
+        autonoetic_gateway::scheduler::signal::check_pending_signals(&gateway_dir, session_id)
+    else {
         return false;
     };
-    
+
     if signals.is_empty() {
         return false;
     }
-    
+
     for pending in signals {
         match &pending.signal {
-            autonoetic_gateway::scheduler::signal::Signal::ApprovalResolved { request_id, agent_id, status, .. } => {
+            autonoetic_gateway::scheduler::signal::Signal::ApprovalResolved {
+                request_id,
+                agent_id,
+                status,
+                install_completed,
+                message,
+                ..
+            } => {
+                app.resolve_awaiting_approval(request_id);
+                if app.signal_resume_inflight.contains(request_id) {
+                    continue;
+                }
+
                 let icon = if status == "approved" { "✅" } else { "❌" };
                 app.add_message(
                     MessageRole::Signal,
                     format!("{} Approval {} for {}", icon, status, agent_id),
                 );
-                let _ = autonoetic_gateway::scheduler::signal::consume_signal(&gateway_dir, session_id, request_id);
+
+                let payload = serde_json::json!({
+                    "type": "approval_resolved",
+                    "request_id": request_id,
+                    "agent_id": agent_id,
+                    "status": status,
+                    "install_completed": install_completed,
+                    "message": message
+                })
+                .to_string();
+
+                let internal_id = app.next_id();
+                app.add_pending(internal_id);
+                app.signal_resume_inflight.insert(request_id.clone());
+                app.signal_resume_by_internal_id
+                    .insert(internal_id, request_id.clone());
+
+                if tx.send((internal_id, payload)).is_err() {
+                    app.remove_pending(internal_id);
+                    app.signal_resume_inflight.remove(request_id);
+                    app.signal_resume_by_internal_id.remove(&internal_id);
+                    app.add_message(
+                        MessageRole::System,
+                        format!(
+                            "Failed to enqueue approval resume for {}; will retry",
+                            request_id
+                        ),
+                    );
+                }
             }
         }
     }
@@ -730,20 +921,23 @@ async fn check_signals(
 }
 
 /// Copy the selected text region to clipboard.
-/// Mouse coordinates are absolute to terminal - we need to map to content.
-fn copy_selection_to_clipboard(app: &App) {
+///
+/// Uses the persistent `App::clipboard` instance so arboard's background ownership
+/// thread stays alive after the write — clipboard managers have time to see the
+/// content before it is released.
+fn copy_selection_to_clipboard(app: &mut App) {
     let (Some(start), Some(end)) = (app.sel_start, app.sel_end) else {
         return;
     };
 
-    // Determine selection bounds (handle both directions)
+    // Normalise selection direction.
     let (top, bottom) = if start.1 <= end.1 {
         (start, end)
     } else {
         (end, start)
     };
 
-    // Build list of ALL rendered lines (including scrollable content)
+    // Build a flat list of all rendered content lines.
     let mut lines: Vec<String> = Vec::new();
     for msg in &app.messages {
         let icon = match msg.role {
@@ -756,23 +950,20 @@ fn copy_selection_to_clipboard(app: &App) {
             let prefix = if i == 0 { icon } else { "  " };
             lines.push(format!("{}{}", prefix, line));
         }
-        lines.push(String::new()); // Empty line between messages
+        lines.push(String::new()); // blank separator between messages
     }
     if !app.pending.is_empty() {
         lines.push(format!("{} Working...", app.spinner()));
     }
 
-    // The messages area starts at row 0 (first chunk after layout).
-    // Account for scroll offset to map screen rows to content rows.
+    // Screen row r → content row (r + scroll_offset).
+    let content_start = app.scroll_offset;
     let screen_start_row = top.1 as usize;
     let screen_end_row = bottom.1 as usize;
     let start_col = top.0 as usize;
     let end_col = bottom.0 as usize;
 
-        // Row 0 on screen = row `scroll_offset` in content
-        let content_start = app.scroll_offset;
-
-    let mut selected = Vec::new();
+    let mut selected: Vec<String> = Vec::new();
 
     for screen_row in screen_start_row..=screen_end_row {
         let content_row = content_start + screen_row;
@@ -782,30 +973,64 @@ fn copy_selection_to_clipboard(app: &App) {
         let line = &lines[content_row];
 
         if screen_row == screen_start_row && screen_row == screen_end_row {
-            // Single line selection
-            let col_start = start_col.min(line.len());
-            let col_end = end_col.min(line.len());
-            if col_end > col_start {
-                selected.push(line[col_start..col_end].to_string());
+            let col_s = start_col.min(line.len());
+            let col_e = end_col.min(line.len());
+            if col_e > col_s {
+                selected.push(line[col_s..col_e].to_string());
             }
         } else if screen_row == screen_start_row {
-            // First line
-            let col_start = start_col.min(line.len());
-            selected.push(line[col_start..].to_string());
+            let col_s = start_col.min(line.len());
+            selected.push(line[col_s..].to_string());
         } else if screen_row == screen_end_row {
-            // Last line
-            let col_end = end_col.min(line.len());
-            selected.push(line[..col_end].to_string());
+            let col_e = end_col.min(line.len());
+            selected.push(line[..col_e].to_string());
         } else {
-            // Middle lines
             selected.push(line.clone());
         }
     }
 
     let selected_text = selected.join("\n");
-    if !selected_text.is_empty() {
-        if let Ok(mut clipboard) = Clipboard::new() {
-            let _ = clipboard.set_text(&selected_text);
+    if selected_text.is_empty() {
+        return;
+    }
+
+    // Reuse the persistent clipboard object; fall back to a fresh one if it was
+    // never initialised (e.g. running in a headless environment).
+    let written = if let Some(cb) = app.clipboard.as_mut() {
+        cb.set_text(&selected_text).is_ok()
+    } else {
+        false
+    };
+
+    if !written {
+        // Last-resort: try allocating a new clipboard (still better than nothing,
+        // but the "dropped quickly" warning may still appear).
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(&selected_text);
+            app.clipboard = Some(cb);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_approval_request_id;
+
+    #[test]
+    fn test_extract_approval_request_id_short_form() {
+        let text = "Install requires approval. request_id: apr-1234abcd";
+        assert_eq!(
+            extract_approval_request_id(text).as_deref(),
+            Some("apr-1234abcd")
+        );
+    }
+
+    #[test]
+    fn test_extract_approval_request_id_uuid_fallback() {
+        let text = "Approval required for request id: c19a8a50-d6c8-4c5f-aa3c-6ba119751b11";
+        assert_eq!(
+            extract_approval_request_id(text).as_deref(),
+            Some("c19a8a50-d6c8-4c5f-aa3c-6ba119751b11")
+        );
     }
 }
