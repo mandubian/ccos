@@ -95,6 +95,15 @@ Your `CodeExecution` capability allows these patterns:
 - `bash -c `, `sh -c ` - Shell commands
 - `python3 scripts/`, `python scripts/` - Script execution
 
+Shell commands are acceptable for deterministic validation glue (for example orchestrating test steps).
+
+Hard-forbidden shell commands:
+- destructive operations: `rm`, `rmdir`, `unlink`, `shred`, `wipefs`, `mkfs`, `dd`
+- privilege escalation: `sudo`, `su`, `doas`
+- environment/process disclosure: `env`, `printenv`, `declare -x`, reads of `/proc/*/environ`
+
+These are blocked by gateway security policy even when command patterns match.
+
 ## Sandbox Execution Failure Handling
 
 When `sandbox.exec` fails (exit code != 0):

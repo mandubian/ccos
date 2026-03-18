@@ -52,17 +52,25 @@ Your `CodeExecution` capability only allows these patterns:
 - `bash -c `, `sh -c ` - Shell scripts
 - `python3 scripts/`, `python scripts/` - Script execution
 
-**DO NOT attempt**: `ls`, `echo`, `cat`, `pwd`, `mkdir`, or other shell utilities.
-These will be denied by policy. Use `content.read` for file analysis.
+You MAY use basic shell utilities through `bash -c` / `sh -c` for quick diagnostics
+(for example `ls`, `cat`, `pwd`, `echo`) when helpful.
+
+Hard-forbidden shell commands:
+- destructive operations: `rm`, `rmdir`, `unlink`, `shred`, `wipefs`, `mkfs`, `dd`
+- privilege escalation: `sudo`, `su`, `doas`
+- environment/process disclosure: `env`, `printenv`, `declare -x`, reads of `/proc/*/environ`
+
+Prefer `content.read` for deterministic file analysis and reproducible traces.
 
 ## Sandbox Execution Failure Handling (CRITICAL)
 
 When `sandbox.exec` fails (exit code != 0):
 
-1. **DO NOT** retry with shell commands like `ls`, `echo`, `cat` - these are denied
-2. **DO** analyze stderr for your script's errors (ignore profile/environment noise)
-3. **DO** use `content.read` to inspect files, not shell commands
-4. **DO** fix the actual error and retry the same command
+1. **DO** analyze stderr for your script's errors (ignore profile/environment noise)
+2. **DO** use `content.read` for deterministic file inspection when possible
+3. **DO** use safe shell diagnostics if needed (`bash -c 'ls ...'`, `bash -c 'cat ...'`)
+4. **DO NOT** retry with forbidden commands (`rm`, `sudo`, `env`, etc.)
+5. **DO** fix the actual error and retry the same command
 
 Common false positives to ignore:
 - `/etc/profile.d/` errors - sandbox environment issues, not your code

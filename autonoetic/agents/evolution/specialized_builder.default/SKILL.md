@@ -131,7 +131,7 @@ For `execution_mode: "script"`, you MUST include ALL of:
 **Missing `script_entry` will cause install to fail!**
 
 ### Required: promotion_gate (CRITICAL)
-Evolution roles MUST include `promotion_gate`:
+Evolution roles MUST include `promotion_gate` with concrete evidence (booleans alone are insufficient):
 ```json
 {
   "agent_id": "my-agent",
@@ -140,12 +140,12 @@ Evolution roles MUST include `promotion_gate`:
   "promotion_gate": {
     "evaluator_pass": true,
     "auditor_pass": true,
-    "security_analysis": {           // RECOMMENDED: actual evidence
+    "security_analysis": {
       "passed": true,
       "threats_detected": [],
       "remote_access_detected": false
     },
-    "capability_analysis": {         // RECOMMENDED: actual evidence
+    "capability_analysis": {
       "inferred_capabilities": ["NetworkAccess"],
       "missing_capabilities": [],
       "declared_capabilities": ["NetworkAccess", "ReadAccess"],
@@ -155,7 +155,13 @@ Evolution roles MUST include `promotion_gate`:
 }
 ```
 
-**Note:** The gateway runs automatic code analysis during `agent.install`. Adding `security_analysis` and `capability_analysis` provides evidence that the code was reviewed. While `evaluator_pass: true` + `auditor_pass: true` still works, providing analysis evidence is recommended for auditability.
+**Note:** The gateway validates promotion evidence against install analysis in strict mode. If your `security_analysis` / `capability_analysis` payload does not match the install request and analyzer output, install is rejected.
+
+Before calling `agent.install`, ensure:
+1. You have evaluator and auditor pass reports from planner context.
+2. `capability_analysis.declared_capabilities` matches the capabilities you are installing.
+3. `capability_analysis.missing_capabilities` is empty.
+4. `security_analysis.passed` is true.
 
 ### Approval Flow
 1. First call will fail with "requires promotion_gate" OR return "approval_required: true"
