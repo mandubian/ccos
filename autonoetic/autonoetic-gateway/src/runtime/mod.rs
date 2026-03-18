@@ -18,6 +18,7 @@ pub mod reevaluation_state;
 pub mod remote_access;
 pub mod session_context;
 pub mod session_snapshot;
+pub mod session_timeline;
 pub mod session_tracer;
 pub mod store;
 pub mod tool_call_processor;

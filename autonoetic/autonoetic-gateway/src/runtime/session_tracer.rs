@@ -5,6 +5,7 @@
 use crate::causal_chain::CausalLogger;
 use crate::log_redaction::redact_text_for_logs;
 use crate::runtime::artifact::Artifact;
+use crate::runtime::session_timeline::{base_session_id, SessionTimelineWriter};
 use autonoetic_types::causal_chain::EntryStatus;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -102,6 +103,9 @@ pub struct SessionTracer {
     turn_id: Option<String>,
     event_seq: u64,
     evidence_store: EvidenceStore,
+    /// Progressive Markdown timeline written to `.gateway/sessions/{session}/timeline.md`.
+    /// `None` when no gateway directory is available (standalone agent runs).
+    timeline_writer: Option<SessionTimelineWriter>,
 }
 
 impl SessionTracer {
@@ -116,7 +120,31 @@ impl SessionTracer {
             turn_id: None,
             event_seq: 0,
             evidence_store,
+            timeline_writer: None,
         })
+    }
+
+    /// Attach a progressive Markdown timeline.
+    ///
+    /// Opens (or resumes) `.gateway/sessions/{base_session_id}/timeline.md`.
+    /// Errors opening the timeline are non-fatal: a warning is logged and
+    /// execution continues without timeline output.
+    pub fn with_timeline(mut self, gateway_dir: &Path) -> Self {
+        let base = base_session_id(&self.session_id).to_string();
+        match SessionTimelineWriter::open(gateway_dir, &base) {
+            Ok(writer) => {
+                self.timeline_writer = Some(writer);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "session_timeline",
+                    session_id = %self.session_id,
+                    error = %e,
+                    "Failed to open session timeline — timeline output disabled for this session"
+                );
+            }
+        }
+        self
     }
 
     pub fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
@@ -154,12 +182,36 @@ impl SessionTracer {
             &self.agent_id,
             category,
             action,
-            status,
-            payload,
+            status.clone(),
+            payload.clone(),
             &self.session_id,
             self.turn_id.as_deref(),
             event_seq,
-        )
+        )?;
+
+        // Best-effort: append to the human/agent-readable Markdown timeline.
+        if let Some(writer) = &mut self.timeline_writer {
+            let ts = chrono::Utc::now().to_rfc3339();
+            if let Err(e) = writer.append(
+                &self.agent_id,
+                &self.session_id,
+                &ts,
+                category,
+                action,
+                &status,
+                payload.as_ref(),
+            ) {
+                tracing::warn!(
+                    target: "session_timeline",
+                    category = %category,
+                    action = %action,
+                    error = %e,
+                    "Failed to append timeline row — continuing without timeline update"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     pub fn log_session_start(
@@ -292,6 +344,9 @@ impl SessionTracer {
             "result_sha256": sha256_hex(result),
             "result_preview": redact_text_for_logs(&truncate_for_log(result, TOOL_RESULT_PREVIEW_MAX_CHARS))
         });
+        if let Some(approval_id) = find_approval_request_id_in_result(result) {
+            completed_payload["approval_request_id"] = serde_json::json!(approval_id);
+        }
         let completed_evidence = serde_json::json!({
             "tool_name": tool_name,
             "result": redact_text_for_logs(result)
@@ -437,6 +492,16 @@ fn sha256_hex(value: &str) -> String {
     format!("{:x}", digest)
 }
 
+fn find_approval_request_id_in_result(result: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(result).ok()?;
+    let request_id = parsed.get("request_id")?.as_str()?;
+    if request_id.starts_with("apr-") {
+        Some(request_id.to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 impl SessionTracer {
     /// Creates a test tracer that discards all output.
@@ -452,6 +517,7 @@ impl SessionTracer {
                 agent_dir: std::path::PathBuf::from("/tmp"),
                 base_dir: None,
             },
+            timeline_writer: None,
         }
     }
 }
