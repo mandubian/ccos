@@ -8,10 +8,11 @@
 //!
 //! Signal location: `{gateway_dir}/signal/{session_id}/{request_id}.json`
 
-use autonoetic_types::config::GatewayConfig;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
+
+const CLIENT_RESUME_GRACE_SECS: i64 = 10;
 
 /// Signal types that can be sent between components.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +34,16 @@ static POLLER_STARTED: Once = Once::new();
 /// Start a background signal poller thread if not already started.
 /// The poller scans the signal directory every 5 seconds and attempts to deliver
 /// any pending signals via JSON-RPC event.ingest.
-pub fn start_signal_poller_if_needed(agents_dir: PathBuf, port: u16) {
+pub fn start_signal_poller_if_needed(agents_dir: PathBuf, port: u16) -> anyhow::Result<()> {
+    let signal_dir = agents_dir.join(".gateway").join("signal");
+    std::fs::create_dir_all(&signal_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to initialize signal directory '{}': {}",
+            signal_dir.display(),
+            e
+        )
+    })?;
+
     POLLER_STARTED.call_once(move || {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new();
@@ -66,6 +76,7 @@ pub fn start_signal_poller_if_needed(agents_dir: PathBuf, port: u16) {
             "Background signal poller started"
         );
     });
+    Ok(())
 }
 
 /// Poll pending signals in all session directories and attempt delivery.
@@ -73,14 +84,14 @@ async fn poll_pending_signals(agents_dir: &Path, port: u16) -> anyhow::Result<()
     let gateway_dir = agents_dir.join(".gateway");
     let signal_dir = gateway_dir.join("signal");
     if !signal_dir.exists() {
-        tracing::info!(
+        tracing::debug!(
             target: "signal",
             "Signal directory does not exist, skipping poll"
         );
         return Ok(());
     }
     
-    tracing::info!(
+    tracing::debug!(
         target: "signal",
         "Starting signal poll"
     );
@@ -88,31 +99,50 @@ async fn poll_pending_signals(agents_dir: &Path, port: u16) -> anyhow::Result<()
     // Collect all session directories recursively
     let session_dirs = collect_session_directories(&signal_dir)?;
     if session_dirs.is_empty() {
-        tracing::info!(
+        tracing::debug!(
             target: "signal",
             "No signal directories found"
         );
         return Ok(());
     }
     
-    tracing::info!(
+    tracing::debug!(
         target: "signal",
         count = session_dirs.len(),
         "Found session directories with signals"
     );
     
-    for (session_dir, session_id) in session_dirs {
+    for (_session_dir, session_id) in session_dirs {
         let pending = check_pending_signals(&gateway_dir, &session_id)?;
         if pending.is_empty() {
             continue;
         }
-        tracing::info!(
+        tracing::debug!(
             target: "signal",
             session_id = %session_id,
             count = pending.len(),
             "Processing pending signals"
         );
         for signal in pending {
+            if is_signal_delivered(&gateway_dir, &session_id, &signal.request_id) {
+                tracing::debug!(
+                    target: "signal",
+                    request_id = %signal.request_id,
+                    session_id = %session_id,
+                    "Signal already delivered; awaiting consumer acknowledgement"
+                );
+                continue;
+            }
+            if should_defer_to_client_consumer(&signal.signal) {
+                tracing::debug!(
+                    target: "signal",
+                    request_id = %signal.request_id,
+                    session_id = %session_id,
+                    grace_secs = CLIENT_RESUME_GRACE_SECS,
+                    "Deferring signal delivery to channel consumer during grace window"
+                );
+                continue;
+            }
             tracing::info!(
                 target: "signal",
                 request_id = %signal.request_id,
@@ -136,19 +166,20 @@ async fn poll_pending_signals(agents_dir: &Path, port: u16) -> anyhow::Result<()
                 session_id = %session_id,
                 "Signal delivered successfully"
             );
-            // Delivery succeeded, consume signal file
-            if let Err(e) = consume_signal(&gateway_dir, &session_id, &signal.request_id) {
+            // Delivery succeeded, mark as delivered and wait for explicit consumer ack.
+            if let Err(e) = mark_signal_delivered(&gateway_dir, &session_id, &signal.request_id)
+            {
                 tracing::warn!(
                     target: "signal",
                     request_id = %signal.request_id,
                     session_id = %session_id,
                     error = %e,
-                    "Failed to consume signal file after delivery"
+                    "Failed to mark signal as delivered"
                 );
             }
         }
     }
-    tracing::info!(
+    tracing::debug!(
         target: "signal",
         "Signal poll completed"
     );
@@ -205,10 +236,7 @@ fn collect_session_directories_recursive(
 
 /// Deliver a single signal via JSON-RPC event.ingest to the gateway.
 async fn deliver_signal(pending: &PendingSignal, session_id: &str, port: u16) -> anyhow::Result<()> {
-    use crate::router::JsonRpcRequest;
-    
     let request_id = &pending.request_id;
-    let signal = &pending.signal;
     
     tracing::info!(
         target: "signal",
@@ -217,30 +245,7 @@ async fn deliver_signal(pending: &PendingSignal, session_id: &str, port: u16) ->
         "Delivering signal via JSON-RPC"
     );
     
-    // Build message based on signal type
-    let message = match signal {
-        Signal::ApprovalResolved { message, .. } => message.clone(),
-    };
-    
-    let request = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: format!("signal-deliver-{}", request_id),
-        method: "event.ingest".to_string(),
-        params: serde_json::json!({
-            "event_type": "chat",
-            "message": message,
-            "session_id": session_id,
-            "metadata": {
-                "sender_id": "gateway-signal-poller",
-                "channel_id": format!("signal-poller-{}", session_id),
-                "signal_delivered": true,
-                "approval_request_id": request_id,
-                "approval_status": match signal {
-                    Signal::ApprovalResolved { status, .. } => status.clone(),
-                },
-            }
-        }),
-    };
+    let request = build_delivery_request(pending, session_id);
     
     let gateway_addr = format!("127.0.0.1:{}", port);
     let addr = gateway_addr.clone();
@@ -317,6 +322,54 @@ async fn deliver_signal(pending: &PendingSignal, session_id: &str, port: u16) ->
         }
     }
     Ok(())
+}
+
+fn build_delivery_request(pending: &PendingSignal, session_id: &str) -> crate::router::JsonRpcRequest {
+    let request_id = &pending.request_id;
+    let signal = &pending.signal;
+
+    // Build a canonical structured payload. Delivery paths must remain identical.
+    let (message, target_agent_id, approval_status) = match signal {
+        Signal::ApprovalResolved {
+            request_id,
+            agent_id,
+            status,
+            install_completed,
+            message,
+            ..
+        } => (
+            serde_json::json!({
+                "type": "approval_resolved",
+                "request_id": request_id,
+                "agent_id": agent_id,
+                "status": status,
+                "install_completed": install_completed,
+                "message": message,
+            })
+            .to_string(),
+            agent_id.clone(),
+            status.clone(),
+        ),
+    };
+
+    crate::router::JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: format!("signal-deliver-{}", request_id),
+        method: "event.ingest".to_string(),
+        params: serde_json::json!({
+            "event_type": "chat",
+            "target_agent_id": target_agent_id,
+            "message": message,
+            "session_id": session_id,
+            "metadata": {
+                "sender_id": "gateway-signal-poller",
+                "channel_id": format!("signal-poller-{}", session_id),
+                "signal_delivered": true,
+                "approval_request_id": request_id,
+                "approval_status": approval_status,
+            }
+        }),
+    }
 }
 
 /// Write a signal file to the signal directory.
@@ -428,6 +481,11 @@ pub fn consume_signal(
         );
     }
 
+    let delivered_marker = signal_delivery_marker_path(gateway_dir, session_id, request_id);
+    if delivered_marker.exists() {
+        std::fs::remove_file(&delivered_marker)?;
+    }
+
     Ok(())
 }
 
@@ -443,6 +501,38 @@ pub fn consume_all_signals(gateway_dir: &Path, session_id: &str) -> anyhow::Resu
     }
 
     Ok(consumed)
+}
+
+fn signal_delivery_marker_path(gateway_dir: &Path, session_id: &str, request_id: &str) -> PathBuf {
+    gateway_dir
+        .join("signal")
+        .join(session_id)
+        .join(format!("{}.delivered", request_id))
+}
+
+fn is_signal_delivered(gateway_dir: &Path, session_id: &str, request_id: &str) -> bool {
+    signal_delivery_marker_path(gateway_dir, session_id, request_id).exists()
+}
+
+fn mark_signal_delivered(gateway_dir: &Path, session_id: &str, request_id: &str) -> anyhow::Result<()> {
+    let marker_path = signal_delivery_marker_path(gateway_dir, session_id, request_id);
+    if let Some(parent) = marker_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(marker_path, chrono::Utc::now().to_rfc3339())?;
+    Ok(())
+}
+
+fn should_defer_to_client_consumer(signal: &Signal) -> bool {
+    match signal {
+        Signal::ApprovalResolved { timestamp, .. } => {
+            let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
+                return false;
+            };
+            let age = chrono::Utc::now().signed_duration_since(created_at.with_timezone(&chrono::Utc));
+            age.num_seconds() < CLIENT_RESUME_GRACE_SECS
+        }
+    }
 }
 
 #[cfg(test)]
@@ -480,5 +570,97 @@ mod tests {
         // Check empty after consume
         let pending = check_pending_signals(gateway_dir, session_id).unwrap();
         assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn test_consume_signal_clears_delivery_marker() {
+        let temp = tempdir().unwrap();
+        let gateway_dir = temp.path();
+        let session_id = "test-session";
+        let request_id = "apr-abcdef12";
+
+        let signal = Signal::ApprovalResolved {
+            request_id: request_id.to_string(),
+            agent_id: "weather.script".to_string(),
+            status: "approved".to_string(),
+            install_completed: true,
+            message: "Agent installed successfully".to_string(),
+            timestamp: "2026-03-17T10:00:00Z".to_string(),
+        };
+
+        write_signal(gateway_dir, session_id, request_id, &signal).unwrap();
+        mark_signal_delivered(gateway_dir, session_id, request_id).unwrap();
+        let marker = signal_delivery_marker_path(gateway_dir, session_id, request_id);
+        assert!(marker.exists());
+
+        consume_signal(gateway_dir, session_id, request_id).unwrap();
+        assert!(!marker.exists());
+        let pending = check_pending_signals(gateway_dir, session_id).unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_defer_to_client_consumer_for_recent_signal() {
+        let recent = Signal::ApprovalResolved {
+            request_id: "apr-1".to_string(),
+            agent_id: "a".to_string(),
+            status: "approved".to_string(),
+            install_completed: true,
+            message: "ok".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        assert!(should_defer_to_client_consumer(&recent));
+
+        let old = Signal::ApprovalResolved {
+            request_id: "apr-2".to_string(),
+            agent_id: "a".to_string(),
+            status: "approved".to_string(),
+            install_completed: true,
+            message: "ok".to_string(),
+            timestamp: (chrono::Utc::now() - chrono::Duration::seconds(CLIENT_RESUME_GRACE_SECS + 1))
+                .to_rfc3339(),
+        };
+        assert!(!should_defer_to_client_consumer(&old));
+    }
+
+    #[test]
+    fn test_build_delivery_request_targets_waiting_agent() {
+        let pending = PendingSignal {
+            request_id: "apr-xyz12345".to_string(),
+            filename: "apr-xyz12345.json".to_string(),
+            signal: Signal::ApprovalResolved {
+                request_id: "apr-xyz12345".to_string(),
+                agent_id: "coder.default".to_string(),
+                status: "approved".to_string(),
+                install_completed: true,
+                message: "resume now".to_string(),
+                timestamp: "2026-03-18T12:00:00Z".to_string(),
+            },
+        };
+
+        let req = build_delivery_request(&pending, "demo-session/coder.default-6738ac56");
+        assert_eq!(req.method, "event.ingest");
+        assert_eq!(
+            req.params
+                .get("target_agent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "coder.default"
+        );
+        assert_eq!(
+            req.params
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "demo-session/coder.default-6738ac56"
+        );
+        assert_eq!(
+            req.params
+                .get("metadata")
+                .and_then(|v| v.get("approval_request_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "apr-xyz12345"
+        );
     }
 }

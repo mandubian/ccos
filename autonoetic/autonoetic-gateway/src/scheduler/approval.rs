@@ -84,18 +84,18 @@ pub fn reject_request(
     Ok(decision)
 }
 
-/// Resume a session after approval/rejection by sending an event to the gateway.
-/// This allows the caller (e.g., planner) to automatically continue without
-/// requiring the user to type "approved" in chat.
-/// 
+/// Queue durable session notifications after approval/rejection.
+///
+/// This function persists approval-resolution signals that are consumed by
+/// gateway-owned delivery loops and/or channel clients (for example, the TUI
+/// chat client resuming on its own connection).
+///
 /// `install_succeeded` indicates whether the auto-install succeeded (if applicable).
 fn resume_session_after_approval(
     config: &GatewayConfig,
     decision: &ApprovalDecision,
     install_succeeded: bool,
 ) -> anyhow::Result<()> {
-    use crate::router::JsonRpcRequest;
-    
     // Resume for agent_install and sandbox_exec actions - both have a caller waiting
     let is_supported_action = matches!(
         &decision.action,
@@ -160,24 +160,12 @@ fn resume_session_after_approval(
                     decision.request_id
                 )
             };
-            // Use the session_id to extract the agent_id (format: parent/agent-id-uuid)
-            let agent_id = session_id.split('/').last()
-                .and_then(|s| s.rsplit('-').nth(1))
-                .unwrap_or("unknown")
-                .to_string();
-            (agent_id, msg)
+            // Use the decision-level requester id to avoid brittle parsing of
+            // nested session names.
+            (decision.agent_id.clone(), msg)
         }
         _ => ("unknown".to_string(), format!("Approval {} for request {}", status_str, decision.request_id)),
     };
-    
-    let message = serde_json::json!({
-        "type": "approval_resolved",
-        "request_id": decision.request_id,
-        "agent_id": agent_id,
-        "status": status_str,
-        "install_completed": install_succeeded,
-        "message": status_message
-    }).to_string();
     
     // Write signal file for CLI to detect (enables auto-resume)
     let signal = super::signal::Signal::ApprovalResolved {
@@ -189,7 +177,7 @@ fn resume_session_after_approval(
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     
-    // Write signal to the child session (so the child can resume)
+    // Write signal to the child session (the original waiting runtime).
     if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), session_id, &decision.request_id, &signal) {
         tracing::warn!(
             target: "approval",
@@ -199,10 +187,15 @@ fn resume_session_after_approval(
         );
     }
     
-    // For agent_install actions, ALSO notify the parent session (planner)
     // Session ID format: "parent_session/child_agent-uuid"
     let parent_session_id = session_id.split('/').next().unwrap_or(session_id);
-    if parent_session_id != session_id {
+
+    // IMPORTANT: for SandboxExec approvals, do NOT notify the parent planner
+    // session. The approved command is bound to the waiting child session.
+    // Notifying the parent causes planner-level re-delegation loops.
+    let notify_parent = should_notify_parent_session(&decision.action, session_id);
+
+    if notify_parent {
         tracing::info!(
             target: "approval",
             parent_session = %parent_session_id,
@@ -230,213 +223,26 @@ fn resume_session_after_approval(
         }
     }
     
-    // Ensure background signal poller is running
-    super::signal::start_signal_poller_if_needed(config.agents_dir.clone(), config.port);
-    
-    // Clone data needed for the thread
-    let request_id = decision.request_id.clone();
-    let session_id_owned = session_id.to_string();
-    let parent_session_id_owned = parent_session_id.to_string();
-    
-    // Create the JSON-RPC event to send to the gateway
-    // For agent_install, send to PARENT session (planner) so it knows the agent is ready
-    // For other actions, send to the child session
-    let target_session = match &decision.action {
-        autonoetic_types::background::ScheduledAction::AgentInstall { .. } => parent_session_id_owned.clone(),
-        _ => session_id_owned.clone(),
+    // Delivery ownership is gateway-side and durable:
+    // this function only persists signals. Gateway pollers and channel-specific
+    // consumers (such as the chat TUI on its own socket) perform delivery + ack.
+    let target_session = if notify_parent {
+        format!("{},{}", session_id, parent_session_id)
+    } else {
+        session_id.to_string()
     };
-    
-    let request = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: format!("approval-resume-{}", request_id),
-        method: "event.ingest".to_string(),
-        params: serde_json::json!({
-            "event_type": "chat",
-            "message": message,
-            "session_id": target_session,
-            "metadata": {
-                "sender_id": "gateway-approval",
-                "channel_id": format!("gateway-approval-{}", session_id),
-                "approval_resume": true,
-                "approval_request_id": request_id,
-                "approval_status": status_str,
-            }
-            // NOTE: No target_agent_id here - router resolves from session binding
-        }),
-    };
-    
-    // Connect to gateway's JSON-RPC server and send the event
-    let gateway_addr = format!("127.0.0.1:{}", config.port);
-    let addr = gateway_addr.clone();
-    let gateway_dir = config.agents_dir.join(".gateway");
-    let session_id = target_session.clone();
-    
-    // Use a blocking task to send the resume event
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new();
-        match rt {
-            Ok(runtime) => {
-                runtime.block_on(async {
-                    const MAX_ATTEMPTS: u32 = 3;
-                    let mut attempt = 0;
-                    loop {
-                        attempt += 1;
-                        let delay = std::time::Duration::from_secs(1 << (attempt - 1)); // 1, 2, 4 seconds
-                        if attempt > 1 {
-                            tokio::time::sleep(delay).await;
-                        }
-                        tracing::debug!(
-                            target: "approval",
-                            attempt,
-                            max_attempts = MAX_ATTEMPTS,
-                            "Attempting to send approval resume to gateway"
-                        );
-                        match tokio::net::TcpStream::connect(&addr).await {
-                            Ok(stream) => {
-                                use tokio::io::{AsyncWriteExt, BufWriter};
-                                use tokio::io::AsyncBufReadExt;
-                                
-                                let (read_half, write_half) = stream.into_split();
-                                let mut writer = BufWriter::new(write_half);
-                                let mut reader = tokio::io::BufReader::new(read_half);
-                                
-                                let encoded = serde_json::to_string(&request).unwrap_or_default();
-                                if let Err(e) = writer.write_all(encoded.as_bytes()).await {
-                                    tracing::warn!(
-                                        target: "approval",
-                                        error = %e,
-                                        attempt,
-                                        "Failed to write approval resume to gateway"
-                                    );
-                                    if attempt >= MAX_ATTEMPTS {
-                                        break;
-                                    }
-                                    continue;
-                                }
-                                if let Err(e) = writer.write_all(b"\n").await {
-                                    tracing::warn!(
-                                        target: "approval",
-                                        error = %e,
-                                        attempt,
-                                        "Failed to write newline to gateway"
-                                    );
-                                    if attempt >= MAX_ATTEMPTS {
-                                        break;
-                                    }
-                                    continue;
-                                }
-                                if let Err(e) = writer.flush().await {
-                                    tracing::warn!(
-                                        target: "approval",
-                                        error = %e,
-                                        attempt,
-                                        "Failed to flush to gateway"
-                                    );
-                                    if attempt >= MAX_ATTEMPTS {
-                                        break;
-                                    }
-                                    continue;
-                                }
-                                
-                                tracing::info!(
-                                    target: "approval",
-                                    target_session = %request.params["session_id"],
-                                    attempt,
-                                    "Approval resume event sent to gateway"
-                                );
-                                
-                                // Read response (don't block forever)
-                                let mut response_line = String::new();
-                                let read_result = tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
-                                    reader.read_line(&mut response_line)
-                                ).await;
-                                
-                                match read_result {
-                                    Ok(Ok(_)) => {
-                                        tracing::info!(
-                                            target: "approval",
-                                            request_id = %request_id,
-                                            attempt,
-                                            "Session resume sent successfully"
-                                        );
-                                        // Consume signal file now that delivery succeeded
-                                        if let Err(e) = super::signal::consume_signal(&gateway_dir, &session_id, &request_id) {
-                                            tracing::warn!(
-                                                target: "approval",
-                                                error = %e,
-                                                "Failed to consume signal file after successful delivery"
-                                            );
-                                        }
-                                        break; // Success, exit loop
-                                    }
-                                    Ok(Err(e)) => {
-                                        tracing::warn!(
-                                            target: "approval",
-                                            error = %e,
-                                            attempt,
-                                            "Failed to read response from gateway"
-                                        );
-                                        if attempt >= MAX_ATTEMPTS {
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                    Err(_) => {
-                                        tracing::debug!(
-                                            target: "approval",
-                                            attempt,
-                                            "Gateway response timeout (non-fatal)"
-                                        );
-                                        // Timeout is considered success for delivery purposes
-                                        // Consume signal file now that delivery succeeded
-                                        if let Err(e) = super::signal::consume_signal(&gateway_dir, &session_id, &request_id) {
-                                            tracing::warn!(
-                                                target: "approval",
-                                                error = %e,
-                                                "Failed to consume signal file after timeout"
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "approval",
-                                    error = %e,
-                                    gateway_addr = %gateway_addr,
-                                    attempt,
-                                    "Failed to connect to gateway for session resume"
-                                );
-                                if attempt >= MAX_ATTEMPTS {
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    // If all attempts fail, signal file remains for polling fallback
-                    if attempt >= MAX_ATTEMPTS {
-                        tracing::warn!(
-                            target: "approval",
-                            request_id = %request_id,
-                            "All attempts to send approval resume failed; signal file remains for fallback"
-                        );
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "approval",
-                    error = %e,
-                    "Failed to create runtime for session resume"
-                );
-            }
-        }
-    });
+    tracing::info!(
+        target: "approval",
+        request_id = %decision.request_id,
+        target_session = %target_session,
+        "Approval notification queued for gateway-owned delivery"
+    );
     
     Ok(())
+}
+
+fn should_notify_parent_session(action: &ScheduledAction, session_id: &str) -> bool {
+    matches!(action, ScheduledAction::AgentInstall { .. }) && session_id.contains('/')
 }
 
 /// Execute the approved action (agent.install or file write).
@@ -759,4 +565,38 @@ fn decide_request(
         })),
     );
     Ok(decision)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_notify_parent_session;
+    use autonoetic_types::background::ScheduledAction;
+
+    #[test]
+    fn test_should_notify_parent_session_for_agent_install_nested_session() {
+        let action = ScheduledAction::AgentInstall {
+            agent_id: "specialist.weather".to_string(),
+            summary: "install specialist.weather".to_string(),
+            requested_by_agent_id: "specialized_builder.default".to_string(),
+            install_fingerprint: "sha256:abc123".to_string(),
+        };
+        assert!(should_notify_parent_session(
+            &action,
+            "demo-session/specialized_builder.default-abcd1234"
+        ));
+    }
+
+    #[test]
+    fn test_should_not_notify_parent_session_for_sandbox_exec() {
+        let action = ScheduledAction::SandboxExec {
+            command: "python3 /tmp/weather.py".to_string(),
+            dependencies: None,
+            requires_approval: true,
+            evidence_ref: None,
+        };
+        assert!(!should_notify_parent_session(
+            &action,
+            "demo-session/coder.default-6738ac56"
+        ));
+    }
 }

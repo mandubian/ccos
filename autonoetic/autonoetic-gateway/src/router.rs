@@ -284,6 +284,21 @@ impl JsonRpcRouter {
                 
                 match self.execute_agent_request(ingress, session_id.clone()).await {
                     Ok((result, _trace_session)) => {
+                        // Persist binding on successful spawn so future
+                        // event.ingest to this session routes to the spawned
+                        // agent (instead of default lead fallback).
+                        if let Err(e) = persist_session_lead_agent_binding(
+                            self.config.as_ref(),
+                            &result.session_id,
+                            &result.agent_id,
+                        ) {
+                            tracing::warn!(
+                                error = %e,
+                                session_id = %result.session_id,
+                                agent_id = %result.agent_id,
+                                "Failed to persist session lead binding after spawn"
+                            );
+                        }
                         if let Some(source_agent_id) = params.source_agent_id.as_deref() {
                             let _ = append_delegation_task_entry(
                                 self.config.as_ref(),
