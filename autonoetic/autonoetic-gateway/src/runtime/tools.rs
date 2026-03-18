@@ -1,13 +1,17 @@
 use crate::llm::ToolDefinition;
 use crate::policy::PolicyEngine;
 use crate::runtime::reevaluation_state::{execute_scheduled_action, persist_reevaluation_state};
-use crate::sandbox::{DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxRunner, SandboxMount};
+use crate::sandbox::{
+    DependencyPlan, DependencyRuntime, SandboxDriverKind, SandboxMount, SandboxRunner,
+};
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, ExecutionMode, LlmConfig};
 use autonoetic_types::background::{
     ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
 use autonoetic_types::capability::Capability;
-use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig, SchemaEnforcementConfig, SchemaEnforcementMode};
+use autonoetic_types::config::{
+    AgentInstallApprovalPolicy, GatewayConfig, SchemaEnforcementConfig, SchemaEnforcementMode,
+};
 use autonoetic_types::runtime_lock::{
     LockedDependencySet, LockedGateway, LockedSandbox, LockedSdk, RuntimeLock,
 };
@@ -16,7 +20,7 @@ use autonoetic_types::tool_error::tagged;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration as StdDuration, Instant};
@@ -89,7 +93,7 @@ fn load_session_content_mounts(
         let temp_base = std::env::temp_dir()
             .join("autonoetic_content")
             .join(session_id.replace('/', "_"));
-        
+
         if let Err(_) = std::fs::create_dir_all(&temp_base) {
             continue;
         }
@@ -107,7 +111,7 @@ fn load_session_content_mounts(
 
         // Mount at the original path inside sandbox (/tmp/{name})
         let dest_path = format!("/tmp/{}", name);
-        
+
         mounts.push(SandboxMount {
             source: temp_file,
             dest: dest_path,
@@ -502,12 +506,12 @@ fn extract_code_for_analysis(
     session_id: Option<&str>,
 ) -> String {
     let trimmed = command.trim();
-    
+
     // Pattern: python3 /path/to/script.py or python /path/to/script.py
     for python_cmd in &["python3", "python", "python3.11", "python3.12"] {
         if trimmed.starts_with(python_cmd) || trimmed.starts_with(&format!("{} ", python_cmd)) {
             let after_python = trimmed[python_cmd.len()..].trim();
-            
+
             // Skip flags like -c, -m, -u
             if after_python.starts_with('-') {
                 // For "python -c 'code'", analyze the code string
@@ -521,21 +525,23 @@ fn extract_code_for_analysis(
                 }
                 return command.to_string();
             }
-            
+
             // Extract script path
             let script_path = after_python.split_whitespace().next().unwrap_or("");
             if script_path.is_empty() {
                 return command.to_string();
             }
-            
+
             // For /tmp/ paths, try to read from content store first (session content mounting)
             if script_path.starts_with("/tmp/") {
                 let content_name = &script_path[5..]; // Remove "/tmp/" prefix
-                
+
                 // Try to read from content store
                 if let (Some(gw_dir), Some(sid)) = (gateway_dir, session_id) {
                     if let Ok(store) = crate::runtime::content_store::ContentStore::new(gw_dir) {
-                        if let Ok(content) = store.read_by_name_or_handle_hierarchical(sid, content_name) {
+                        if let Ok(content) =
+                            store.read_by_name_or_handle_hierarchical(sid, content_name)
+                        {
                             if let Ok(content_str) = String::from_utf8(content) {
                                 return content_str;
                             }
@@ -548,16 +554,16 @@ fn extract_code_for_analysis(
                         }
                     }
                 }
-                
+
                 // Fallback: map sandbox /tmp/ path to host agent_dir
                 let actual_path = agent_dir.join(&script_path[5..]);
                 if let Ok(content) = std::fs::read_to_string(&actual_path) {
                     return content;
                 }
-                
+
                 return command.to_string();
             }
-            
+
             // Absolute path (not /tmp/)
             if script_path.starts_with('/') {
                 let actual_path = std::path::PathBuf::from(script_path);
@@ -571,11 +577,11 @@ fn extract_code_for_analysis(
                     return content;
                 }
             }
-            
+
             return command.to_string();
         }
     }
-    
+
     command.to_string()
 }
 
@@ -641,8 +647,10 @@ impl NativeTool for SandboxExecTool {
             "sandbox command must not be empty"
         );
 
-        // Check if this is a retry with approval_ref
-        // If so, validate the approval and proceed with execution
+        // Check if this is a retry with approval_ref.
+        // If validated, allow this invocation to proceed without creating a
+        // second remote-access approval request for the same command.
+        let mut approval_validated_for_command = false;
         if let Some(approval_ref) = args.approval_ref.as_ref() {
             if let Some(cfg) = config {
                 let approved_path = crate::scheduler::store::approved_approvals_dir(cfg)
@@ -651,14 +659,16 @@ impl NativeTool for SandboxExecTool {
                     let decision: autonoetic_types::background::ApprovalDecision =
                         crate::scheduler::store::read_json_file(&approved_path)?;
                     match &decision.action {
-                        autonoetic_types::background::ScheduledAction::SandboxExec { command, .. }
-                            if command == &args.command => {
+                        autonoetic_types::background::ScheduledAction::SandboxExec {
+                            command,
+                            ..
+                        } if command == &args.command => {
                             tracing::info!(
                                 target: "sandbox.exec",
                                 approval_ref = %approval_ref,
                                 "Proceeding with approved sandbox execution"
                             );
-                            // Approval validated - continue to execution
+                            approval_validated_for_command = true;
                         }
                         _ => {
                             return Err(tagged::Tagged::validation(anyhow::anyhow!(
@@ -688,7 +698,7 @@ impl NativeTool for SandboxExecTool {
                         a.reason.as_deref().unwrap_or("security threats detected")
                     )
                 }
-                _ => "sandbox command denied by CodeExecution policy".to_string()
+                _ => "sandbox command denied by CodeExecution policy".to_string(),
             };
             anyhow::bail!(reason);
         }
@@ -696,14 +706,11 @@ impl NativeTool for SandboxExecTool {
         // Static analysis for remote access detection
         // Analyzes both the command AND the script content (if running a script file)
         // For /tmp/ paths, reads from content store (session content mounting)
-        let code_to_analyze = extract_code_for_analysis(
-            &args.command,
-            agent_dir,
-            gateway_dir,
-            session_id,
-        );
-        let remote_analysis = crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&code_to_analyze);
-        if remote_analysis.requires_approval {
+        let code_to_analyze =
+            extract_code_for_analysis(&args.command, agent_dir, gateway_dir, session_id);
+        let remote_analysis =
+            crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&code_to_analyze);
+        if remote_analysis.requires_approval && !approval_validated_for_command {
             tracing::warn!(
                 target: "sandbox",
                 patterns = ?remote_analysis.detected_patterns,
@@ -713,7 +720,10 @@ impl NativeTool for SandboxExecTool {
             // Create an actual approval request so operator can approve
             if let Some(cfg) = config {
                 let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-                let summary = format!("Sandbox exec: {}", &args.command[..args.command.len().min(60)]);
+                let summary = format!(
+                    "Sandbox exec: {}",
+                    &args.command[..args.command.len().min(60)]
+                );
                 let action = autonoetic_types::background::ScheduledAction::SandboxExec {
                     command: args.command.clone(),
                     dependencies: args.dependencies.as_ref().map(|d| {
@@ -731,14 +741,19 @@ impl NativeTool for SandboxExecTool {
                     session_id: session_id.unwrap_or("").to_string(),
                     action,
                     created_at: chrono::Utc::now().to_rfc3339(),
-                    reason: Some(format!("Remote access detected: {}", remote_analysis.summary)),
+                    reason: Some(format!(
+                        "Remote access detected: {}",
+                        remote_analysis.summary
+                    )),
                     evidence_ref: None,
                 };
                 let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
                     .join(format!("{request_id}.json"));
                 if let Err(e) = std::fs::create_dir_all(pending_path.parent().unwrap()) {
                     tracing::error!(target: "sandbox", error = %e, "Failed to create approval directory");
-                } else if let Err(e) = crate::scheduler::store::write_json_file(&pending_path, &request) {
+                } else if let Err(e) =
+                    crate::scheduler::store::write_json_file(&pending_path, &request)
+                {
                     tracing::error!(target: "sandbox", error = %e, "Failed to create approval request");
                 }
 
@@ -776,10 +791,8 @@ impl NativeTool for SandboxExecTool {
             .ok_or_else(|| anyhow::anyhow!("Agent directory is not valid UTF-8"))?;
 
         // Load session content mounts for seamless file access in sandbox
-        let session_content_mounts = load_session_content_mounts(
-            gateway_dir,
-            session_id.unwrap_or(&manifest.agent.id),
-        )?;
+        let session_content_mounts =
+            load_session_content_mounts(gateway_dir, session_id.unwrap_or(&manifest.agent.id))?;
 
         let runner = if session_content_mounts.is_empty() {
             // No session content - use original spawn method
@@ -806,12 +819,32 @@ impl NativeTool for SandboxExecTool {
         };
 
         let output = runner.process.wait_with_output()?;
-        let body = serde_json::json!({
-            "ok": output.status.success(),
+        let ok = output.status.success();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let mut body = serde_json::json!({
+            "ok": ok,
             "exit_code": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr)
+            "stdout": stdout,
+            "stderr": stderr
         });
+
+        // Classify known non-retryable sandbox environment failure so agents can
+        // stop looping on identical retries and route to a different capability.
+        if !ok
+            && body["stderr"]
+                .as_str()
+                .unwrap_or("")
+                .contains("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted")
+        {
+            body["error_kind"] =
+                serde_json::Value::String("sandbox_network_namespace_unavailable".to_string());
+            body["retry_recommended"] = serde_json::Value::Bool(false);
+            body["diagnostic"] = serde_json::Value::String(
+                "Sandbox cannot configure loopback networking on this host; retrying the same sandbox.exec command is unlikely to succeed."
+                    .to_string(),
+            );
+        }
         serde_json::to_string(&body).map_err(Into::into)
     }
 }
@@ -1811,7 +1844,7 @@ impl NativeTool for ContentWriteTool {
         let handle = store.write(args.content.as_bytes())?;
         // Use hierarchical registration so parent sessions can see this content
         store.register_name_in_hierarchy(sid, &args.name, &handle)?;
-        
+
         // Return short alias (8 hex chars) for LLM-friendly retrieval
         let short_alias = crate::runtime::content_store::ContentStore::get_short_alias(&handle);
 
@@ -1894,7 +1927,10 @@ impl NativeTool for ContentReadTool {
         let args: Args = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
-        anyhow::ensure!(!args.name_or_handle.trim().is_empty(), "name_or_handle must not be empty");
+        anyhow::ensure!(
+            !args.name_or_handle.trim().is_empty(),
+            "name_or_handle must not be empty"
+        );
 
         let Some(gw_dir) = gateway_dir else {
             anyhow::bail!("Content store requires gateway directory to be configured");
@@ -2524,6 +2560,105 @@ pub struct CapabilityAnalysisEvidence {
     pub analysis_passed: bool,
 }
 
+fn normalize_string_set(values: &[String]) -> BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect()
+}
+
+fn format_string_set(values: &BTreeSet<String>) -> String {
+    if values.is_empty() {
+        "[]".to_string()
+    } else {
+        format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| format!("\"{}\"", value))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
+    }
+}
+
+fn validate_promotion_gate_evidence(
+    gate: &InstallPromotionGate,
+    args: &InstallAgentArgs,
+    capability_analysis: &crate::runtime::analysis::CapabilityAnalysis,
+    security_analysis: &crate::runtime::analysis::SecurityAnalysis,
+) -> anyhow::Result<()> {
+    let security = gate.security_analysis.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "promotion gate evidence missing: provide promotion_gate.security_analysis with concrete analysis results"
+        )
+    })?;
+    let capability = gate.capability_analysis.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "promotion gate evidence missing: provide promotion_gate.capability_analysis with concrete analysis results"
+        )
+    })?;
+
+    anyhow::ensure!(
+        security.passed,
+        "promotion_gate.security_analysis.passed must be true for install"
+    );
+    anyhow::ensure!(
+        capability.analysis_passed,
+        "promotion_gate.capability_analysis.analysis_passed must be true for install"
+    );
+    anyhow::ensure!(
+        capability.missing_capabilities.is_empty(),
+        "promotion_gate.capability_analysis.missing_capabilities must be empty for install"
+    );
+
+    anyhow::ensure!(
+        security_analysis.passed,
+        "gateway security analysis failed; install is blocked"
+    );
+    anyhow::ensure!(
+        !security_analysis.remote_access_detected || security.remote_access_detected,
+        "promotion_gate.security_analysis.remote_access_detected must be true when gateway analysis detects remote access"
+    );
+
+    let expected_inferred = normalize_string_set(&capability_analysis.inferred_types);
+    let provided_inferred = normalize_string_set(&capability.inferred_capabilities);
+    anyhow::ensure!(
+        expected_inferred.is_subset(&provided_inferred),
+        "promotion_gate.capability_analysis.inferred_capabilities must include all gateway-inferred capabilities (expected subset {}, got {})",
+        format_string_set(&expected_inferred),
+        format_string_set(&provided_inferred)
+    );
+
+    let expected_missing = normalize_string_set(&capability_analysis.missing);
+    let provided_missing = normalize_string_set(&capability.missing_capabilities);
+    anyhow::ensure!(
+        provided_missing == expected_missing,
+        "promotion_gate.capability_analysis.missing_capabilities mismatch: expected {}, got {}",
+        format_string_set(&expected_missing),
+        format_string_set(&provided_missing)
+    );
+
+    let expected_declared = normalize_string_set(
+        &args
+            .capabilities
+            .iter()
+            .map(capability_type_name)
+            .collect::<Vec<String>>(),
+    );
+    let provided_declared = normalize_string_set(&capability.declared_capabilities);
+    anyhow::ensure!(
+        provided_declared == expected_declared,
+        "promotion_gate.capability_analysis.declared_capabilities mismatch: expected {}, got {}",
+        format_string_set(&expected_declared),
+        format_string_set(&provided_declared)
+    );
+
+    Ok(())
+}
+
 fn parse_install_scheduled_action(
     value: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<ScheduledAction>> {
@@ -2820,9 +2955,7 @@ impl NativeTool for SessionSnapshotTool {
 
         // Create snapshot
         let snapshot = crate::runtime::session_snapshot::SessionSnapshot::capture(
-            sid,
-            &history,
-            turn_count,
+            sid, &history, turn_count,
             None, // session_context - TODO: load from session_context.rs
             None, // sdk_checkpoint
             gw_dir,
@@ -2860,7 +2993,9 @@ fn load_history_from_session(
     session_id: &str,
 ) -> anyhow::Result<Vec<crate::llm::Message>> {
     // Try to load from session history file
-    let history_file = agent_dir.join("history").join(format!("{}.jsonl", session_id));
+    let history_file = agent_dir
+        .join("history")
+        .join(format!("{}.jsonl", session_id));
     if !history_file.exists() {
         return Ok(vec![]);
     }
@@ -2952,16 +3087,19 @@ impl NativeTool for AgentSpawnTool {
         let enforcement_config = config
             .map(|c| &c.schema_enforcement)
             .unwrap_or(&default_enforcement_config);
-        
+
         if enforcement_config.mode != SchemaEnforcementMode::Disabled {
-            let agents_dir = agent_dir.parent()
-                .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+            let agents_dir = agent_dir.parent().ok_or_else(|| {
+                anyhow::anyhow!("Agent directory is missing its agents root parent")
+            })?;
             let target_agent_path = agents_dir.join(&args.agent_id).join("SKILL.md");
-            
+
             if target_agent_path.exists() {
                 if let Ok(manifest_content) = std::fs::read_to_string(&target_agent_path) {
                     if let Some(frontmatter) = manifest_content.split("---").nth(1) {
-                        if let Ok(target_manifest) = serde_yaml::from_str::<AgentManifest>(frontmatter) {
+                        if let Ok(target_manifest) =
+                            serde_yaml::from_str::<AgentManifest>(frontmatter)
+                        {
                             if let Some(io) = &target_manifest.io {
                                 if let Some(accepts) = &io.accepts {
                                     let enforcer = default_enforcer();
@@ -2970,7 +3108,7 @@ impl NativeTool for AgentSpawnTool {
                                         "metadata": args.metadata,
                                         "session_id": args.session_id,
                                     });
-                                    
+
                                     match enforcer.enforce(&payload, accepts) {
                                         EnforcementResult::Reject(details) => {
                                             return Err(anyhow::anyhow!(
@@ -3024,13 +3162,20 @@ impl NativeTool for AgentSpawnTool {
         // Set up hierarchical content namespace for the child agent
         // The child gets a unique delegation path (e.g., "demo-session-1/coder-abc123")
         // so content written by the child is visible to the parent via the hierarchy
-        let child_delegation_path = format!("{}/{}-{}", resolved_session_id, args.agent_id, &uuid::Uuid::new_v4().to_string()[..8]);
+        let child_delegation_path = format!(
+            "{}/{}-{}",
+            resolved_session_id,
+            args.agent_id,
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
 
         if let Ok(agents_dir) = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory missing parent"))
         {
-            if let Ok(store) = crate::runtime::content_store::ContentStore::new(&agents_dir.join(".gateway")) {
+            if let Ok(store) =
+                crate::runtime::content_store::ContentStore::new(&agents_dir.join(".gateway"))
+            {
                 // Set parent relationship so child's content is visible to parent
                 let _ = store.set_parent_session(&child_delegation_path, &resolved_session_id);
                 tracing::info!(
@@ -3047,7 +3192,7 @@ impl NativeTool for AgentSpawnTool {
                 .spawn_agent_once(
                     &target_agent_id,
                     &kickoff_message,
-                    &child_delegation_path,  // Use delegation path as session_id for content namespace
+                    &child_delegation_path, // Use delegation path as session_id for content namespace
                     Some(&source_agent_id),
                     false,
                     None,
@@ -3069,6 +3214,8 @@ impl NativeTool for AgentSpawnTool {
             "session_id": result.session_id,
             "assistant_reply": result.assistant_reply,
             "artifacts": result.artifacts,
+            // All named content written by the child — use name/handle/alias with content.read
+            "files": result.files,
             "shared_knowledge": result.shared_knowledge,
         })
         .to_string())
@@ -3078,7 +3225,7 @@ impl NativeTool for AgentSpawnTool {
 /// Provides helpful error context for capability-related deserialization errors.
 fn capability_error_context(serde_error: &serde_json::Error) -> String {
     let err_str = serde_error.to_string();
-    
+
     // Check for common capability format mistakes
     if err_str.contains("hosts") {
         return format!(
@@ -3088,7 +3235,7 @@ fn capability_error_context(serde_error: &serde_json::Error) -> String {
             err_str
         );
     }
-    
+
     if err_str.contains("allowed") {
         return format!(
             "{}\n\nHELP: SandboxFunctions capability requires 'allowed' field.\n\
@@ -3096,7 +3243,7 @@ fn capability_error_context(serde_error: &serde_json::Error) -> String {
             err_str
         );
     }
-    
+
     if err_str.contains("scopes") {
         return format!(
             "{}\n\nHELP: ReadAccess or WriteAccess requires 'scopes' field.\n\
@@ -3104,7 +3251,7 @@ fn capability_error_context(serde_error: &serde_json::Error) -> String {
             err_str
         );
     }
-    
+
     if err_str.contains("max_children") {
         return format!(
             "{}\n\nHELP: AgentSpawn capability requires 'max_children' field.\n\
@@ -3112,7 +3259,7 @@ fn capability_error_context(serde_error: &serde_json::Error) -> String {
             err_str
         );
     }
-    
+
     if err_str.contains("unknown field") {
         return format!(
             "{}\n\nHELP: Unexpected field detected. Capability types only accept specific fields.\n\
@@ -3125,7 +3272,7 @@ fn capability_error_context(serde_error: &serde_json::Error) -> String {
             err_str
         );
     }
-    
+
     err_str
 }
 
@@ -3242,10 +3389,43 @@ impl NativeTool for AgentInstallTool {
                     },
                     "promotion_gate": {
                         "type": "object",
-                        "description": "Required for evolution roles. Set both to true.",
+                        "description": "Required for evolution roles. Booleans alone are insufficient: provide concrete security_analysis and capability_analysis evidence.",
                         "properties": {
                             "evaluator_pass": { "type": "boolean" },
-                            "auditor_pass": { "type": "boolean" }
+                            "auditor_pass": { "type": "boolean" },
+                            "override_approval_ref": {
+                                "type": "string",
+                                "description": "Optional exceptional override reference."
+                            },
+                            "install_approval_ref": {
+                                "type": "string",
+                                "description": "Set when retrying after human approval."
+                            },
+                            "security_analysis": {
+                                "type": "object",
+                                "properties": {
+                                    "passed": { "type": "boolean" },
+                                    "threats_detected": { "type": "array", "items": { "type": "string" } },
+                                    "remote_access_detected": { "type": "boolean" },
+                                    "analyzer_version": { "type": "string" }
+                                },
+                                "required": ["passed", "threats_detected", "remote_access_detected"]
+                            },
+                            "capability_analysis": {
+                                "type": "object",
+                                "properties": {
+                                    "inferred_capabilities": { "type": "array", "items": { "type": "string" } },
+                                    "missing_capabilities": { "type": "array", "items": { "type": "string" } },
+                                    "declared_capabilities": { "type": "array", "items": { "type": "string" } },
+                                    "analysis_passed": { "type": "boolean" }
+                                },
+                                "required": [
+                                    "inferred_capabilities",
+                                    "missing_capabilities",
+                                    "declared_capabilities",
+                                    "analysis_passed"
+                                ]
+                            }
                         },
                         "required": ["evaluator_pass", "auditor_pass"]
                     },
@@ -3276,11 +3456,10 @@ impl NativeTool for AgentInstallTool {
         _turn_id: Option<&str>,
         config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
-        let mut args: InstallAgentArgs = serde_json::from_str(arguments_json)
-            .map_err(|e| {
-                let context = capability_error_context(&e);
-                anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), context)
-            })?;
+        let mut args: InstallAgentArgs = serde_json::from_str(arguments_json).map_err(|e| {
+            let context = capability_error_context(&e);
+            anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), context)
+        })?;
         let mut scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
         let mut background =
             normalize_install_background(args.background.clone(), &args.scheduled_action)?;
@@ -3295,10 +3474,11 @@ impl NativeTool for AgentInstallTool {
         // Pluggable Code Analysis: Analyze code for capabilities and security
         // Provider is selected via GatewayConfig.code_analysis
         // ─────────────────────────────────────────────────────────────────
-        use crate::runtime::analysis::{AnalysisProviderFactory, FileToAnalyze, AnalysisProvider};
+        use crate::runtime::analysis::{AnalysisProvider, AnalysisProviderFactory, FileToAnalyze};
 
         // Build files for analysis
-        let mut files_for_analysis: Vec<FileToAnalyze> = args.files
+        let mut files_for_analysis: Vec<FileToAnalyze> = args
+            .files
             .iter()
             .map(|f| FileToAnalyze {
                 path: f.path.clone(),
@@ -3314,9 +3494,12 @@ impl NativeTool for AgentInstallTool {
 
         // Get the capability analysis provider from config (or default to pattern)
         let provider_type = config
-            .and_then(|c| serde_json::from_str::<autonoetic_types::config::CodeAnalysisConfig>(
-                &serde_json::to_string(&c.code_analysis).unwrap_or_default()
-            ).ok())
+            .and_then(|c| {
+                serde_json::from_str::<autonoetic_types::config::CodeAnalysisConfig>(
+                    &serde_json::to_string(&c.code_analysis).unwrap_or_default(),
+                )
+                .ok()
+            })
             .map(|c| match c.capability_provider.as_str() {
                 "llm" => crate::runtime::analysis::AnalysisProviderType::Llm,
                 "composite" => crate::runtime::analysis::AnalysisProviderType::Composite,
@@ -3335,19 +3518,32 @@ impl NativeTool for AgentInstallTool {
         let capability_analysis = analyzer.analyze_capabilities(&files_for_analysis);
 
         // Calculate missing and excessive capabilities
-        let missing: Vec<String> = capability_analysis.inferred_types
+        let missing: Vec<String> = capability_analysis
+            .inferred_types
             .iter()
             .filter(|inferred_type| {
                 !args.capabilities.iter().any(|cap| {
                     let cap_type = match cap {
-                        autonoetic_types::capability::Capability::NetworkAccess { .. } => "NetworkAccess",
+                        autonoetic_types::capability::Capability::NetworkAccess { .. } => {
+                            "NetworkAccess"
+                        }
                         autonoetic_types::capability::Capability::ReadAccess { .. } => "ReadAccess",
-                        autonoetic_types::capability::Capability::WriteAccess { .. } => "WriteAccess",
-                        autonoetic_types::capability::Capability::CodeExecution { .. } => "CodeExecution",
+                        autonoetic_types::capability::Capability::WriteAccess { .. } => {
+                            "WriteAccess"
+                        }
+                        autonoetic_types::capability::Capability::CodeExecution { .. } => {
+                            "CodeExecution"
+                        }
                         autonoetic_types::capability::Capability::AgentSpawn { .. } => "AgentSpawn",
-                        autonoetic_types::capability::Capability::AgentMessage { .. } => "AgentMessage",
-                        autonoetic_types::capability::Capability::SandboxFunctions { .. } => "SandboxFunctions",
-                        autonoetic_types::capability::Capability::BackgroundReevaluation { .. } => "BackgroundReevaluation",
+                        autonoetic_types::capability::Capability::AgentMessage { .. } => {
+                            "AgentMessage"
+                        }
+                        autonoetic_types::capability::Capability::SandboxFunctions { .. } => {
+                            "SandboxFunctions"
+                        }
+                        autonoetic_types::capability::Capability::BackgroundReevaluation {
+                            ..
+                        } => "BackgroundReevaluation",
                     };
                     cap_type == inferred_type.as_str()
                 })
@@ -3367,7 +3563,11 @@ impl NativeTool for AgentInstallTool {
                  Add these capabilities to your install request. \
                  (Analyzer: {})",
                 missing_str,
-                if missing.len() == 1 { "it was" } else { "they were" },
+                if missing.len() == 1 {
+                    "it was"
+                } else {
+                    "they were"
+                },
                 analyzer.name()
             ))
             .into());
@@ -3382,7 +3582,7 @@ impl NativeTool for AgentInstallTool {
                     "none" => crate::runtime::analysis::AnalysisProviderType::None,
                     _ => crate::runtime::analysis::AnalysisProviderType::Pattern,
                 })
-                .unwrap_or(crate::runtime::analysis::AnalysisProviderType::Pattern)
+                .unwrap_or(crate::runtime::analysis::AnalysisProviderType::Pattern),
         );
 
         let security_analysis = security_analyzer.analyze_security(&files_for_analysis);
@@ -3411,10 +3611,27 @@ impl NativeTool for AgentInstallTool {
                 .as_ref()
                 .map(|value| !value.trim().is_empty())
                 .unwrap_or(false);
-            anyhow::ensure!(
-                has_override || (gate.evaluator_pass && gate.auditor_pass),
-                "promotion gate failed: set evaluator_pass=true and auditor_pass=true, or provide override_approval_ref"
-            );
+            if has_override {
+                tracing::warn!(
+                    target: "agent.install",
+                    installer = %manifest.agent.id,
+                    "promotion gate override_approval_ref provided; skipping strict evidence checks"
+                );
+            } else {
+                anyhow::ensure!(
+                    gate.evaluator_pass && gate.auditor_pass,
+                    "promotion gate failed: set evaluator_pass=true and auditor_pass=true, or provide override_approval_ref"
+                );
+                if config.is_some() {
+                    validate_promotion_gate_evidence(
+                        gate,
+                        &args,
+                        &capability_analysis,
+                        &security_analysis,
+                    )
+                    .map_err(|error| tagged::Tagged::validation(error))?;
+                }
+            }
         }
 
         // Human approval gate: when policy requires it, create pending request or validate install_approval_ref.
@@ -3454,7 +3671,8 @@ impl NativeTool for AgentInstallTool {
                             install_fingerprint: _,
                             ..
                         } if approved_agent_id == &args.agent_id
-                            && requested_by_agent_id == &manifest.agent.id => {
+                            && requested_by_agent_id == &manifest.agent.id =>
+                        {
                             // Valid approval - try to load stored payload for deterministic retry
                             if let Some(mut stored_args) = load_install_payload(cfg, request_id)? {
                                 tracing::info!(
@@ -3464,7 +3682,9 @@ impl NativeTool for AgentInstallTool {
                                 );
                                 // Preserve the install_approval_ref from original args (needed for cleanup)
                                 if let Some(ref original_gate) = args.promotion_gate {
-                                    if let Some(ref approval_ref) = original_gate.install_approval_ref {
+                                    if let Some(ref approval_ref) =
+                                        original_gate.install_approval_ref
+                                    {
                                         if let Some(ref mut gate) = stored_args.promotion_gate {
                                             gate.install_approval_ref = Some(approval_ref.clone());
                                         }
@@ -3473,8 +3693,12 @@ impl NativeTool for AgentInstallTool {
                                 // Replace args with stored payload
                                 args = stored_args;
                                 // Re-parse scheduled_action and background from stored args
-                                scheduled_action = parse_install_scheduled_action(args.scheduled_action.clone())?;
-                                background = normalize_install_background(args.background.clone(), &args.scheduled_action)?;
+                                scheduled_action =
+                                    parse_install_scheduled_action(args.scheduled_action.clone())?;
+                                background = normalize_install_background(
+                                    args.background.clone(),
+                                    &args.scheduled_action,
+                                )?;
                             }
                         }
                         ScheduledAction::AgentInstall {
@@ -3643,7 +3867,10 @@ impl NativeTool for AgentInstallTool {
         // Validate script mode requirements
         if matches!(execution_mode, ExecutionMode::Script) {
             anyhow::ensure!(
-                args.script_entry.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+                args.script_entry
+                    .as_ref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false),
                 "script execution mode requires a non-empty script_entry path"
             );
         }
@@ -4360,14 +4587,21 @@ mod tests {
         // agent.spawn, agent.exists, agent.discover = 3 (agent.install is evolution-role only)
         assert_eq!(defs_spawn.len(), 3);
         assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
-        assert!(!defs_spawn.iter().any(|d| d.name == "agent.install"), "agent.install should NOT be available to non-evolution roles");
+        assert!(
+            !defs_spawn.iter().any(|d| d.name == "agent.install"),
+            "agent.install should NOT be available to non-evolution roles"
+        );
         assert!(defs_spawn.iter().any(|d| d.name == "agent.exists"));
         assert!(defs_spawn.iter().any(|d| d.name == "agent.discover"));
 
         // agent.install should be available to evolution roles
-        let manifest_evolution = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
+        let manifest_evolution =
+            test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_evolution = registry.available_definitions(&manifest_evolution);
-        assert!(defs_evolution.iter().any(|d| d.name == "agent.install"), "agent.install should be available to evolution roles");
+        assert!(
+            defs_evolution.iter().any(|d| d.name == "agent.install"),
+            "agent.install should be available to evolution roles"
+        );
 
         let manifest_net = test_manifest(vec![Capability::NetworkAccess {
             hosts: vec!["*".to_string()],
@@ -5021,7 +5255,18 @@ mod tests {
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -5554,6 +5799,112 @@ dependencies:
         assert!(err
             .to_string()
             .contains("sandbox command denied by CodeExecution policy"));
+    }
+
+    #[test]
+    fn test_sandbox_exec_approved_retry_skips_second_remote_approval_gate() {
+        let manifest = test_manifest(vec![Capability::CodeExecution {
+            patterns: vec!["curl *".to_string()],
+        }]);
+        let policy = PolicyEngine::new(manifest.clone());
+        let temp = tempdir().expect("tempdir should create");
+        let agents_dir = temp.path().join("agents");
+        let agent_dir = agents_dir.join("tester");
+        std::fs::create_dir_all(&agent_dir).expect("agent dir should create");
+
+        let config = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..Default::default()
+        };
+
+        // Include an invalid dependency runtime so we can prove the second call
+        // passes the remote approval gate and reaches dependency parsing.
+        let command = "curl https://api.open-meteo.com";
+        let base_args = serde_json::json!({
+            "command": command,
+            "dependencies": {
+                "runtime": "invalid-runtime",
+                "packages": ["foo"]
+            }
+        });
+
+        let registry = default_registry();
+
+        // First call (no approval_ref): should stop at approval_required before dependency parsing.
+        let first = registry
+            .execute(
+                "sandbox.exec",
+                &manifest,
+                &policy,
+                &agent_dir,
+                None,
+                &serde_json::to_string(&base_args).expect("json should encode"),
+                Some("test-session"),
+                None,
+                Some(&config),
+            )
+            .expect("first call should return approval response");
+        let first_json: serde_json::Value =
+            serde_json::from_str(&first).expect("json should parse");
+        assert_eq!(
+            first_json
+                .get("approval_required")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        // Write an approved decision for the same command.
+        let request_id = "apr-test1234";
+        let approved_dir = agents_dir
+            .join(".gateway")
+            .join("scheduler")
+            .join("approvals")
+            .join("approved");
+        std::fs::create_dir_all(&approved_dir).expect("approved dir should create");
+
+        let approval_decision = serde_json::json!({
+            "request_id": request_id,
+            "agent_id": manifest.agent.id,
+            "session_id": "test-session",
+            "action": {
+                "type": "sandbox_exec",
+                "command": command,
+                "requires_approval": true
+            },
+            "status": "approved",
+            "decided_at": "2026-03-18T14:00:00Z",
+            "decided_by": "test-user"
+        });
+        std::fs::write(
+            approved_dir.join(format!("{request_id}.json")),
+            serde_json::to_string(&approval_decision).expect("json"),
+        )
+        .expect("write approval decision");
+
+        // Retry with approval_ref: should NOT request approval again.
+        // It should continue and fail on dependency parsing instead.
+        let retry_args = serde_json::json!({
+            "command": command,
+            "approval_ref": request_id,
+            "dependencies": {
+                "runtime": "invalid-runtime",
+                "packages": ["foo"]
+            }
+        });
+        let err = registry
+            .execute(
+                "sandbox.exec",
+                &manifest,
+                &policy,
+                &agent_dir,
+                None,
+                &serde_json::to_string(&retry_args).expect("json should encode"),
+                Some("test-session"),
+                None,
+                Some(&config),
+            )
+            .expect_err("retry should reach dependency parsing and fail");
+        assert!(err.to_string().contains("Unsupported dependency runtime"));
     }
 
     #[test]
@@ -6388,19 +6739,35 @@ Research agent instructions.
             .expect("agent install should succeed");
 
         // Verify install succeeded
-        let parsed: serde_json::Value = serde_json::from_str(&result).expect("result should be json");
-        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("agent_installed"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("result should be json");
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("agent_installed")
+        );
 
         // Verify child agent directory was created
         let child_dir = agents_dir.join("weather.script.default");
         assert!(child_dir.join("SKILL.md").exists(), "SKILL.md should exist");
-        assert!(child_dir.join("runtime.lock").exists(), "runtime.lock should exist");
-        assert!(child_dir.join("scripts").join("fetch_weather.py").exists(), "script should exist");
+        assert!(
+            child_dir.join("runtime.lock").exists(),
+            "runtime.lock should exist"
+        );
+        assert!(
+            child_dir.join("scripts").join("fetch_weather.py").exists(),
+            "script should exist"
+        );
 
         // Verify SKILL.md contains correct execution_mode and script_entry
         let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should read");
-        assert!(skill.contains("execution_mode: script"), "SKILL.md should contain execution_mode: script");
-        assert!(skill.contains("script_entry: scripts/fetch_weather.py"), "SKILL.md should contain script_entry");
+        assert!(
+            skill.contains("execution_mode: script"),
+            "SKILL.md should contain execution_mode: script"
+        );
+        assert!(
+            skill.contains("script_entry: scripts/fetch_weather.py"),
+            "SKILL.md should contain script_entry"
+        );
     }
 
     #[test]
@@ -6424,22 +6791,24 @@ Research agent instructions.
         });
 
         let registry = default_registry();
-        let result = registry
-            .execute(
-                "agent.install",
-                &manifest,
-                &policy,
-                &parent_dir,
-                None,
-                &serde_json::to_string(&args).expect("json should encode"),
-                None,
-                None,
-                None,
-            );
+        let result = registry.execute(
+            "agent.install",
+            &manifest,
+            &policy,
+            &parent_dir,
+            None,
+            &serde_json::to_string(&args).expect("json should encode"),
+            None,
+            None,
+            None,
+        );
 
         assert!(result.is_err(), "install should fail without script_entry");
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("script_entry"), "error should mention script_entry");
+        assert!(
+            err_msg.contains("script_entry"),
+            "error should mention script_entry"
+        );
     }
 
     #[test]
@@ -6470,21 +6839,24 @@ Research agent instructions.
         });
 
         let registry = default_registry();
-        let result = registry
-            .execute(
-                "agent.install",
-                &manifest,
-                &policy,
-                &parent_dir,
-                None,
-                &serde_json::to_string(&args).expect("json should encode"),
-                None,
-                None,
-                None,
-            );
+        let result = registry.execute(
+            "agent.install",
+            &manifest,
+            &policy,
+            &parent_dir,
+            None,
+            &serde_json::to_string(&args).expect("json should encode"),
+            None,
+            None,
+            None,
+        );
 
         // Should succeed even without llm_config
-        assert!(result.is_ok(), "script mode should not require llm_config: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "script mode should not require llm_config: {:?}",
+            result.err()
+        );
 
         // Verify child agent exists
         let child_dir = agents_dir.join("no.llm.script");
@@ -6515,18 +6887,17 @@ Research agent instructions.
         });
 
         let registry = default_registry();
-        let result = registry
-            .execute(
-                "agent.install",
-                &manifest,
-                &policy,
-                &parent_dir,
-                None,
-                &serde_json::to_string(&args).expect("json should encode"),
-                None,
-                None,
-                None,
-            );
+        let result = registry.execute(
+            "agent.install",
+            &manifest,
+            &policy,
+            &parent_dir,
+            None,
+            &serde_json::to_string(&args).expect("json should encode"),
+            None,
+            None,
+            None,
+        );
 
         assert!(result.is_ok(), "reasoning mode should succeed");
 
@@ -6535,8 +6906,14 @@ Research agent instructions.
         let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should read");
         // Note: execution_mode: reasoning is the default and may be omitted from frontmatter
         // We just verify the agent was created successfully and has llm_config
-        assert!(skill.contains("provider: openai"), "SKILL.md should contain llm_config provider");
-        assert!(skill.contains("model: gpt-4o"), "SKILL.md should contain llm_config model");
+        assert!(
+            skill.contains("provider: openai"),
+            "SKILL.md should contain llm_config provider"
+        );
+        assert!(
+            skill.contains("model: gpt-4o"),
+            "SKILL.md should contain llm_config model"
+        );
     }
 
     #[test]
@@ -6560,7 +6937,18 @@ Research agent instructions.
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -6632,6 +7020,17 @@ Research agent instructions.
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                },
                 "install_approval_ref": "non-existent-request-id"
             }
         });
@@ -6656,10 +7055,15 @@ Research agent instructions.
         );
 
         // Should fail because the approval_ref doesn't exist
-        assert!(result.is_err(), "install should fail with invalid approval_ref");
+        assert!(
+            result.is_err(),
+            "install should fail with invalid approval_ref"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("not found") || err_msg.contains("not approved") || err_msg.contains("approval"),
+            err_msg.contains("not found")
+                || err_msg.contains("not approved")
+                || err_msg.contains("approval"),
             "error should mention approval issue: {}",
             err_msg
         );
@@ -6674,7 +7078,7 @@ Research agent instructions.
 
     #[test]
     fn test_agent_install_no_approval_needed_for_low_risk() {
-        // This test verifies that low-risk agents (no NetworkAccess, no background) 
+        // This test verifies that low-risk agents (no NetworkAccess, no background)
         // can be installed without approval when using RiskBased policy.
 
         let manifest = test_evolution_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
@@ -6690,7 +7094,18 @@ Research agent instructions.
             "instructions": "A simple worker.",
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": false
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": [],
+                    "missing_capabilities": [],
+                    "declared_capabilities": [],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -6748,7 +7163,18 @@ Research agent instructions.
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -6787,12 +7213,21 @@ Research agent instructions.
             .join("approvals")
             .join("pending")
             .join(format!("{}_payload.json", request_id));
-        assert!(payload_path.exists(), "payload file should exist at {:?}", payload_path);
+        assert!(
+            payload_path.exists(),
+            "payload file should exist at {:?}",
+            payload_path
+        );
 
         // Verify payload content
-        let payload_content = std::fs::read_to_string(&payload_path).expect("payload should be readable");
-        let stored_args: serde_json::Value = serde_json::from_str(&payload_content).expect("payload should be valid JSON");
-        assert_eq!(stored_args.get("agent_id").and_then(|v| v.as_str()), Some("stored.payload.worker"));
+        let payload_content =
+            std::fs::read_to_string(&payload_path).expect("payload should be readable");
+        let stored_args: serde_json::Value =
+            serde_json::from_str(&payload_content).expect("payload should be valid JSON");
+        assert_eq!(
+            stored_args.get("agent_id").and_then(|v| v.as_str()),
+            Some("stored.payload.worker")
+        );
         assert!(stored_args.get("instructions").is_some());
     }
 
@@ -6817,7 +7252,18 @@ Research agent instructions.
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -6888,6 +7334,17 @@ Research agent instructions.
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                },
                 "install_approval_ref": request_id
             }
         });
@@ -6918,8 +7375,12 @@ Research agent instructions.
         assert!(child_dir.exists(), "agent should be installed");
 
         // Verify SKILL.md contains ORIGINAL instructions, not the changed ones
-        let skill = std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should exist");
-        assert!(skill.contains("Original Instructions"), "should use stored payload, not changed payload");
+        let skill =
+            std::fs::read_to_string(child_dir.join("SKILL.md")).expect("skill should exist");
+        assert!(
+            skill.contains("Original Instructions"),
+            "should use stored payload, not changed payload"
+        );
     }
 
     #[test]
@@ -6941,7 +7402,18 @@ Research agent instructions.
             ],
             "promotion_gate": {
                 "evaluator_pass": true,
-                "auditor_pass": true
+                "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                }
             }
         });
 
@@ -6978,7 +7450,10 @@ Research agent instructions.
             .join("approvals")
             .join("pending")
             .join(format!("{}_payload.json", request_id));
-        assert!(payload_path.exists(), "payload file should exist before retry");
+        assert!(
+            payload_path.exists(),
+            "payload file should exist before retry"
+        );
 
         // Manually approve
         let approved_dir = agents_dir
@@ -7020,6 +7495,17 @@ Research agent instructions.
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
+                "security_analysis": {
+                    "passed": true,
+                    "threats_detected": [],
+                    "remote_access_detected": true
+                },
+                "capability_analysis": {
+                    "inferred_capabilities": ["NetworkAccess"],
+                    "missing_capabilities": [],
+                    "declared_capabilities": ["NetworkAccess"],
+                    "analysis_passed": true
+                },
                 "install_approval_ref": request_id
             }
         });
@@ -7039,6 +7525,9 @@ Research agent instructions.
             .expect("retry should succeed");
 
         // Verify payload file was cleaned up
-        assert!(!payload_path.exists(), "payload file should be cleaned up after success");
+        assert!(
+            !payload_path.exists(),
+            "payload file should be cleaned up after success"
+        );
     }
 }

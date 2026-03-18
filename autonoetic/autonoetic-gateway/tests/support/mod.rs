@@ -109,26 +109,31 @@ impl OpenAiStub {
             #[allow(unreachable_code)]
             Ok(())
         });
-        
+
         let stub = Self {
             addr,
             captured_bodies,
             handle,
         };
-        
+
         // Verify the stub is accepting TCP connections
         stub.wait_until_ready().await?;
-        
+
         Ok(stub)
     }
-    
+
     /// Wait until the stub server is ready to accept TCP connections.
     async fn wait_until_ready(&self) -> anyhow::Result<()> {
         use tokio::time::{timeout, Duration};
-        
+
         // Try to establish a TCP connection to verify the server is ready
         for _ in 0..10 {
-            match timeout(Duration::from_millis(50), tokio::net::TcpStream::connect(self.addr)).await {
+            match timeout(
+                Duration::from_millis(50),
+                tokio::net::TcpStream::connect(self.addr),
+            )
+            .await
+            {
                 Ok(Ok(_)) => return Ok(()),
                 _ => tokio::time::sleep(Duration::from_millis(10)).await,
             }
