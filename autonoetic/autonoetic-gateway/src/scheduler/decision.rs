@@ -34,17 +34,19 @@ pub fn should_wake(
 ) -> anyhow::Result<Option<WakeReason>> {
     let _ = session_id;
 
-    for request_id in &reevaluation.open_approval_request_ids {
-        if state.processed_approval_request_ids.contains(request_id) {
-            continue;
-        }
-        if crate::scheduler::approved_approvals_dir(config)
-            .join(format!("{request_id}.json"))
-            .exists()
-        {
-            return Ok(Some(WakeReason::ApprovalResolved {
-                request_id: request_id.clone(),
-            }));
+    if background.wake_predicates.approval_resolved {
+        for request_id in &reevaluation.open_approval_request_ids {
+            if state.processed_approval_request_ids.contains(request_id) {
+                continue;
+            }
+            if crate::scheduler::approved_approvals_dir(config)
+                .join(format!("{request_id}.json"))
+                .exists()
+            {
+                return Ok(Some(WakeReason::ApprovalResolved {
+                    request_id: request_id.clone(),
+                }));
+            }
         }
     }
 
@@ -200,4 +202,77 @@ pub fn parse_timestamp(value: &str) -> anyhow::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| anyhow::anyhow!("Invalid timestamp: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_wake;
+    use autonoetic_types::background::{
+        BackgroundPolicy, BackgroundState, ReevaluationState, WakePredicates,
+    };
+    use autonoetic_types::config::GatewayConfig;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_should_wake_approval_resolved_respects_wake_predicate() {
+        let temp = tempdir().expect("tempdir should create");
+        let config = GatewayConfig {
+            agents_dir: temp.path().join("agents"),
+            ..GatewayConfig::default()
+        };
+        let request_id = "apr-1234abcd";
+        let approved_path = crate::scheduler::approved_approvals_dir(&config)
+            .join(format!("{}.json", request_id));
+        std::fs::create_dir_all(
+            approved_path
+                .parent()
+                .expect("approved approvals dir should have parent"),
+        )
+        .expect("approved approvals dir should create");
+        std::fs::write(&approved_path, "{}").expect("approved request marker should write");
+
+        let state = BackgroundState::default();
+        let reevaluation = ReevaluationState {
+            open_approval_request_ids: vec![request_id.to_string()],
+            ..ReevaluationState::default()
+        };
+
+        let mut background = BackgroundPolicy::default();
+        background.wake_predicates = WakePredicates {
+            approval_resolved: false,
+            ..WakePredicates::default()
+        };
+
+        let no_wake = should_wake(
+            &config,
+            "agent-a",
+            "session-a",
+            &background,
+            &state,
+            &reevaluation,
+            Utc::now(),
+        )
+        .expect("should_wake should evaluate");
+        assert!(no_wake.is_none(), "approval wake should be gated off");
+
+        background.wake_predicates.approval_resolved = true;
+        let wake = should_wake(
+            &config,
+            "agent-a",
+            "session-a",
+            &background,
+            &state,
+            &reevaluation,
+            Utc::now(),
+        )
+        .expect("should_wake should evaluate");
+        assert!(
+            matches!(
+                wake,
+                Some(autonoetic_types::background::WakeReason::ApprovalResolved { .. })
+            ),
+            "approval wake should trigger when predicate is enabled"
+        );
+    }
 }

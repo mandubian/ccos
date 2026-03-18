@@ -36,6 +36,10 @@ impl GatewayServer {
         let jsonrpc_router = Arc::new(crate::router::JsonRpcRouter::new(
             self.config.as_ref().clone(),
         ));
+        crate::scheduler::signal::start_signal_poller_if_needed(
+            self.config.agents_dir.clone(),
+            self.config.port,
+        )?;
         let background_scheduler =
             crate::scheduler::start_background_scheduler(jsonrpc_router.execution_service());
 
