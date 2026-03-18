@@ -244,6 +244,29 @@ If you previously exported overrides in your shell, clear them before starting t
 unset AUTONOETIC_LLM_API_KEY AUTONOETIC_LLM_BASE_URL
 ```
 
+### Bubblewrap compatibility toggles (optional)
+
+Default sandbox behavior is unchanged (strict network namespace + legacy `/dev` handling).  
+For environments where `bwrap --unshare-net` cannot configure loopback or where `/dev/null` writes fail, you can enable compatibility flags:
+
+| Env var | Values | Effect | Default |
+|---|---|---|---|
+| `AUTONOETIC_BWRAP_SHARE_NET` | `1/true/yes/on` or `0/false/no/off` | Adds `--share-net` (uses host network namespace) | Off |
+| `AUTONOETIC_BWRAP_DEV_MODE` | `legacy`, `minimal`, `host-bind` | Controls `/dev` mount strategy (`legacy`: unchanged, `minimal`: `--dev /dev`, `host-bind`: `--dev-bind /dev /dev`) | `legacy` |
+
+Recommended for this environment:
+
+```bash
+AUTONOETIC_NODE_ID=demo \
+AUTONOETIC_NODE_NAME=demo \
+AUTONOETIC_SHARED_SECRET=demo-secret \
+AUTONOETIC_BWRAP_SHARE_NET=1 \
+AUTONOETIC_BWRAP_DEV_MODE=host-bind \
+cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway start
+```
+
+This is intentionally opt-in so other environments keep the previous bwrap command shape.
+
 ## 5) Open terminal chat with implicit routing
 
 In a second terminal, from `autonoetic/`:
@@ -360,18 +383,28 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway app
 **Approve or reject a request:**
 
 ```bash
-# Approve - gateway auto-completes the install (no agent retry needed)
+# Approve - gateway auto-completes install actions when applicable
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals approve apr-db51b7ad --reason "Reviewed; OK to install"
 
 # Reject
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals reject apr-db51b7ad --reason "Out of scope"
 ```
 
-**Auto-execute (recommended flow):**
+**Execution and notification flow (recommended):**
 1. `agent.install` returns `approval_required: true` with `request_id: "apr-db51b7ad"`
 2. Operator approves via CLI
 3. **Gateway automatically executes the install** using the stored payload
-4. Agent is installed immediately - no agent retry needed
+4. Gateway persists an approval-resolution notification for the waiting session
+5. If terminal chat is open on that session, chat resumes automatically and displays the continuation
+6. If no consumer is connected, notification remains pending until acknowledged
+
+You should not need to type manual prompts like `continue` or `done` after approval in the normal chat path.
+
+**Delivery semantics (current model):**
+- Approval-resolution messages use a structured payload (`type: "approval_resolved"` with `request_id`, `status`, `agent_id`, `install_completed`, `message`).
+- The gateway owns background polling/delivery; CLI approval commands only record the decision.
+- Chat acknowledges notification consumption only after successful resume/render.
+- Pending notifications are durable under `.gateway/signal/` until consumed.
 
 **Payload storage details:**
 - Stored at: `.gateway/scheduler/approvals/pending/<id>_payload.json`
@@ -388,6 +421,7 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway app
 ```bash
 cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway approvals list --json
 ```
+For architecture details, see `docs/approval-notification-delivery.md`.
 
 ## Troubleshooting: agent.install and memory writes
 
@@ -400,3 +434,21 @@ cargo run -p autonoetic -- --config /tmp/autonoetic-demo/config.yaml gateway app
 
 - The `agent.install` payload has invalid or missing fields. Common causes: `capabilities` entries without a `type` field, or with wrong field names (e.g. `capability` instead of `type`, or missing `hosts` for `NetConnect`, `scopes` for `MemoryWrite`).
 - **Fix:** The tool error includes a `repair_hint`. Use it to correct the payload: each capability must have `type` and the required fields for that type (see specialized_builder SKILL “Capability shapes”). Then retry `agent.install` with the corrected payload. Do not switch to writing files at the planner/coder root as a workaround; keep using specialized_builder and fix the payload.
+
+## Shell Execution Safety Policy (sandbox.exec)
+
+Some specialists can execute shell via `sandbox.exec` (typically through `bash -c` or `sh -c`).
+
+| Class | Examples | Policy |
+|---|---|---|
+| Safe deterministic shell glue | `bash -c 'pytest -q'`, `bash -c 'ls src'`, `bash -c 'cat report.txt'` | Allowed if agent `CodeExecution` patterns permit it |
+| Destructive filesystem operations | `rm`, `rmdir`, `unlink`, `shred`, `wipefs`, `mkfs`, `dd`, `find ... -delete` | Hard deny |
+| Privilege escalation | `sudo`, `su`, `doas`, setuid/setgid patterns | Hard deny |
+| Environment/process disclosure | `env`, `printenv`, `declare -x`, `/proc/*/environ` reads | Hard deny |
+
+If a command matches an agent's `CodeExecution` pattern but still fails with permission/security errors, assume the command hit one of these hard boundaries and rewrite the approach.
+
+**Networking and `/dev` troubleshooting with bubblewrap**
+
+- `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` means the host/kernel blocks loopback setup in isolated net namespaces. Use `AUTONOETIC_BWRAP_SHARE_NET=1` for that environment.
+- `curl` reporting `HTTP:200` together with `Failure writing output to destination` means the request succeeded but output write failed (often `/dev/null` or destination path). Use writable paths (for example `/tmp/...`) and, if needed, `AUTONOETIC_BWRAP_DEV_MODE=host-bind` or `minimal`.

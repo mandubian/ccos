@@ -331,45 +331,110 @@ The most likely composite failure mode is:
 6. the TUI may consume the signal file before fallback delivery can use it
 7. user experiences this as "signal does not work" or "agent did not wake"
 
-## Recommended Fix Direction
+## Recommended Architecture (Single Durable Model)
 
-### Minimal practical fix
+Use one architecture and remove split behavior between "direct resume" and "fallback signal":
 
-1. Keep signal files until a durable resume is confirmed.
-2. Update `chat.rs` so an approval signal triggers an explicit resume request on the chat's own connection.
-3. After that request returns, render the assistant reply as a normal assistant message.
-4. Only then consume the signal file.
+1. **Gateway-owned delivery**: the long-running gateway daemon owns approval notification delivery.
+2. **One payload contract**: every approval resolution uses the same structured `approval_resolved` payload.
+3. **Durable pending state + explicit ack**: notification files/records are kept until delivery is acknowledged.
+4. **Session-safe targeting**: approval targets are explicit metadata, not inferred from session ID string parsing.
+5. **Chat resumes on its own connection**: the TUI triggers resume itself and only consumes signal after success.
 
-This would solve the immediate user-visible problem:
+## Target Behavior
 
-- the TUI would continue displaying messages after approval
+After operator approval (or rejection):
 
-### Important consistency fix
+1. decision is durably recorded in approvals store
+2. gateway creates pending notification record(s) for the intended target(s)
+3. gateway delivery loop attempts delivery until success
+4. for chat sessions, TUI receives pending notification, sends resume on its own socket, renders assistant reply
+5. notification is consumed only after ack/success
+6. background scheduler wake on approval only happens when `wake_predicates.approval_resolved` is enabled
 
-Make direct and fallback delivery use the exact same structured payload.
+This model keeps behavior simple while being robust to process lifetimes, races, and client disconnects.
 
-The fallback path should deliver the same `approval_resolved` JSON message as the direct path.
+## Concrete Design
 
-### Correctness fixes
+### A) Approval decision remains source of truth
 
-- update approval ID extraction to support `apr-xxxxxxxx`
-- gate background approval wake with `background.wake_predicates.approval_resolved`
-- review parent/child signal cleanup symmetry
+- Keep `ApprovalDecision` in `.gateway/scheduler/approvals/{approved|rejected}/`.
+- Treat this as canonical state.
+- Do not rely on transient CLI process execution for actual wake delivery guarantees.
 
-### Stronger architectural fix
+### B) Gateway-owned notification queue
 
-Move signal polling and resume delivery ownership into the long-running gateway process rather than the short-lived approval CLI process.
+- Introduce a durable pending-notification mechanism under gateway-owned storage (signal dir can be reused if desired).
+- Each notification record should include:
+  - `request_id`
+  - `status` (`approved` or `rejected`)
+  - structured `approval_resolved` payload
+  - explicit target (`session_id`, optional `target_agent_id`, optional channel target)
+  - delivery/ack metadata (`created_at`, `attempt_count`, `last_attempt_at`, `acked_at`)
+- Start and own the poll/delivery loop in gateway server startup, not from `gateway approvals approve` CLI path.
 
-That would make wake behavior durable and reduce process lifetime races.
+### C) One payload shape everywhere
 
-## Suggested Follow-Up Work
+Both immediate and retry delivery paths must send the same structured payload:
 
-- patch `autonoetic/src/cli/chat.rs` so signals trigger a real resume request
-- patch `autonoetic-gateway/src/scheduler/signal.rs` to send structured `approval_resolved` payloads
-- stop chat from deleting signals before resume success
-- add E2E coverage for:
-  - chat open
-  - approval resolved externally
-  - planner resumes
-  - assistant output appears automatically in chat
+```json
+{
+  "type": "approval_resolved",
+  "request_id": "...",
+  "agent_id": "...",
+  "status": "approved",
+  "install_completed": true,
+  "message": "..."
+}
+```
+
+No plain-text-only fallback path should exist for agent-facing delivery.
+
+### D) Chat consumption and ack semantics
+
+In `autonoetic chat`:
+
+- Detect pending approval notification for current session.
+- Display a signal banner.
+- Trigger `event.ingest` on the same chat connection using the structured payload.
+- Render returned `assistant_reply` immediately.
+- Ack/consume signal only after successful resume+render.
+- If resume fails, keep notification pending for retry (do not consume).
+
+### E) Background wake semantics
+
+- In `scheduler/decision.rs::should_wake()`, honor `background.wake_predicates.approval_resolved` before returning `WakeReason::ApprovalResolved`.
+- Keep current deterministic behavior for approved scheduled actions, but only when wake predicate allows it.
+
+### F) Targeting model
+
+- Stop deriving parent/child targeting from session ID splitting heuristics.
+- Persist explicit target context at approval request creation (or in an associated metadata record), then use that explicit target at resolution time.
+
+## Why this is the best single design
+
+- **Simple mental model**: one owner (gateway), one payload contract, one durable queue.
+- **Robustness**: no dependency on short-lived CLI process threads.
+- **Correctness**: no race where chat consumes signal before durable resume is confirmed.
+- **Consistency**: planner receives identical structured semantics regardless of delivery attempt path.
+- **Extensibility**: human channels (TUI now, WhatsApp-like later) and agent channels share the same approval-resolution event model.
+
+## Implementation Checklist
+
+1. `autonoetic-gateway/src/server/mod.rs`
+   - start gateway-owned signal/notification poller at daemon startup
+2. `autonoetic-gateway/src/scheduler/approval.rs`
+   - stop spawning resume thread from CLI-owned call path
+   - create durable notification records instead
+3. `autonoetic-gateway/src/scheduler/signal.rs`
+   - enforce single structured payload delivery
+   - add ack-aware consume semantics
+4. `autonoetic/src/cli/chat.rs`
+   - support `apr-xxxxxxxx` extraction
+   - on signal: call `event.ingest` via current socket, render reply, then ack/consume
+5. `autonoetic-gateway/src/scheduler/decision.rs`
+   - gate approval wake by `background.wake_predicates.approval_resolved`
+6. tests
+   - add E2E: open chat, approve in separate terminal, planner resumes, assistant reply appears automatically
+   - add race-resilience test: signal is not consumed when resume fails
 

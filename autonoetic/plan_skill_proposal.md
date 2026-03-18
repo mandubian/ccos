@@ -2,60 +2,88 @@
 
 ## Question
 
-Should autonoetic allow creating "skills" (simple scripts like "get the weather") as standalone entities, instead of always creating full agents?
-
-## Decision: Script-Mode Agents ARE the Skills
-
-**No separate skill entity needed.** The existing `execution_mode: "script"` agent is already the right abstraction.
-
-### Why
-
-The gateway security infrastructure (`policy.rs:308-316`) requires:
-1. A capabilities array (for policy validation)
-2. An agent directory (for sandbox mount)
-3. An entry script path
-
-All of these live in `AgentManifest`. There is no separate "skill manifest" type in the gateway.
-
-### Overhead Comparison
-
-For a script-mode agent, the overhead vs a theoretical standalone skill:
-- `SKILL.md` with frontmatter (required — this IS the skill definition)
-- A directory (required — where else do you put the script?)
-- A `runtime.lock` (required by install flow)
-
-No LLM config, no reasoning loop, no session management. The script runs directly.
-
-### What Works Without Changes
-
-| Property | Status |
-|----------|--------|
-| Security (capabilities) | Already works |
-| Sandbox execution | Already works |
-| Causal chain audit | Already works |
-| SDK access (memory, content) | Available if needed |
-| Discovery via `agent.discover` | Works |
-| Evolution to reasoning mode | Change `execution_mode` field |
-
-### Key Code Paths
-
-- `autonoetic-types/src/agent.rs:96-104` — `ExecutionMode::Script` variant
-- `autonoetic-gateway/src/policy.rs:308-316` — `PolicyEngine` takes `AgentManifest`
-- `autonoetic-gateway/src/sandbox.rs:81` — `spawn(agent_dir, entrypoint)`
-- `autonoetic-gateway/src/runtime/tools.rs:6446` — Test: `test_agent_install_script_mode_allows_no_llm_config`
-
-### Decision Guide
-
-| Use Case | Entity | Reasoning |
-|----------|--------|-----------|
-| "Get weather for Paris" | Script agent | Fast, deterministic, reusable |
-| "Check BTC price every hour" | Script agent + `BackgroundReevaluation` | Scheduled, no LLM |
-| "Research competitors" | Reasoning agent | Needs judgment |
-| Native gateway tools | Gateway primitives | Core infrastructure |
+Should Autonoetic support standalone "skills" (for example a weather API call script) as a runtime primitive distinct from agents?
 
 ## Decision
 
-For autonoetic's synthetic skills (created by agents via `agent.install`):
-1. **Keep using script-mode agents** — they ARE the skill concept
-2. **Do not create a separate skill entity** — it would duplicate security plumbing
-3. **Enhance the script-agent fast path** — make it lighter where possible
+**Keep one runtime primitive: agent.**
+
+For simple capabilities, use **script-mode agents** (`execution_mode: "script"`).  
+Do not introduce a separate standalone skill runtime entity at this stage.
+
+## Rationale
+
+### 1) Security and governance already anchor on AgentManifest
+
+The current gateway contracts rely on an agent manifest for:
+- capability validation and policy checks
+- install/approval lifecycle
+- runtime identity and audit linkage
+- sandbox execution context and directory ownership
+
+Creating a second primitive would duplicate these controls and increase drift risk.
+
+### 2) Script-mode agents are already the lightweight skill model
+
+Script agents already provide:
+- no LLM requirement
+- direct deterministic execution path
+- same causal-chain and approval semantics as the rest of the platform
+
+So "basic skill" behavior is already available without architectural branching.
+
+### 3) Operational simplicity matters
+
+"Everything is an agent" keeps:
+- one install path
+- one policy model
+- one approval model
+- one discovery/routing model
+
+Two runtime primitives would reduce conceptual clarity and increase maintenance burden.
+
+## Important Caveat (Security Reality)
+
+Before broadening adoption of script skills, prioritize hardening script execution isolation.
+
+Current code paths indicate bubblewrap execution for scripts is still in a transitional state.  
+This means the key risk is sandbox hardening, not lack of a "skill" primitive.
+
+## Recommended Product Direction
+
+Keep runtime primitive = **agent**, but add a **skill-profile UX wrapper**:
+
+- optional CLI/tool sugar (for example `skill.install`) that compiles into `agent.install`
+- emits a script-mode agent manifest and files under the hood
+- applies opinionated defaults for "simple skills"
+
+This gives a lighter developer experience without splitting runtime architecture.
+
+## Skill-Profile Guardrails (Recommended)
+
+When using the skill-profile wrapper:
+
+1. require explicit `script_entry`
+2. require explicit capability declarations
+3. if network is requested:
+   - require explicit host allowlist (no wildcard by default)
+   - require approval by policy
+4. keep all execution sandboxed and auditable through existing agent paths
+
+## Decision Guide
+
+| Use Case | Entity | Reasoning |
+|----------|--------|-----------|
+| "Get weather for Paris" | Script agent (skill-profile optional) | Deterministic + reusable |
+| "Check BTC price every hour" | Script agent + `BackgroundReevaluation` | Scheduled, no LLM |
+| "Research competitors" | Reasoning agent | Needs judgment and synthesis |
+| Core platform operations | Gateway primitives | Infrastructure-level concerns |
+
+## Final Position
+
+For synthetic skills created via install flows:
+
+1. **Do not add a separate runtime skill entity**
+2. **Use script-mode agents as the skill abstraction**
+3. **Add UX-level skill-profile tooling if needed**
+4. **Prioritize sandbox hardening before scaling script-skill usage**
