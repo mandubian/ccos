@@ -23,6 +23,8 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 const FOUNDATION_INSTRUCTIONS: &str = include_str!("foundation_instructions.md");
+const LLM_OTHER_EMPTY_RETRY_ENV: &str = "AUTONOETIC_LLM_OTHER_EMPTY_RETRIES";
+const LLM_OTHER_EMPTY_RETRY_DEFAULT: usize = 1;
 
 #[derive(Debug, Clone, Default)]
 struct SchemaValidation {
@@ -41,6 +43,19 @@ pub(crate) fn compose_system_instructions(agent_instructions: &str) -> String {
             trimmed
         )
     }
+}
+
+fn max_other_empty_retries() -> usize {
+    std::env::var(LLM_OTHER_EMPTY_RETRY_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(LLM_OTHER_EMPTY_RETRY_DEFAULT)
+}
+
+fn is_retryable_empty_other_response(response: &crate::llm::CompletionResponse) -> bool {
+    matches!(&response.stop_reason, StopReason::Other(s) if s.trim().is_empty())
+        && response.tool_calls.is_empty()
+        && response.text.trim().is_empty()
 }
 
 pub struct AgentExecutor {
@@ -133,7 +148,13 @@ impl AgentExecutor {
         persist_reevaluation_state(&self.agent_dir, |state| {
             state.last_outcome = Some(reason.to_string());
         })?;
-        let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?;
+        let mut tracer = {
+            let mut t = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?;
+            if let Some(gateway_dir) = &self.gateway_dir {
+                t = t.with_timeline(gateway_dir);
+            }
+            t
+        };
         tracer.log_session_end(reason);
         self.session_started = false;
         self.session_id = None;
@@ -174,8 +195,14 @@ impl AgentExecutor {
             &std::env::var("AUTONOETIC_EVIDENCE_MODE").unwrap_or_else(|_| "off".to_string()),
         )?;
 
-        let mut tracer = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
-            .with_turn_id(&turn_id);
+        let mut tracer = {
+            let mut t = SessionTracer::new(&self.agent_dir, &self.manifest.agent.id, &session_id)?
+                .with_turn_id(&turn_id);
+            if let Some(gateway_dir) = &self.gateway_dir {
+                t = t.with_timeline(gateway_dir);
+            }
+            t
+        };
 
         let active_agent_dir = self.agent_dir.clone();
 
@@ -215,6 +242,8 @@ impl AgentExecutor {
             .map(|c| c.temperature as f32);
         let mut latest_assistant_text: Option<String> = None;
         let policy = PolicyEngine::new(self.manifest.clone());
+        let max_empty_other_retries = max_other_empty_retries();
+        let mut empty_other_retries_used = 0usize;
 
         loop {
             self.guard.check_loop()?;
@@ -345,6 +374,31 @@ impl AgentExecutor {
                 response.usage.output_tokens,
                 &tool_call_details,
             )?;
+
+            // Some providers occasionally return an empty completion with
+            // stop_reason Other(""). Retry a small bounded number of times at
+            // gateway level before surfacing an error to planner.
+            if is_retryable_empty_other_response(&response)
+                && empty_other_retries_used < max_empty_other_retries
+            {
+                empty_other_retries_used += 1;
+                let _ = tracer.log_event(
+                    "llm",
+                    "completion_retry",
+                    autonoetic_types::causal_chain::EntryStatus::Success,
+                    Some(serde_json::json!({
+                        "reason": "empty_other_stop_reason",
+                        "attempt": empty_other_retries_used,
+                        "max_retries": max_empty_other_retries,
+                    })),
+                );
+                continue;
+            }
+
+            // Only count consecutive anomalies.
+            if !is_retryable_empty_other_response(&response) {
+                empty_other_retries_used = 0;
+            }
 
             if !response.text.trim().is_empty() {
                 latest_assistant_text = Some(response.text.clone());
@@ -783,6 +837,36 @@ mod tests {
         }
     }
 
+    struct RetryableOtherThenEndTurnDriver {
+        calls: Arc<Mutex<u32>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmDriver for RetryableOtherThenEndTurnDriver {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+        ) -> anyhow::Result<CompletionResponse> {
+            let mut guard = self.calls.lock().expect("mutex should lock");
+            *guard += 1;
+            if *guard == 1 {
+                Ok(CompletionResponse {
+                    text: String::new(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::Other(String::new()),
+                    usage: TokenUsage::default(),
+                })
+            } else {
+                Ok(CompletionResponse {
+                    text: "recovered reply".to_string(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                })
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_execute_with_history_appends_assistant_text() {
         let manifest = manifest_with_capabilities(vec![]);
@@ -800,6 +884,48 @@ mod tests {
             .await
             .expect("execution should succeed");
         assert_eq!(reply.as_deref(), Some("assistant reply"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_history_retries_empty_other_once() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let calls = Arc::new(Mutex::new(0u32));
+        let mut runtime = AgentExecutor::new(
+            manifest,
+            "System prompt".to_string(),
+            Arc::new(RetryableOtherThenEndTurnDriver {
+                calls: Arc::clone(&calls),
+            }),
+            temp.path().to_path_buf(),
+            crate::runtime::tools::default_registry(),
+        );
+        let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
+        let reply = runtime
+            .execute_with_history(&mut history)
+            .await
+            .expect("execution should succeed after retry");
+        assert_eq!(reply.as_deref(), Some("recovered reply"));
+        assert_eq!(*calls.lock().expect("mutex should lock"), 2);
+    }
+
+    #[test]
+    fn test_is_retryable_empty_other_response() {
+        let retryable = CompletionResponse {
+            text: String::new(),
+            tool_calls: vec![],
+            stop_reason: StopReason::Other(String::new()),
+            usage: TokenUsage::default(),
+        };
+        assert!(is_retryable_empty_other_response(&retryable));
+
+        let not_retryable = CompletionResponse {
+            text: "has text".to_string(),
+            tool_calls: vec![],
+            stop_reason: StopReason::Other(String::new()),
+            usage: TokenUsage::default(),
+        };
+        assert!(!is_retryable_empty_other_response(&not_retryable));
     }
 
     struct CaptureSystemDriver {
