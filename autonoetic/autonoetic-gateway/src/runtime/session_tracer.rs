@@ -309,27 +309,34 @@ impl SessionTracer {
         input_tokens: u64,
         output_tokens: u64,
         tool_call_details: &[serde_json::Value],
+        context_window_tokens: Option<u32>,
+        input_context_pct: Option<f32>,
     ) -> anyhow::Result<()> {
+        let mut usage = serde_json::json!({
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens
+        });
+        if let Some(w) = context_window_tokens {
+            usage["context_window_tokens"] = serde_json::json!(w);
+        }
+        if let Some(p) = input_context_pct {
+            usage["input_context_pct"] = serde_json::json!(p);
+        }
+
         let mut llm_payload = serde_json::json!({
             "model": model,
             "stop_reason": stop_reason,
             "text": redact_text_for_logs(&truncate_for_log(text, 256)),
             "text_sha256": sha256_hex(text),
             "tool_calls": tool_calls,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens
-            }
+            "usage": usage.clone()
         });
         let llm_evidence = serde_json::json!({
             "model": model,
             "stop_reason": stop_reason,
             "text": redact_text_for_logs(text),
             "tool_calls": tool_call_details,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens
-            }
+            "usage": usage
         });
         if let Some(evidence_ref) = self.evidence_store.capture_json(
             self.turn_id.as_deref(),

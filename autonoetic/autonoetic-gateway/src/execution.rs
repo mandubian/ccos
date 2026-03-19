@@ -5,8 +5,10 @@ use crate::causal_chain::CausalLogger;
 use crate::llm::{build_driver, Message};
 use crate::runtime::lifecycle::{compose_system_instructions, AgentExecutor};
 use crate::runtime::reevaluation_state::execute_scheduled_action;
+use crate::runtime::openrouter_catalog::OpenRouterCatalog;
+use crate::runtime::session_budget::SessionBudgetRegistry;
 use crate::runtime::session_context::SessionContext;
-use autonoetic_types::agent::{AgentManifest, ExecutionMode};
+use autonoetic_types::agent::{AgentManifest, ExecutionMode, LlmExchangeUsage};
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
 use autonoetic_types::config::GatewayConfig;
@@ -305,6 +307,8 @@ pub struct SpawnResult {
     /// to read any of these files via `content.read` without parsing reply text.
     pub files: Vec<ContentFile>,
     pub shared_knowledge: Vec<SharedKnowledge>,
+    /// Per–LLM-round token usage for this run (JSON-RPC / CLI can surface this).
+    pub llm_usage: Vec<LlmExchangeUsage>,
 }
 
 #[derive(Clone)]
@@ -314,16 +318,20 @@ pub struct GatewayExecutionService {
     execution_semaphore: Arc<Semaphore>,
     agent_admission: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
     agent_execution_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Shared per-session budget counters for all spawns using this gateway process.
+    session_budget: Arc<SessionBudgetRegistry>,
 }
 
 impl GatewayExecutionService {
     pub fn new(config: GatewayConfig) -> Self {
+        let session_budget = Arc::new(SessionBudgetRegistry::new(config.session_budget.clone()));
         Self {
             execution_semaphore: Arc::new(Semaphore::new(config.max_concurrent_spawns.max(1))),
             agent_admission: Arc::new(Mutex::new(HashMap::new())),
             agent_execution_locks: Arc::new(Mutex::new(HashMap::new())),
             config: Arc::new(config),
             http_client: reqwest::Client::new(),
+            session_budget,
         }
     }
 
@@ -547,6 +555,7 @@ impl GatewayExecutionService {
                     artifacts,
                     files,
                     shared_knowledge,
+                    llm_usage: Vec::new(),
                 });
             }
 
@@ -557,6 +566,8 @@ impl GatewayExecutionService {
                 .ok_or_else(|| anyhow::anyhow!("Agent '{}' is missing llm_config", agent_id))?;
             let driver = build_driver(llm_config, self.http_client.clone())?;
 
+            let openrouter_catalog =
+                Arc::new(OpenRouterCatalog::new(self.http_client.clone()));
             let middleware = loaded.manifest.middleware.clone().unwrap_or_default();
             let mut runtime = AgentExecutor::new(
                 loaded.manifest,
@@ -567,6 +578,8 @@ impl GatewayExecutionService {
             )
             .with_gateway_dir(self.config.agents_dir.join(".gateway"))
             .with_config(self.config.clone())
+            .with_session_budget(Some(self.session_budget.clone()))
+            .with_openrouter_catalog(Some(openrouter_catalog))
             .with_middleware(middleware)
             .with_initial_user_message(message.to_string())
             .with_session_id(session_id.to_string());
@@ -593,6 +606,7 @@ impl GatewayExecutionService {
                 "jsonrpc_spawn_complete_empty"
             };
             runtime.close_session(close_reason)?;
+            let llm_usage = runtime.take_llm_usage_last_run();
 
             // Extract artifacts from content store
             let artifacts = extract_artifacts_from_content_store(
@@ -621,6 +635,7 @@ impl GatewayExecutionService {
                 artifacts,
                 files,
                 shared_knowledge,
+                llm_usage,
             })
         })
         .await?;
@@ -776,6 +791,7 @@ fn log_nested_spawn_to_gateway(
         "session_id": result.session_id,
         "assistant_reply_len": result.assistant_reply.as_ref().map(|s| s.len()).unwrap_or(0),
         "assistant_reply_sha256": result.assistant_reply.as_ref().map(|s| sha256_hex(s)),
+        "llm_usage": result.llm_usage,
     });
     log_gateway_causal_event(
         &logger,

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use autonoetic_gateway::llm::Message;
+use autonoetic_types::agent::LlmExchangeUsage;
 use autonoetic_types::config::{GatewayConfig, LlmPreset};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -604,6 +605,38 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Pretty-print per-completion token stats (and optional % of declared context window).
+pub fn format_llm_usage_for_cli(usages: &[LlmExchangeUsage]) -> Option<String> {
+    if usages.is_empty() {
+        return None;
+    }
+    let total_in: u64 = usages.iter().map(|u| u.input_tokens).sum();
+    let total_out: u64 = usages.iter().map(|u| u.output_tokens).sum();
+    let mut lines = vec![format!(
+        "[LLM usage] {} completion(s) · tokens in={} · out={}",
+        usages.len(),
+        total_in,
+        total_out
+    )];
+    for (i, u) in usages.iter().enumerate() {
+        let mut s = format!(
+            "  · #{} {} · in={} · out={}",
+            i + 1,
+            u.model,
+            u.input_tokens,
+            u.output_tokens
+        );
+        if let (Some(p), Some(w)) = (u.input_context_pct, u.context_window_tokens) {
+            s.push_str(&format!(" · prompt ~{:.1}% of {} ctx", p, w));
+        }
+        if let Some(usd) = u.estimated_cost_usd {
+            s.push_str(&format!(" · ~${:.6} (est.)", usd));
+        }
+        lines.push(s);
+    }
+    Some(lines.join("\n"))
+}
+
 pub async fn handle_agent_run(
     config_path: &Path,
     agent_id: &str,
@@ -628,7 +661,12 @@ pub async fn run_agent_with_runtime(
     interactive: bool,
     headless: bool,
 ) -> anyhow::Result<()> {
-    let (manifest, instructions, agent_dir) = load_agent_runtime_context(config_path, agent_id)?;
+    let gateway_config = Arc::new(autonoetic_gateway::config::load_config(config_path)?);
+    let repo = autonoetic_gateway::AgentRepository::from_config(&gateway_config);
+    let loaded = repo.get_sync(agent_id)?;
+    let manifest = loaded.manifest;
+    let instructions = loaded.instructions;
+    let agent_dir = loaded.dir;
     let llm_config = manifest
         .llm_config
         .clone()
@@ -642,6 +680,8 @@ pub async fn run_agent_with_runtime(
         interactive,
         headless,
         driver,
+        Some(gateway_config),
+        None,
     )
     .await
 }
@@ -664,6 +704,8 @@ pub async fn run_agent_with_runtime_with_driver(
     interactive: bool,
     headless: bool,
     driver: Arc<dyn autonoetic_gateway::llm::LlmDriver>,
+    gateway_config: Option<Arc<GatewayConfig>>,
+    session_budget: Option<Arc<autonoetic_gateway::SessionBudgetRegistry>>,
 ) -> anyhow::Result<()> {
     if headless {
         tracing::info!("Headless mode enabled.");
@@ -676,6 +718,23 @@ pub async fn run_agent_with_runtime_with_driver(
         agent_dir,
         autonoetic_gateway::runtime::tools::default_registry(),
     );
+    if let Some(cfg) = gateway_config.as_ref() {
+        runtime = runtime
+            .with_gateway_dir(cfg.agents_dir.join(".gateway"))
+            .with_config(cfg.clone());
+    }
+    if let Some(budget) = session_budget {
+        runtime = runtime.with_session_budget(Some(budget));
+    } else if let Some(cfg) = gateway_config.as_ref() {
+        let b = Arc::new(autonoetic_gateway::SessionBudgetRegistry::new(
+            cfg.session_budget.clone(),
+        ));
+        runtime = runtime.with_session_budget(Some(b));
+    }
+    let or_catalog = Arc::new(autonoetic_gateway::OpenRouterCatalog::new(
+        reqwest::Client::new(),
+    ));
+    runtime = runtime.with_openrouter_catalog(Some(or_catalog));
     if let Some(message) = kickoff_message {
         runtime = runtime.with_initial_user_message(message.to_string());
     }
@@ -690,10 +749,16 @@ pub async fn run_agent_with_runtime_with_driver(
     match runtime.execute_with_history(&mut history).await {
         Ok(Some(reply)) => {
             println!("{}", reply);
+            if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                eprintln!("{}", u);
+            }
             runtime.close_session("headless_complete")?;
         }
         Ok(None) => {
             println!("[No assistant text returned]");
+            if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                eprintln!("{}", u);
+            }
             runtime.close_session("headless_complete_empty")?;
         }
         Err(e) => {
@@ -724,8 +789,15 @@ pub async fn run_interactive_session(
                 stdout.write_all(reply.as_bytes()).await?;
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
+                if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                    eprintln!("{}", u);
+                }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                    eprintln!("{}", u);
+                }
+            }
             Err(e) => {
                 let _ = runtime.close_session("interactive_error");
                 return Err(e);
@@ -754,8 +826,15 @@ pub async fn run_interactive_session(
                 stdout.write_all(reply.as_bytes()).await?;
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
+                if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                    eprintln!("{}", u);
+                }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if let Some(u) = format_llm_usage_for_cli(&runtime.take_llm_usage_last_run()) {
+                    eprintln!("{}", u);
+                }
+            }
             Err(e) => {
                 let _ = runtime.close_session("interactive_error");
                 return Err(e);
@@ -853,6 +932,8 @@ Use tools when needed.
             false,
             true,
             Arc::new(DenySandboxExecDriver),
+            None,
+            None,
         )
         .await
         .expect_err("policy denial should fail runtime");

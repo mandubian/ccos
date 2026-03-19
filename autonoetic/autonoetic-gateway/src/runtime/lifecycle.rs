@@ -7,12 +7,14 @@ use crate::policy::PolicyEngine;
 use crate::runtime::artifact::extract_artifacts_from_text;
 use crate::runtime::disclosure::DisclosureState;
 use crate::runtime::guard::LoopGuard;
+use crate::runtime::openrouter_catalog::OpenRouterCatalog;
+use crate::runtime::session_budget::SessionBudgetRegistry;
 use crate::runtime::mcp::McpToolRuntime;
 use crate::runtime::reevaluation_state::persist_reevaluation_state;
 use crate::runtime::session_tracer::{EvidenceMode, SessionTracer};
 use crate::runtime::store::SecretStoreRuntime;
 use crate::runtime::tool_call_processor::ToolCallProcessor;
-use autonoetic_types::agent::{AgentManifest, Middleware};
+use autonoetic_types::agent::{AgentManifest, LlmExchangeUsage, Middleware};
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::disclosure::DisclosurePolicy;
 use std::path::{Path, PathBuf};
@@ -72,8 +74,14 @@ pub struct AgentExecutor {
     pub turn_counter: u64,
     /// When set, passed to tool execution (e.g. agent.install approval policy).
     pub config: Option<Arc<GatewayConfig>>,
+    /// Optional per-session LLM/tool/token/wall-clock budgets (shared `Arc` across spawns).
+    pub session_budget: Option<Arc<SessionBudgetRegistry>>,
     /// Middleware hooks declared in the agent manifest.
     pub middleware: Middleware,
+    /// Token usage per real LLM completion in the last `execute_with_history` run.
+    pub llm_usage_last_run: Vec<LlmExchangeUsage>,
+    /// Optional OpenRouter models catalog (context + pricing) for UX and session price budgets.
+    pub openrouter_catalog: Option<Arc<OpenRouterCatalog>>,
 }
 
 impl AgentExecutor {
@@ -97,8 +105,16 @@ impl AgentExecutor {
             session_started: false,
             turn_counter: 0,
             config: None,
+            session_budget: None,
             middleware: Middleware::default(),
+            llm_usage_last_run: Vec::new(),
+            openrouter_catalog: None,
         }
+    }
+
+    /// Take accumulated LLM usage from the last `execute_with_history` (consumes the buffer).
+    pub fn take_llm_usage_last_run(&mut self) -> Vec<LlmExchangeUsage> {
+        std::mem::take(&mut self.llm_usage_last_run)
     }
 
     pub fn with_gateway_dir(mut self, gateway_dir: PathBuf) -> Self {
@@ -108,6 +124,16 @@ impl AgentExecutor {
 
     pub fn with_config(mut self, config: Arc<GatewayConfig>) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    pub fn with_session_budget(mut self, registry: Option<Arc<SessionBudgetRegistry>>) -> Self {
+        self.session_budget = registry;
+        self
+    }
+
+    pub fn with_openrouter_catalog(mut self, catalog: Option<Arc<OpenRouterCatalog>>) -> Self {
+        self.openrouter_catalog = catalog;
         self
     }
 
@@ -188,6 +214,7 @@ impl AgentExecutor {
     ) -> anyhow::Result<Option<String>> {
         tracing::info!("Agent {} waking up...", self.manifest.agent.id);
         self.guard = LoopGuard::new(5);
+        self.llm_usage_last_run.clear();
         let session_id = self.ensure_session_id();
         let turn_id = self.next_turn_id();
 
@@ -240,6 +267,12 @@ impl AgentExecutor {
             .llm_config
             .as_ref()
             .map(|c| c.temperature as f32);
+        let context_window_resolved = resolve_context_window_for_run(
+            &self.manifest,
+            &model,
+            self.openrouter_catalog.as_ref(),
+        )
+        .await;
         let mut latest_assistant_text: Option<String> = None;
         let policy = PolicyEngine::new(self.manifest.clone());
         let max_empty_other_retries = max_other_empty_retries();
@@ -247,6 +280,10 @@ impl AgentExecutor {
 
         loop {
             self.guard.check_loop()?;
+
+            if let Some(budget) = self.session_budget.as_ref() {
+                budget.check_pre_llm(&session_id)?;
+            }
 
             // Update system message
             let system_instructions = compose_system_instructions(&self.instructions);
@@ -297,13 +334,14 @@ impl AgentExecutor {
 
             // --- Skip LLM if signaled by pre-process hook ---
             // The hook can return a response in metadata.assistant_reply and set metadata.skip_llm: true
-            let response = if req
+            let skip_llm = req
                 .metadata
                 .as_ref()
                 .and_then(|m| m.get("skip_llm"))
                 .and_then(|v| v.as_bool())
-                == Some(true)
-            {
+                == Some(true);
+
+            let response = if skip_llm {
                 let assistant_reply = req
                     .metadata
                     .as_ref()
@@ -345,6 +383,33 @@ impl AgentExecutor {
                 response
             };
 
+            let estimated_cost_usd = if skip_llm {
+                None
+            } else {
+                match self.openrouter_catalog.as_ref() {
+                    Some(cat) => {
+                        cat.estimate_cost_usd(
+                            &model,
+                            response.usage.input_tokens,
+                            response.usage.output_tokens,
+                        )
+                        .await
+                    }
+                    None => None,
+                }
+            };
+
+            if let Some(budget) = self.session_budget.as_ref() {
+                if !skip_llm {
+                    budget.record_llm_completion(
+                        &session_id,
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                        estimated_cost_usd,
+                    )?;
+                }
+            }
+
             self.log_output_schema_validation(&response, &mut tracer);
 
             // Extract new artifacts from response for logging
@@ -365,6 +430,17 @@ impl AgentExecutor {
                 })
                 .collect();
 
+            let context_window_tokens = if skip_llm {
+                None
+            } else {
+                context_window_resolved
+            };
+            let input_context_pct = if skip_llm {
+                None
+            } else {
+                input_tokens_as_context_pct(response.usage.input_tokens, context_window_tokens)
+            };
+
             tracer.log_llm_completion(
                 &model,
                 &format!("{:?}", response.stop_reason),
@@ -373,7 +449,31 @@ impl AgentExecutor {
                 response.usage.input_tokens,
                 response.usage.output_tokens,
                 &tool_call_details,
+                context_window_tokens,
+                input_context_pct,
             )?;
+
+            if !skip_llm {
+                self.llm_usage_last_run.push(LlmExchangeUsage {
+                    model: model.clone(),
+                    input_tokens: response.usage.input_tokens,
+                    output_tokens: response.usage.output_tokens,
+                    context_window_tokens,
+                    input_context_pct,
+                    estimated_cost_usd,
+                });
+                tracing::info!(
+                    target: "autonoetic.llm",
+                    agent_id = %self.manifest.agent.id,
+                    session_id = %session_id,
+                    model = %model,
+                    input_tokens = response.usage.input_tokens,
+                    output_tokens = response.usage.output_tokens,
+                    input_context_pct = ?input_context_pct,
+                    context_window_tokens = ?context_window_tokens,
+                    "llm exchange"
+                );
+            }
 
             // Some providers occasionally return an empty completion with
             // stop_reason Other(""). Retry a small bounded number of times at
@@ -409,6 +509,13 @@ impl AgentExecutor {
                     let mut assistant_msg = Message::assistant(response.text.clone());
                     assistant_msg.tool_calls = response.tool_calls.clone();
                     history.push(assistant_msg);
+
+                    if let Some(budget) = self.session_budget.as_ref() {
+                        budget.reserve_tool_invocations(
+                            &session_id,
+                            response.tool_calls.len() as u64,
+                        )?;
+                    }
 
                     let mut processor = ToolCallProcessor::new(
                         &mut mcp_runtime,
@@ -751,6 +858,50 @@ fn validate_against_schema(input: &str, schema: &serde_json::Value) -> SchemaVal
     }
 
     validation
+}
+
+fn resolve_context_window_tokens(manifest: &AgentManifest) -> Option<u32> {
+    if let Some(cfg) = &manifest.llm_config {
+        if let Some(w) = cfg.context_window_tokens {
+            return Some(w);
+        }
+    }
+    std::env::var("AUTONOETIC_LLM_CONTEXT_WINDOW")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+/// Manifest/env first; if still unknown and provider is OpenRouter, use the public models API cache.
+async fn resolve_context_window_for_run(
+    manifest: &AgentManifest,
+    model: &str,
+    catalog: Option<&Arc<OpenRouterCatalog>>,
+) -> Option<u32> {
+    if let Some(w) = resolve_context_window_tokens(manifest) {
+        return Some(w);
+    }
+    let use_openrouter = manifest
+        .llm_config
+        .as_ref()
+        .map(|c| c.provider.eq_ignore_ascii_case("openrouter"))
+        .unwrap_or(false);
+    if !use_openrouter {
+        return None;
+    }
+    match catalog {
+        Some(cat) => cat.context_length_for_model(model).await,
+        None => None,
+    }
+}
+
+/// Maps provider prompt (`input`) token count to % of a declared context window.
+fn input_tokens_as_context_pct(input_tokens: u64, context_window: Option<u32>) -> Option<f32> {
+    let w = f64::from(context_window?);
+    if w <= 0.0 {
+        return None;
+    }
+    let pct = (input_tokens as f64 / w) * 100.0;
+    Some(pct.min(9999.0) as f32)
 }
 
 #[cfg(test)]

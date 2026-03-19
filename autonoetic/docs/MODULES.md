@@ -11,6 +11,8 @@
 - [autonoetic (CLI)](#autonoetic-cli)
 - [Agent Directory Structure](#agent-directory-structure)
 - [Runtime Configuration](#runtime-configuration)
+- [Session budgets](session-budget.md) — YAML limits
+- [Budget management](budget-management.md) — enforcement flow, OpenRouter catalog timing
 
 ---
 
@@ -94,6 +96,8 @@ The core gateway library. Handles all server, runtime, and execution logic.
 | `parser.rs` | SKILL.md frontmatter parser |
 | `repository.rs` | Agent discovery and identity validation |
 | `session_tracer.rs` | Causal chain logging helpers |
+| `session_budget.rs` | Config-driven per-session LLM/tool/token/wall-clock/price budgets |
+| `openrouter_catalog.rs` | Cached OpenRouter Models API metadata (`context_length`, per-token pricing) for UX and `max_session_price_usd` |
 | `reevaluation_state.rs` | Background state persistence |
 | `memory.rs` | Tier 2 durable memory (SQLite) |
 | `foundation_instructions.md` | System prompt rules injected for all agents |
@@ -368,6 +372,8 @@ audit = true
 agent_install_approval_policy = "risk_based"  # always, risk_based, never
 ```
 
+Session-scoped LLM/tool/token/wall-clock/optional USD caps are configured in YAML as `session_budget` (see [session-budget.md](session-budget.md)).
+
 ### Environment Variables
 
 | Variable | Description |
@@ -379,6 +385,7 @@ agent_install_approval_policy = "risk_based"  # always, risk_based, never
 | `AUTONOETIC_PYTHON_SDK_PATH` | Python SDK path for sandbox |
 | `AUTONOETIC_SHARED_SECRET` | Bearer token for HTTP API |
 | `AUTONOETIC_EVIDENCE_MODE` | `full` (default) or `off` |
+| `AUTONOETIC_LLM_CONTEXT_WINDOW` | Optional token context size for CLI “% of context used” when not set in agent `llm_config` |
 | `CCOS_SOCKET_PATH` | Unix socket path for SDK |
 
 ### Agent Config (`SKILL.md` frontmatter)

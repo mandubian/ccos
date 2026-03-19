@@ -3487,6 +3487,7 @@ impl NativeTool for AgentSpawnTool {
             // All named content written by the child — use name/handle/alias with content.read
             "files": result.files,
             "shared_knowledge": result.shared_knowledge,
+            "llm_usage": result.llm_usage,
         })
         .to_string())
     }

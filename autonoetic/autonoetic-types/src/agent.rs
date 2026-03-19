@@ -39,6 +39,27 @@ pub struct LlmConfig {
     /// (e.g., Z.AI GLM models via OpenRouter)
     #[serde(default)]
     pub chat_only: bool,
+    /// Optional context window size (tokens) for UX such as "% of context used" in the CLI.
+    /// If unset, use env `AUTONOETIC_LLM_CONTEXT_WINDOW` or omit percentage.
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
+}
+
+/// One provider round-trip: token counts and optional context window utilization.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct LlmExchangeUsage {
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Declared context window used for `input_context_pct` (echo for clients).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u32>,
+    /// Prompt (`input_tokens`) as a percentage of `context_window_tokens` when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_context_pct: Option<f32>,
+    /// Estimated USD for this completion (OpenRouter catalog pricing × token counts) when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
 }
 
 /// Resource limits enforced by the Gateway.
