@@ -514,14 +514,13 @@ fn extract_code_for_analysis(
 
             // Skip flags like -c, -m, -u
             if after_python.starts_with('-') {
-                // For "python -c 'code'", analyze the code string
-                if after_python.starts_with("-c ") || after_python.starts_with("-c'") {
-                    let code = after_python
-                        .strip_prefix("-c")
-                        .and_then(|s| s.strip_prefix(' ').or_else(|| s.strip_prefix('\'')))
-                        .and_then(|s| s.strip_suffix('\'').or_else(|| s.strip_suffix('"')))
-                        .unwrap_or("");
-                    return code.to_string();
+                // For "python -c ...", analyze the inline code payload.
+                // Keep parsing aligned with the sandbox runner's split_whitespace
+                // behavior so analysis sees the same token shape execution receives.
+                if let Some(code) = after_python.strip_prefix("-c").map(str::trim_start) {
+                    if !code.is_empty() {
+                        return code.to_string();
+                    }
                 }
                 return command.to_string();
             }
@@ -5905,6 +5904,18 @@ dependencies:
             )
             .expect_err("retry should reach dependency parsing and fail");
         assert!(err.to_string().contains("Unsupported dependency runtime"));
+    }
+
+    #[test]
+    fn test_extract_code_for_analysis_handles_python_dash_c_without_outer_quotes() {
+        let temp = tempdir().expect("tempdir should create");
+        let code = extract_code_for_analysis(
+            r#"python3 -c print("https://api.cache-test.dev/data")"#,
+            temp.path(),
+            None,
+            None,
+        );
+        assert_eq!(code, r#"print("https://api.cache-test.dev/data")"#);
     }
 
     #[test]

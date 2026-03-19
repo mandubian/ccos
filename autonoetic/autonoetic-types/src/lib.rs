@@ -12,6 +12,7 @@ pub mod causal_chain;
 pub mod config;
 pub mod disclosure;
 pub mod memory;
+pub mod promotion;
 pub mod runtime_lock;
 pub mod schema_enforcement;
 pub mod task_board;

@@ -1,5 +1,6 @@
 //! Hash-chain Causal Logger.
 
+pub mod promotion_lookup;
 pub mod rotation;
 
 pub use rotation::{

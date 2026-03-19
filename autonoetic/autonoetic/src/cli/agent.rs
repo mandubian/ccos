@@ -79,6 +79,12 @@ pub fn resolve_llm_config(
             temperature: 0.3,
             chat_only: false,
         },
+        "evaluator" | "auditor" => LlmTemplateConfig {
+            provider: "openrouter".to_string(),
+            model: "google/gemini-3-flash-preview".to_string(),
+            temperature: 0.1,
+            chat_only: false,
+        },
         _ => LlmTemplateConfig {
             provider: "openai".to_string(),
             model: "gpt-4o".to_string(),
@@ -914,6 +920,7 @@ Use tools when needed.
             temperature: Some(0.0),
             fallback_provider: None,
             fallback_model: None,
+            chat_only: None,
         });
         config.llm_preset_mapping.insert("coder".to_string(), "fast".to_string());
 
