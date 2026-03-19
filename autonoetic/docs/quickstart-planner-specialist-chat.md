@@ -329,6 +329,12 @@ You should see:
 - tool usage including `agent.spawn` in planner trace;
 - specialist session activity tied to the same request lineage.
 
+**Human-readable session views:**
+
+- `agents/.gateway/sessions/<session_id>/timeline.md` — progressive Markdown timeline for the whole session.
+- `agents/.gateway/sessions/<session_id>/artifacts/<artifact_id>/` — named projection of built artifact files so you can open generated code directly without resolving SHA handles by hand.
+- failed or approval-blocked tool runs now attach an `evidence_ref` in the timeline/causal entry, pointing to the full redacted result payload (useful for test stdout/stderr and approval details).
+
 ## Adapter specialist docs
 
 For schema/behavior wrapper generation via `agent-adapter.default`, including
@@ -337,7 +343,7 @@ details of `schema_diff.py` and `generate_wrapper.py`, see:
 - `docs/agent-adapter-specialist.md`
 
 **Why is `result_preview` truncated in causal_chain.jsonl?**  
-Tool results in the causal chain are intentionally limited to 256 characters so log lines stay readable and bounded. The payload still has `result_len` and `result_sha256`. To get full tool output in logs, set `AUTONOETIC_EVIDENCE_MODE=full` when starting the gateway; then each tool_invoke completed entry gets an `evidence_ref` pointing to a file under the agent's `history/evidence/<session_id>/` with the full result.
+Tool results in the causal chain are intentionally limited to 256 characters so log lines stay readable and bounded. The payload still has `result_len` and `result_sha256`. By default, the gateway now captures full redacted evidence and adds an `evidence_ref` for traced events under the agent's `history/evidence/<session_id>/`. If you want to reduce evidence volume, set `AUTONOETIC_EVIDENCE_MODE=off`; failed and approval-blocked tool runs will still preserve an `evidence_ref` so the full error/test payload remains inspectable.
 
 **Does `causal_chain.jsonl` rotate?**  
 Not yet. Current logs append to a single file per history location (`agents/.gateway/history/causal_chain.jsonl` and `agents/<agent_id>/history/causal_chain.jsonl`). Rotation/segmentation is planned.

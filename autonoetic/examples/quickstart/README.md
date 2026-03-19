@@ -89,14 +89,14 @@ cat /tmp/autonoetic-quickstart/agents/<agent_id>/state/latest_fact_label.txt
 ls /tmp/autonoetic-quickstart/agents/<agent_id>/state/sessions
 ```
 
-Capture full redacted evidence blobs (optional):
+Evidence capture is on by default. To force it explicitly:
 
 ```bash
 export AUTONOETIC_EVIDENCE_MODE=full
 bash examples/quickstart/run.sh /tmp/autonoetic-quickstart <agent_id> openrouter_gfl
 ```
 
-When enabled, causal entries include `evidence_ref` pointers to files under:
+With evidence capture enabled, causal entries include `evidence_ref` pointers to files under:
 
 ```text
 agents/<agent_id>/history/evidence/<session_id>/*.json
