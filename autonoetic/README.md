@@ -165,7 +165,7 @@ bash examples/quickstart/run.sh
 By default it initializes an agent in an isolated `/tmp` workspace and runs a real headless call against OpenRouter `google/gemini-3-flash-preview` (requires `OPENROUTER_API_KEY`). You can also run `smoke` mode for local interactive startup/exit without a remote model call.
 
 Each run appends lifecycle/tool events to the agent causal trace at `agents/<agent_id>/history/causal_chain.jsonl`.
-Set `AUTONOETIC_EVIDENCE_MODE=full` to additionally capture redacted full evidence payloads with `evidence_ref` pointers in causal entries.
+By default, the gateway also captures redacted full evidence payloads with `evidence_ref` pointers in causal entries. Set `AUTONOETIC_EVIDENCE_MODE=off` if you want compact-only traces.
 Causal entries expose top-level `session_id`, `turn_id`, and `event_seq` fields for multi-run/multi-turn introspection, plus `entry_hash` / `prev_hash` linkage for chain integrity.
 You can inspect traces with:
 - `autonoetic trace sessions [--agent <agent_id>] [--json]`

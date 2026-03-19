@@ -183,6 +183,16 @@ The artifact boundary must cover the full executable behavior surface, including
 
 This closed-boundary rule applies equally to Python, shell, Node, generated scripts, config-driven runtimes, and similar executable file sets.
 
+### Human-readable artifact projection
+
+When an artifact is built, the gateway also materializes a read-only projection under:
+
+```text
+.gateway/sessions/<root-session-id>/artifacts/<artifact_id>/
+```
+
+On Unix hosts, the named files are symlinks to the canonical immutable content blobs, so the readable session view does not duplicate file contents. On other hosts, the gateway falls back to a best-effort non-duplicating link and only copies when linking is unavailable. The canonical trust boundary remains the immutable artifact manifest plus content handles.
+
 ## Manifest Structure
 
 ```json

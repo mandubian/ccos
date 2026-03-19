@@ -378,7 +378,7 @@ agent_install_approval_policy = "risk_based"  # always, risk_based, never
 | `AUTONOETIC_FIRECRACKER_CONFIG` | Firecracker config path |
 | `AUTONOETIC_PYTHON_SDK_PATH` | Python SDK path for sandbox |
 | `AUTONOETIC_SHARED_SECRET` | Bearer token for HTTP API |
-| `AUTONOETIC_EVIDENCE_MODE` | `compact` (default) or `full` |
+| `AUTONOETIC_EVIDENCE_MODE` | `full` (default) or `off` |
 | `CCOS_SOCKET_PATH` | Unix socket path for SDK |
 
 ### Agent Config (`SKILL.md` frontmatter)
