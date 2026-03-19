@@ -111,6 +111,27 @@ When called for promotion evaluation (before `agent.install`), you are a **requi
 - Set `auditor_pass: false` when **any critical finding exists** or **security checklist has failures**
 - Use `conditional` status when minor issues exist but don't block promotion
 
+## Recording Promotion (CRITICAL)
+
+After completing your audit, you MUST call `promotion.record` to persist the result:
+
+```
+promotion.record({
+  "content_handle": "<the content handle you were asked to audit>",
+  "role": "auditor",
+  "pass": <true if auditor_pass is true, false otherwise>,
+  "findings": [<your findings array>],
+  "summary": "<your summary>"
+})
+```
+
+This records the promotion to the PromotionStore and causal chain. Without this call:
+- The promotion gate cannot verify your audit occurred
+- specialized_builder will be unable to install the agent
+- The causal chain will not contain evidence of your audit
+
+If your audit fails (auditor_pass=false), you MUST still call `promotion.record` with pass=false to document the failure.
+
 ## Review Protocol
 
 When reviewing code or agent designs:
