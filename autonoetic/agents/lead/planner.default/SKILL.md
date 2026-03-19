@@ -112,12 +112,12 @@ agent.spawn("coder.default", message="Implement the weather agent files based on
 
 **Step 3: evaluator validates the artifact before install**
 ```
-agent.spawn("evaluator.default", message="Validate artifact [artifact_id] with artifact.inspect and artifact-closed sandbox execution when applicable. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation. IMPORTANT: promotion.record still requires a content_handle, so use the canonical source handle for the artifact and include artifact_id in your summary/findings.")
+agent.spawn("evaluator.default", message="Validate artifact [artifact_id] with artifact.inspect and artifact-closed sandbox execution when applicable. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation. IMPORTANT: call promotion.record for this validation outcome (pass or fail) using the canonical source content_handle for the artifact; include artifact_id in summary/findings. A failed gate must still be recorded — do not skip promotion.record on failure.")
 ```
 
 **Step 4: auditor reviews risk and capability coverage for the same artifact**
 ```
-agent.spawn("auditor.default", message="Audit artifact [artifact_id] for correctness/security/reproducibility using artifact.inspect. Return auditor_pass, findings, and recommendation. IMPORTANT: promotion.record still requires a content_handle, so use the canonical source handle for the artifact and include artifact_id in your summary/findings.")
+agent.spawn("auditor.default", message="Audit artifact [artifact_id] for correctness/security/reproducibility using artifact.inspect. Return auditor_pass, findings, and recommendation. IMPORTANT: call promotion.record for this audit outcome (pass or fail) using the canonical source content_handle for the artifact; include artifact_id in summary/findings. A failed gate must still be recorded — do not skip promotion.record on failure.")
 ```
 
 **Step 5: if evaluator/auditor fail, send findings back to coder and iterate**
@@ -125,7 +125,7 @@ agent.spawn("auditor.default", message="Audit artifact [artifact_id] for correct
 agent.spawn("coder.default", message="Fix the implementation using these evaluator/auditor findings: [...]. Save updated files with content.write, rebuild the artifact, and return the new artifact_id plus key file names.")
 ```
 
-Repeat Steps 3-5 until evaluator/auditor both return pass=true AND have called promotion.record.
+Repeat Steps 3-5 until evaluator/auditor both return pass=true **and** each has called `promotion.record` for the **current** artifact attempt (including after failures — both roles should record outcomes so the promotion trail is complete).
 
 **Step 6: specialized_builder installs the agent with promotion evidence**
 ```
@@ -145,9 +145,9 @@ agent.spawn("weather-fetcher", message={"location": "Paris"})
 **CRITICAL ENFORCEMENT:**
 
 - Do NOT proceed to Step 6 if evaluator or auditor returned pass=false
-- Do NOT proceed to Step 6 if evaluator or auditor did not call promotion.record
-- The specialized_builder will verify promotion records via PromotionStore - fabricated booleans will be rejected
-- If evaluator/auditor fail, iterate with coder until they pass AND record promotion
+- Do NOT proceed to Step 6 if evaluator or auditor did not call `promotion.record` for the latest validation/audit of the artifact you intend to install (pass **or** fail must be recorded; failures still require a record before you iterate or abandon)
+- The specialized_builder will verify promotion records via PromotionStore — fabricated booleans will be rejected
+- If evaluator/auditor fail, iterate with coder until they pass **and** each gate has a successful pass record for the **final** artifact
 
 **IMPORTANT:**
 - Do NOT try to spawn an agent that doesn't exist yet
@@ -194,26 +194,28 @@ This metadata is preserved in the causal chain for governance review.
 
 ### Handling Approval Responses (CRITICAL)
 
-When `agent.spawn` returns with `approval_required: true` or mentions "pending approval":
+When `agent.spawn` or another tool returns `approval_required: true`, a `request_id` (or equivalent approval id field) in the JSON, or text that says approval is pending:
 
 1. **DO NOT** try to bypass or work around the approval
-2. **DO** clearly inform the user:
+2. **DO** copy the **exact** approval identifier from the tool/SDK JSON (e.g. `request_id`, `approval_id`) into your user-facing message. **Never** use placeholder text like `[request_id]` or guessed values — if the id is missing, say so and paste the raw tool result snippet instead of inventing one.
+3. **DO** clearly inform the user:
 
 ```
 Agent Installation Requires Approval
 
 The specialized_builder has prepared the agent but needs operator approval.
-Request ID: [extract from the response]
+Request ID: <paste exact id from tool response>
 Status: Pending Approval
 
 To approve, the operator must run:
-  autonoetic gateway approvals approve [request_id] --config [config_path]
+  autonoetic gateway approvals approve <same exact id> --config [config_path]
 
 Once approved, the agent will be automatically installed.
 ```
 
-3. **DO** explain what the agent will do while waiting
-4. **DO NOT** call other tools to bypass the waiting - the user needs to approve for security reasons
+4. **DO** explain what the agent will do while waiting
+5. **DO NOT** call other tools to bypass the waiting — the user must approve for security reasons
+6. **DO NOT** retry the same operation with a fabricated `approval_ref` or id; wait for operator approval or explicit gateway resolution
 
 ### Handling approval_resolved Messages (CRITICAL)
 
