@@ -4,6 +4,7 @@
 //! managing Tier 1 and Tier 2 memory, and enforcing the execution lifecycle.
 
 pub mod analysis;
+pub mod approved_exec_cache;
 pub mod artifact;
 pub mod capability_inference;
 pub mod content_store;
@@ -14,6 +15,7 @@ pub mod lifecycle;
 pub mod mcp;
 pub mod memory;
 pub mod parser;
+pub mod promotion_store;
 pub mod reevaluation_state;
 pub mod remote_access;
 pub mod session_context;
@@ -23,3 +25,4 @@ pub mod session_tracer;
 pub mod store;
 pub mod tool_call_processor;
 pub mod tools;
+pub mod tools_promotion;
