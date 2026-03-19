@@ -97,7 +97,7 @@ Raw session content must not be directly promotable.
 
 ## Mandatory Rule
 
-For any code-producing workflow:
+For any executable-producing workflow:
 
 1. coder writes files via `content.write`
 2. coder builds an artifact from the intended deliverable set
@@ -122,7 +122,7 @@ If a file is omitted from the artifact:
 
 - it cannot be used at execution/install time
 
-If code inside the artifact tries to import/open files outside the artifact:
+If anything inside the artifact tries to import, `source`, execute, or open files outside the artifact:
 
 - execution fails because the runtime boundary is closed
 
@@ -176,10 +176,11 @@ Later tools such as install/run/review should reference the artifact, not ad hoc
 When the gateway executes or installs an artifact:
 
 - only files in the artifact are mounted / available
-- imports or file opens outside the artifact fail
+- imports, `source` calls, subprocess script lookups, or file opens outside the artifact fail
 - reviewed artifact ID is bound to what actually runs
 
 This is the generic safety rule the gateway should enforce.
+It applies equally to Python, shell, Node, generated scripts, config-driven runtimes, and other executable file sets.
 
 ## 4. Session Sharing Still Matters
 
@@ -415,6 +416,26 @@ Tasks:
 - [ ] document `artifact.build`
 - [ ] document “no artifact, no promotion”
 - [ ] update examples so coder builds artifact before evaluator/auditor stages
+
+### 5.3 Update agent skills / prompts
+
+Files:
+
+- `autonoetic/agents/lead/planner.default/SKILL.md`
+- `autonoetic/agents/specialists/coder.default/SKILL.md`
+- `autonoetic/agents/specialists/evaluator.default/SKILL.md`
+- `autonoetic/agents/specialists/auditor.default/SKILL.md`
+- `autonoetic/agents/specialists/architect.default/SKILL.md`
+- `autonoetic/agents/evolution/specialized_builder.default/SKILL.md`
+
+Tasks:
+
+- [x] update planner to coordinate artifact-first review/install flow
+- [x] update coder to build and return `artifact_id` for promotable outputs
+- [x] update evaluator/auditor to review `artifact_id` and use artifact-closed execution when testing
+- [x] update specialized_builder to require artifact-based installs and stop asking for raw handles
+- [x] update architect to specify artifact handoff as part of deliverables
+- [x] remove skill guidance that treats full SHA handles as the normal cross-session transport path
 
 ## Phase 6: Tests
 

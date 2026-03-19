@@ -139,9 +139,9 @@ When decomposing a task into sub-tasks for coder, use this structure:
 
 When using `content.write` and `content.read`:
 
-1. `content.write` returns a short alias (8 chars) for easy reference
-2. Use the alias for reading: `content.read({"name_or_handle": "abc12345"})`
-3. Always save the alias from `content.write` response for later retrieval
+1. Within the same root session, prefer names for collaboration
+2. Use aliases as convenient local shortcuts
+3. For agent-creation tasks, include artifact handoff in the design: coder writes files, then builds an artifact for evaluator/auditor/builder
 
 ## Prototype Validation (Limited)
 

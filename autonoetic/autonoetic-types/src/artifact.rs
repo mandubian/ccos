@@ -45,3 +45,39 @@ pub struct ArtifactHandle {
     pub summary: Option<String>,
     pub source_runtime: Option<SourceRuntime>,
 }
+
+// ---------------------------------------------------------------------------
+// Artifact Bundle — closed file closure for review/install/execution
+// ---------------------------------------------------------------------------
+
+/// A single file entry in an artifact bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactFileEntry {
+    /// Filename within the artifact (e.g., "src/main.py")
+    pub name: String,
+    /// Content handle in the content store (sha256:...)
+    pub handle: String,
+    /// Short alias for LLM-friendly reference
+    pub alias: String,
+}
+
+/// An immutable artifact bundle — a closed set of files for review/install/execution.
+///
+/// Artifacts are the only units that may cross trust boundaries.
+/// They are built from session content and are immutable once created.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactBundle {
+    /// Short unique ID (e.g., "art_a1b2c3d4")
+    pub artifact_id: String,
+    /// Files included in the artifact
+    pub files: Vec<ArtifactFileEntry>,
+    /// Optional entrypoints (e.g., ["src/main.py"])
+    #[serde(default)]
+    pub entrypoints: Vec<String>,
+    /// SHA-256 digest of the full manifest (content-addressable identity)
+    pub digest: String,
+    /// ISO 8601 creation timestamp
+    pub created_at: String,
+    /// Session that built this artifact
+    pub builder_session_id: String,
+}

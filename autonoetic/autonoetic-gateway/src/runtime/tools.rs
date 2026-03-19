@@ -192,6 +192,66 @@ fn is_install_high_risk(
     false
 }
 
+fn execution_mode_label(mode: Option<ExecutionMode>) -> &'static str {
+    match mode.unwrap_or_default() {
+        ExecutionMode::Script => "script",
+        ExecutionMode::Reasoning => "reasoning",
+    }
+}
+
+fn install_risk_factors(
+    args: &InstallAgentArgs,
+    scheduled_action: &Option<ScheduledAction>,
+    background: &Option<BackgroundPolicy>,
+) -> Vec<String> {
+    let mut factors = BTreeSet::new();
+
+    for cap in &args.capabilities {
+        match cap {
+            Capability::NetworkAccess { hosts } if !hosts.is_empty() => {
+                factors.insert("network_access".to_string());
+            }
+            Capability::CodeExecution { .. } => {
+                factors.insert("code_execution".to_string());
+            }
+            Capability::WriteAccess { scopes }
+                if scopes.len() > 2 || scopes.iter().any(|s| s == "*" || s.ends_with("/*")) =>
+            {
+                factors.insert("broad_write_access".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    if background.as_ref().map(|b| b.enabled).unwrap_or(false) {
+        factors.insert("background_execution".to_string());
+    }
+
+    if scheduled_action.is_some() {
+        factors.insert("scheduled_action".to_string());
+    }
+
+    factors.into_iter().collect()
+}
+
+fn build_approval_details(
+    request: &ApprovalRequest,
+    kind: &str,
+    summary: String,
+    retry_field: &str,
+    subject: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": kind,
+        "reason": request.reason.clone().unwrap_or_else(|| "Approval required".to_string()),
+        "summary": summary,
+        "requested_by_agent_id": request.agent_id,
+        "session_id": request.session_id,
+        "retry_field": retry_field,
+        "subject": subject
+    })
+}
+
 fn install_request_fingerprint(
     args: &InstallAgentArgs,
     scheduled_action: &Option<ScheduledAction>,
@@ -206,7 +266,7 @@ fn install_request_fingerprint(
         "capabilities": args.capabilities,
         "background": background,
         "scheduled_action": scheduled_action,
-        "files": args.files,
+        "artifact_id": args.artifact_id,
         "runtime_lock_dependencies": args.runtime_lock_dependencies,
         "arm_immediately": args.arm_immediately,
         "validate_on_install": args.validate_on_install
@@ -539,7 +599,7 @@ fn extract_code_for_analysis(
                 if let (Some(gw_dir), Some(sid)) = (gateway_dir, session_id) {
                     if let Ok(store) = crate::runtime::content_store::ContentStore::new(gw_dir) {
                         if let Ok(content) =
-                            store.read_by_name_or_handle_hierarchical(sid, content_name)
+                            store.read_by_name_or_handle(sid, content_name)
                         {
                             if let Ok(content_str) = String::from_utf8(content) {
                                 return content_str;
@@ -619,6 +679,10 @@ impl NativeTool for SandboxExecTool {
                     "approval_ref": {
                         "type": "string",
                         "description": "Approval request ID (from previous approval_required response). Provide this after operator approval to execute code with remote access."
+                    },
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "Optional artifact ID. When provided, only artifact files are mounted into the sandbox (closed boundary). When omitted, all session content is mounted."
                     }
                 },
                 "required": ["command"],
@@ -756,6 +820,27 @@ impl NativeTool for SandboxExecTool {
                     tracing::error!(target: "sandbox", error = %e, "Failed to create approval request");
                 }
 
+                let detected_patterns = remote_analysis.detected_patterns.clone();
+                let normalized_targets =
+                    crate::runtime::approved_exec_cache::normalize_targets(&detected_patterns);
+                let approval = build_approval_details(
+                    &request,
+                    "sandbox_exec",
+                    summary.clone(),
+                    "approval_ref",
+                    serde_json::json!({
+                        "command": args.command,
+                        "dependencies": args.dependencies.as_ref().map(|d| serde_json::json!({
+                            "runtime": d.runtime,
+                            "packages": d.packages,
+                        })),
+                        "remote_access_detected": true,
+                        "detected_patterns": detected_patterns,
+                        "normalized_targets": normalized_targets,
+                        "hosts": normalized_targets
+                    }),
+                );
+
                 return serde_json::to_string(&serde_json::json!({
                     "ok": false,
                     "exit_code": null,
@@ -766,11 +851,15 @@ impl NativeTool for SandboxExecTool {
                     "remote_access_detected": true,
                     "detected_patterns": remote_analysis.detected_patterns,
                     "message": format!("To approve: 1) Get approval from operator, 2) Retry sandbox.exec with the SAME command PLUS add approval_ref = '{}' to your JSON.", request_id),
+                    "approval": approval
                 }))
                 .map_err(Into::into);
             }
 
             // No config available - return basic response
+            let detected_patterns = remote_analysis.detected_patterns.clone();
+            let normalized_targets =
+                crate::runtime::approved_exec_cache::normalize_targets(&detected_patterns);
             return serde_json::to_string(&serde_json::json!({
                 "ok": false,
                 "exit_code": null,
@@ -779,6 +868,25 @@ impl NativeTool for SandboxExecTool {
                 "approval_required": true,
                 "remote_access_detected": true,
                 "detected_patterns": remote_analysis.detected_patterns,
+                "approval": {
+                    "kind": "sandbox_exec",
+                    "reason": format!("Remote access detected: {}", remote_analysis.summary),
+                    "summary": format!("Sandbox exec: {}", &args.command[..args.command.len().min(60)]),
+                    "requested_by_agent_id": manifest.agent.id,
+                    "session_id": session_id.unwrap_or(""),
+                    "retry_field": "approval_ref",
+                    "subject": {
+                        "command": args.command,
+                        "dependencies": args.dependencies.as_ref().map(|d| serde_json::json!({
+                            "runtime": d.runtime,
+                            "packages": d.packages,
+                        })),
+                        "remote_access_detected": true,
+                        "detected_patterns": detected_patterns,
+                        "normalized_targets": normalized_targets,
+                        "hosts": normalized_targets
+                    }
+                }
             }))
             .map_err(Into::into);
         }
@@ -789,9 +897,46 @@ impl NativeTool for SandboxExecTool {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Agent directory is not valid UTF-8"))?;
 
-        // Load session content mounts for seamless file access in sandbox
-        let session_content_mounts =
-            load_session_content_mounts(gateway_dir, session_id.unwrap_or(&manifest.agent.id))?;
+        // Load mounts: either from artifact (closed boundary) or all session content
+        let session_content_mounts = if let Some(artifact_id) = &args.artifact_id {
+            // Artifact mode: mount only artifact files (closed boundary)
+            let Some(gw_dir) = gateway_dir else {
+                anyhow::bail!("artifact_id requires gateway directory to be configured");
+            };
+            let artifact_store = crate::artifact_store::ArtifactStore::new(gw_dir)?;
+            let resolved_files = artifact_store.resolve_files(artifact_id)?;
+
+            let mut mounts = Vec::new();
+            let temp_base = std::env::temp_dir()
+                .join("autonoetic_artifact")
+                .join(artifact_id.replace('/', "_"));
+            std::fs::create_dir_all(&temp_base)?;
+
+            for (name, content) in resolved_files {
+                let temp_file = temp_base.join(&name);
+                if let Some(parent) = temp_file.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&temp_file, &content)?;
+                let dest_path = format!("/tmp/{}", name);
+                mounts.push(SandboxMount {
+                    source: temp_file,
+                    dest: dest_path,
+                });
+            }
+
+            tracing::info!(
+                target: "sandbox",
+                artifact_id = %artifact_id,
+                mount_count = mounts.len(),
+                "Mounting artifact files into sandbox (closed boundary)"
+            );
+
+            mounts
+        } else {
+            // Default: mount all session content
+            load_session_content_mounts(gateway_dir, session_id.unwrap_or(&manifest.agent.id))?
+        };
 
         let runner = if session_content_mounts.is_empty() {
             // No session content - use original spawn method
@@ -1799,6 +1944,11 @@ impl NativeTool for ContentWriteTool {
                     "content": {
                         "type": "string",
                         "description": "The content to store"
+                    },
+                    "visibility": {
+                        "type": "string",
+                        "enum": ["private", "session", "global"],
+                        "description": "Visibility scope: 'private' (only this session), 'session' (all sessions under same root, default), 'global' (cross-session)."
                     }
                 },
                 "required": ["name", "content"],
@@ -1822,6 +1972,8 @@ impl NativeTool for ContentWriteTool {
         struct Args {
             name: String,
             content: String,
+            #[serde(default)]
+            visibility: Option<String>,
         }
         let args: Args = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
@@ -1833,6 +1985,16 @@ impl NativeTool for ContentWriteTool {
             "name must contain only alphanumeric characters, underscores, hyphens, dots, or slashes"
         );
 
+        let content_visibility = match args.visibility.as_deref() {
+            Some("private") => crate::runtime::content_store::ContentVisibility::Private,
+            Some("session") | None => crate::runtime::content_store::ContentVisibility::Session,
+            Some("global") => crate::runtime::content_store::ContentVisibility::Global,
+            Some(other) => anyhow::bail!(
+                "Invalid visibility '{}'. Must be one of: private, session, global",
+                other
+            ),
+        };
+
         let Some(gw_dir) = gateway_dir else {
             anyhow::bail!("Content store requires gateway directory to be configured");
         };
@@ -1841,8 +2003,7 @@ impl NativeTool for ContentWriteTool {
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
         let handle = store.write(args.content.as_bytes())?;
-        // Use hierarchical registration so parent sessions can see this content
-        store.register_name_in_hierarchy(sid, &args.name, &handle)?;
+        store.register_name_with_visibility(sid, &args.name, &handle, content_visibility)?;
 
         // Return short alias (8 hex chars) for LLM-friendly retrieval
         let short_alias = crate::runtime::content_store::ContentStore::get_short_alias(&handle);
@@ -1853,6 +2014,11 @@ impl NativeTool for ContentWriteTool {
             "alias": short_alias,
             "name": args.name,
             "bytes_written": args.content.len(),
+            "visibility": match content_visibility {
+                crate::runtime::content_store::ContentVisibility::Private => "private",
+                crate::runtime::content_store::ContentVisibility::Session => "session",
+                crate::runtime::content_store::ContentVisibility::Global => "global",
+            },
         }))
         .map_err(Into::into)
     }
@@ -1938,8 +2104,8 @@ impl NativeTool for ContentReadTool {
         let sid = session_id.unwrap_or(&manifest.agent.id);
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
-        // Use hierarchical lookup so parent can read child's content
-        let content = store.read_by_name_or_handle_hierarchical(sid, &args.name_or_handle)?;
+        // Use root-based lookup so parent can read child's content
+        let content = store.read_by_name_or_handle(sid, &args.name_or_handle)?;
 
         let content_str = String::from_utf8(content)
             .map_err(|e| anyhow::anyhow!("Content is not valid UTF-8: {}", e))?;
@@ -1963,19 +2129,20 @@ impl NativeTool for ContentReadTool {
 }
 
 // ---------------------------------------------------------------------------
-// Content Persist Tool
+// Artifact Build Tool
 // ---------------------------------------------------------------------------
 
-/// Marks content as persistent, surviving session cleanup.
-pub struct ContentPersistTool;
+/// Builds an immutable artifact bundle from session-visible content.
+/// Artifacts are the only units that may be reviewed, installed, or executed
+/// beyond scratch use.
+pub struct ArtifactBuildTool;
 
-impl NativeTool for ContentPersistTool {
+impl NativeTool for ArtifactBuildTool {
     fn name(&self) -> &'static str {
-        "content.persist"
+        "artifact.build"
     }
 
     fn is_available(&self, manifest: &AgentManifest) -> bool {
-        // Available to any agent with WriteAccess capability
         manifest
             .capabilities
             .iter()
@@ -1985,16 +2152,22 @@ impl NativeTool for ContentPersistTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Mark content as persistent so it survives session cleanup. Use this for artifacts that should be available to future sessions (e.g., installed agents, published skills).".to_string(),
+            description: "Build an immutable artifact bundle from session content. Returns an artifact ID for review/install/execution. Only artifacts may cross trust boundaries.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "handle": {
-                        "type": "string",
-                        "description": "The content handle (e.g., 'sha256:abc123...') to persist"
+                    "inputs": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of content names or handles to include in the artifact"
+                    },
+                    "entrypoints": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of entrypoint filenames (must be in inputs)"
                     }
                 },
-                "required": ["handle"],
+                "required": ["inputs"],
                 "additionalProperties": false
             }),
         }
@@ -2013,29 +2186,128 @@ impl NativeTool for ContentPersistTool {
     ) -> anyhow::Result<String> {
         #[derive(Deserialize)]
         struct Args {
-            handle: String,
+            inputs: Vec<String>,
+            entrypoints: Option<Vec<String>>,
         }
         let args: Args = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
-        anyhow::ensure!(
-            args.handle.starts_with("sha256:"),
-            "handle must be a SHA-256 content handle"
-        );
-
         let Some(gw_dir) = gateway_dir else {
-            anyhow::bail!("Content store requires gateway directory to be configured");
+            anyhow::bail!("Artifact store requires gateway directory to be configured");
         };
 
         let sid = session_id.unwrap_or(&manifest.agent.id);
-        let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
+        let store = crate::artifact_store::ArtifactStore::new(gw_dir)?;
 
-        store.persist(sid, &args.handle)?;
+        let bundle = store.build(
+            &args.inputs,
+            args.entrypoints.as_deref(),
+            sid,
+        )?;
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
-            "handle": args.handle,
-            "persisted": true,
+            "artifact_id": bundle.artifact_id,
+            "digest": bundle.digest,
+            "files": bundle.files.iter().map(|f| serde_json::json!({
+                "name": f.name,
+                "handle": f.handle,
+                "alias": f.alias,
+            })).collect::<Vec<_>>(),
+            "entrypoints": bundle.entrypoints,
+            "created_at": bundle.created_at,
+        }))
+        .map_err(Into::into)
+    }
+
+    fn extract_metadata(&self, arguments_json: &str) -> ToolMetadata {
+        let mut meta = ToolMetadata::default();
+        if let Ok(parsed_args) = serde_json::from_str::<serde_json::Value>(arguments_json) {
+            if let Some(inputs) = parsed_args.get("inputs").and_then(|v| v.as_array()) {
+                if let Some(first) = inputs.first().and_then(|v| v.as_str()) {
+                    meta.path = Some(first.to_string());
+                }
+            }
+        }
+        meta
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Artifact Inspect Tool
+// ---------------------------------------------------------------------------
+
+/// Inspects an artifact by ID — returns its manifest, file list, and metadata.
+/// Used by evaluator/auditor to understand what they are reviewing.
+pub struct ArtifactInspectTool;
+
+impl NativeTool for ArtifactInspectTool {
+    fn name(&self) -> &'static str {
+        "artifact.inspect"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::ReadAccess { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Inspect an artifact by ID. Returns file list, entrypoints, digests, and metadata. Use this to review artifacts before install/execution.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "The artifact ID to inspect (e.g., 'art_a1b2c3d4')"
+                    }
+                },
+                "required": ["artifact_id"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        _agent_dir: &Path,
+        gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            artifact_id: String,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("Artifact store requires gateway directory to be configured");
+        };
+
+        let store = crate::artifact_store::ArtifactStore::new(gw_dir)?;
+        let bundle = store.inspect(&args.artifact_id)?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "artifact_id": bundle.artifact_id,
+            "digest": bundle.digest,
+            "files": bundle.files.iter().map(|f| serde_json::json!({
+                "name": f.name,
+                "handle": f.handle,
+                "alias": f.alias,
+            })).collect::<Vec<_>>(),
+            "entrypoints": bundle.entrypoints,
+            "created_at": bundle.created_at,
+            "builder_session_id": bundle.builder_session_id,
         }))
         .map_err(Into::into)
     }
@@ -2491,8 +2763,8 @@ struct InstallAgentArgs {
     background: Option<BackgroundPolicy>,
     #[serde(default)]
     scheduled_action: Option<serde_json::Value>,
-    #[serde(default)]
-    files: Vec<InstallAgentFile>,
+    /// Required. Artifact ID to install from. Enforces "no artifact, no promotion".
+    artifact_id: String,
     #[serde(default)]
     runtime_lock_dependencies: Vec<LockedDependencySet>,
     #[serde(default)]
@@ -2960,10 +3232,8 @@ impl NativeTool for SessionSnapshotTool {
             gw_dir,
         )?;
 
-        // Persist if requested
-        if args.persist {
-            snapshot.persist(sid, gw_dir)?;
-        }
+        // Session visibility is already handled by register_name in capture()
+        // No separate persist step needed
 
         // Register with custom name if provided
         if let Some(name) = &args.name {
@@ -3175,8 +3445,9 @@ impl NativeTool for AgentSpawnTool {
             if let Ok(store) =
                 crate::runtime::content_store::ContentStore::new(&agents_dir.join(".gateway"))
             {
-                // Set parent relationship so child's content is visible to parent
-                let _ = store.set_parent_session(&child_delegation_path, &resolved_session_id);
+                // Set root session relationship so child's session-visible content is visible to parent
+                let root = crate::runtime::content_store::root_session_id(&resolved_session_id);
+                let _ = store.set_root_session(&child_delegation_path, root);
                 tracing::info!(
                     target: "content_store",
                     parent_session = %resolved_session_id,
@@ -3368,23 +3639,9 @@ impl NativeTool for AgentInstallTool {
                             ]
                         }
                     },
-                    "files": {
-                        "type": "array",
-                        "description": "Files to write to the agent's directory.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {
-                                    "type": "string",
-                                    "description": "Relative path (e.g., 'scripts/main.py', 'SKILL.md')."
-                                },
-                                "content": {
-                                    "type": "string",
-                                    "description": "The file content."
-                                }
-                            },
-                            "required": ["path", "content"]
-                        }
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "Required. Artifact ID to install from. Files are extracted from the artifact. Enforces 'no artifact, no promotion' rule."
                     },
                     "promotion_gate": {
                         "type": "object",
@@ -3438,7 +3695,7 @@ impl NativeTool for AgentInstallTool {
                         "description": "Entry script path when execution_mode is 'script' (e.g., 'scripts/main.py')."
                     }
                 },
-                "required": ["agent_id", "instructions"],
+                "required": ["agent_id", "instructions", "artifact_id"],
                 "additionalProperties": false
             }),
         }
@@ -3449,7 +3706,7 @@ impl NativeTool for AgentInstallTool {
         manifest: &AgentManifest,
         _policy: &PolicyEngine,
         agent_dir: &Path,
-        _gateway_dir: Option<&Path>,
+        gateway_dir: Option<&Path>,
         arguments_json: &str,
         session_id: Option<&str>, // used when creating approval request
         _turn_id: Option<&str>,
@@ -3470,14 +3727,268 @@ impl NativeTool for AgentInstallTool {
         );
 
         // ─────────────────────────────────────────────────────────────────
-        // Pluggable Code Analysis: Analyze code for capabilities and security
-        // Provider is selected via GatewayConfig.code_analysis
+        // Human approval gate: runs FIRST so that a retry with
+        // install_approval_ref can replace args with the stored approved
+        // payload before any artifact resolution, promotion lookup,
+        // or code analysis happens.
         // ─────────────────────────────────────────────────────────────────
+        if let Some(cfg) = config {
+            let policy = cfg.agent_install_approval_policy;
+            let high_risk = is_install_high_risk(&args, &scheduled_action, &background);
+            let need_approval = matches!(policy, AgentInstallApprovalPolicy::Always)
+                || (matches!(policy, AgentInstallApprovalPolicy::RiskBased) && high_risk);
+            let install_fingerprint =
+                install_request_fingerprint(&args, &scheduled_action, &background)?;
+
+            if need_approval {
+                let install_approval_ref = args
+                    .promotion_gate
+                    .as_ref()
+                    .and_then(|g| g.install_approval_ref.as_ref())
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty());
+
+                if let Some(request_id) = install_approval_ref {
+                    // Validate that this request was approved and is for this install.
+                    let approved_path = crate::scheduler::store::approved_approvals_dir(cfg)
+                        .join(format!("{request_id}.json"));
+                    if !approved_path.exists() {
+                        return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                            "install_approval_ref '{}' not found in approved approvals; install must be approved first",
+                            request_id
+                        ))
+                        .into());
+                    }
+                    let decision: autonoetic_types::background::ApprovalDecision =
+                        crate::scheduler::store::read_json_file(&approved_path)?;
+                    match &decision.action {
+                        ScheduledAction::AgentInstall {
+                            agent_id: approved_agent_id,
+                            requested_by_agent_id,
+                            install_fingerprint: _,
+                            ..
+                        } if approved_agent_id == &args.agent_id
+                            && requested_by_agent_id == &manifest.agent.id =>
+                        {
+                            // Valid approval - load stored payload for deterministic retry.
+                            // This MUST succeed: the stored payload is the exact approved payload.
+                            let mut stored_args = load_install_payload(cfg, request_id)?
+                                .ok_or_else(|| {
+                                    tagged::Tagged::validation(anyhow::anyhow!(
+                                        "install_approval_ref '{}' references an approved request but the stored payload is missing or corrupted. \
+                                         The install cannot proceed because the approved payload cannot be verified. \
+                                         Please re-submit the install request for a fresh approval.",
+                                        request_id
+                                    ))
+                                })?;
+                            tracing::info!(
+                                target: "agent.install",
+                                request_id = %request_id,
+                                "Using stored install payload for deterministic retry"
+                            );
+                            // Preserve the install_approval_ref from original args (needed for cleanup)
+                            if let Some(ref original_gate) = args.promotion_gate {
+                                if let Some(ref approval_ref) =
+                                    original_gate.install_approval_ref
+                                {
+                                    if let Some(ref mut gate) = stored_args.promotion_gate {
+                                        gate.install_approval_ref = Some(approval_ref.clone());
+                                    }
+                                }
+                            }
+                            // Replace args with stored approved payload
+                            args = stored_args;
+                            scheduled_action =
+                                parse_install_scheduled_action(args.scheduled_action.clone())?;
+                            background = normalize_install_background(
+                                args.background.clone(),
+                                &args.scheduled_action,
+                            )?;
+                        }
+                        ScheduledAction::AgentInstall {
+                            agent_id: approved_agent_id,
+                            ..
+                        } if approved_agent_id != &args.agent_id => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match: agent_id mismatch (approved: {}, requested: {})",
+                                request_id,
+                                approved_agent_id,
+                                args.agent_id,
+                            ))
+                            .into());
+                        }
+                        ScheduledAction::AgentInstall {
+                            requested_by_agent_id,
+                            ..
+                        } if requested_by_agent_id != &manifest.agent.id => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match: requester mismatch (approved: {}, current: {})",
+                                request_id,
+                                requested_by_agent_id,
+                                manifest.agent.id,
+                            ))
+                            .into());
+                        }
+                        _ => {
+                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
+                                "install_approval_ref '{}' does not match this install request",
+                                request_id,
+                            ))
+                            .into());
+                        }
+                    }
+                    // Proceed with install using (possibly replaced) args.
+                } else {
+                    // Create pending approval request and return structured response.
+                    let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                    let capability_names: Vec<String> =
+                        args.capabilities.iter().map(capability_type_name).collect();
+                    let summary = if capability_names.is_empty() {
+                        args.agent_id.clone()
+                    } else {
+                        format!(
+                            "{} with {}",
+                            args.agent_id,
+                            capability_names.join(", ")
+                        )
+                    };
+                    let risk_factors = install_risk_factors(&args, &scheduled_action, &background);
+                    let execution_mode = execution_mode_label(args.execution_mode).to_string();
+                    let scheduled_action_kind = scheduled_action
+                        .as_ref()
+                        .map(|action| action.kind().to_string());
+                    let artifact_digest = gateway_dir.and_then(|gw_dir| {
+                        let store = crate::artifact_store::ArtifactStore::new(gw_dir).ok()?;
+                        let bundle = store.inspect(&args.artifact_id).ok()?;
+                        Some(bundle.digest)
+                    });
+                    let request = ApprovalRequest {
+                        request_id: request_id.clone(),
+                        agent_id: manifest.agent.id.clone(),
+                        session_id: session_id.unwrap_or("").to_string(),
+                        action: ScheduledAction::AgentInstall {
+                            agent_id: args.agent_id.clone(),
+                            summary: summary.clone(),
+                            requested_by_agent_id: manifest.agent.id.clone(),
+                            install_fingerprint: install_fingerprint.clone(),
+                        },
+                        created_at: Utc::now().to_rfc3339(),
+                        reason: Some("agent.install requires human approval".to_string()),
+                        evidence_ref: None,
+                    };
+                    let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
+                        .join(format!("{request_id}.json"));
+                    std::fs::create_dir_all(pending_path.parent().unwrap())?;
+                    crate::scheduler::store::write_json_file(&pending_path, &request)?;
+
+                    // Store the exact install payload for deterministic retry.
+                    if let Err(e) = store_install_payload(cfg, &request_id, &args) {
+                        tracing::warn!(
+                            target: "agent.install",
+                            request_id = %request_id,
+                            error = %e,
+                            "Failed to store install payload for retry (non-fatal)"
+                        );
+                    }
+
+                    let approval = build_approval_details(
+                        &request,
+                        "agent_install",
+                        summary,
+                        "promotion_gate.install_approval_ref",
+                        serde_json::json!({
+                            "agent_id": args.agent_id,
+                            "artifact_id": args.artifact_id,
+                            "capabilities": capability_names,
+                            "background_enabled": background.as_ref().map(|b| b.enabled).unwrap_or(false),
+                            "scheduled_action_kind": scheduled_action_kind,
+                            "execution_mode": execution_mode,
+                            "script_entry": args.script_entry,
+                            "risk_factors": risk_factors,
+                            "artifact_digest": artifact_digest,
+                        }),
+                    );
+
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "approval_required": true,
+                        "request_id": request_id,
+                        "message": format!("Install requires approval. To proceed: 1) Get the request approved by an operator, 2) Retry agent.install with the EXACT same payload PLUS add promotion_gate.install_approval_ref = '{}' to your JSON.", request_id),
+                        "retry_instruction": format!("Add this to your promotion_gate: \"install_approval_ref\": \"{}\"", request_id),
+                        "approval": approval
+                    })
+                    .to_string());
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // From here on, args is FINAL (either original or approved payload).
+        // All resolution, analysis, and validation uses the final args.
+        // ─────────────────────────────────────────────────────────────────
+
+        let Some(gw_dir) = gateway_dir else {
+            anyhow::bail!("agent.install requires gateway directory to be configured");
+        };
+
+        // Resolve files from artifact
+        let artifact_store = crate::artifact_store::ArtifactStore::new(gw_dir)?;
+        let resolved_artifact_files = artifact_store.resolve_files(&args.artifact_id)?;
+        let resolved_files: Vec<InstallAgentFile> = resolved_artifact_files
+            .into_iter()
+            .map(|(path, content)| InstallAgentFile {
+                path,
+                content: String::from_utf8_lossy(&content).to_string(),
+            })
+            .collect();
+
+        // Promotion gate: verify artifact has been reviewed
+        let promotion_store = crate::runtime::promotion_store::PromotionStore::new(gw_dir)?;
+        let promotion_record = promotion_store.get_promotion(&args.artifact_id);
+
+        // Enforce digest integrity: if the promotion record has a stored digest,
+        // verify it matches the current artifact's digest.
+        // This ensures "reviewed artifact = executable artifact".
+        if let Some(record) = &promotion_record {
+            if let Some(reviewed_digest) = &record.artifact_digest {
+                let current_bundle = artifact_store.inspect(&args.artifact_id)?;
+                anyhow::ensure!(
+                    reviewed_digest == &current_bundle.digest,
+                    "Artifact digest mismatch: the reviewed artifact '{}' has digest '{}' but current artifact has digest '{}'. \
+                     The artifact may have been modified after review.",
+                    args.artifact_id,
+                    reviewed_digest,
+                    current_bundle.digest
+                );
+            }
+        }
+
+        let (evaluator_pass, auditor_pass) = match &promotion_record {
+            Some(record) => (record.evaluator_pass, record.auditor_pass),
+            None => (false, false),
+        };
+
+        if let Some(gate) = &args.promotion_gate {
+            if gate.evaluator_pass {
+                anyhow::ensure!(
+                    evaluator_pass,
+                    "promotion_gate.evaluator_pass=true but no passing evaluator promotion record exists for artifact '{}'",
+                    args.artifact_id
+                );
+            }
+            if gate.auditor_pass {
+                anyhow::ensure!(
+                    auditor_pass,
+                    "promotion_gate.auditor_pass=true but no passing auditor promotion record exists for artifact '{}'",
+                    args.artifact_id
+                );
+            }
+        }
+
+        // Code analysis
         use crate::runtime::analysis::{AnalysisProvider, AnalysisProviderFactory, FileToAnalyze};
 
-        // Build files for analysis
-        let mut files_for_analysis: Vec<FileToAnalyze> = args
-            .files
+        let mut files_for_analysis: Vec<FileToAnalyze> = resolved_files
             .iter()
             .map(|f| FileToAnalyze {
                 path: f.path.clone(),
@@ -3485,7 +3996,6 @@ impl NativeTool for AgentInstallTool {
             })
             .collect();
 
-        // Also analyze instructions as a potential source of capability hints
         files_for_analysis.push(FileToAnalyze {
             path: "SKILL.md".to_string(),
             content: args.instructions.clone(),
@@ -3633,159 +4143,6 @@ impl NativeTool for AgentInstallTool {
             }
         }
 
-        // Human approval gate: when policy requires it, create pending request or validate install_approval_ref.
-        if let Some(cfg) = config {
-            let policy = cfg.agent_install_approval_policy;
-            let high_risk = is_install_high_risk(&args, &scheduled_action, &background);
-            let need_approval = matches!(policy, AgentInstallApprovalPolicy::Always)
-                || (matches!(policy, AgentInstallApprovalPolicy::RiskBased) && high_risk);
-            let install_fingerprint =
-                install_request_fingerprint(&args, &scheduled_action, &background)?;
-
-            if need_approval {
-                let install_approval_ref = args
-                    .promotion_gate
-                    .as_ref()
-                    .and_then(|g| g.install_approval_ref.as_ref())
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty());
-
-                if let Some(request_id) = install_approval_ref {
-                    // Validate that this request was approved and is for this install.
-                    let approved_path = crate::scheduler::store::approved_approvals_dir(cfg)
-                        .join(format!("{request_id}.json"));
-                    if !approved_path.exists() {
-                        return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                            "install_approval_ref '{}' not found in approved approvals; install must be approved first",
-                            request_id
-                        ))
-                        .into());
-                    }
-                    let decision: autonoetic_types::background::ApprovalDecision =
-                        crate::scheduler::store::read_json_file(&approved_path)?;
-                    match &decision.action {
-                        ScheduledAction::AgentInstall {
-                            agent_id: approved_agent_id,
-                            requested_by_agent_id,
-                            install_fingerprint: _,
-                            ..
-                        } if approved_agent_id == &args.agent_id
-                            && requested_by_agent_id == &manifest.agent.id =>
-                        {
-                            // Valid approval - try to load stored payload for deterministic retry
-                            if let Some(mut stored_args) = load_install_payload(cfg, request_id)? {
-                                tracing::info!(
-                                    target: "agent.install",
-                                    request_id = %request_id,
-                                    "Using stored install payload for deterministic retry"
-                                );
-                                // Preserve the install_approval_ref from original args (needed for cleanup)
-                                if let Some(ref original_gate) = args.promotion_gate {
-                                    if let Some(ref approval_ref) =
-                                        original_gate.install_approval_ref
-                                    {
-                                        if let Some(ref mut gate) = stored_args.promotion_gate {
-                                            gate.install_approval_ref = Some(approval_ref.clone());
-                                        }
-                                    }
-                                }
-                                // Replace args with stored payload
-                                args = stored_args;
-                                // Re-parse scheduled_action and background from stored args
-                                scheduled_action =
-                                    parse_install_scheduled_action(args.scheduled_action.clone())?;
-                                background = normalize_install_background(
-                                    args.background.clone(),
-                                    &args.scheduled_action,
-                                )?;
-                            }
-                        }
-                        ScheduledAction::AgentInstall {
-                            agent_id: approved_agent_id,
-                            ..
-                        } if approved_agent_id != &args.agent_id => {
-                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                                "install_approval_ref '{}' does not match: agent_id mismatch (approved: {}, requested: {})",
-                                request_id,
-                                approved_agent_id,
-                                args.agent_id,
-                            ))
-                            .into());
-                        }
-                        ScheduledAction::AgentInstall {
-                            requested_by_agent_id,
-                            ..
-                        } if requested_by_agent_id != &manifest.agent.id => {
-                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                                "install_approval_ref '{}' does not match: requester mismatch (approved: {}, current: {})",
-                                request_id,
-                                requested_by_agent_id,
-                                manifest.agent.id,
-                            ))
-                            .into());
-                        }
-                        _ => {
-                            return Err(tagged::Tagged::validation(anyhow::anyhow!(
-                                "install_approval_ref '{}' does not match this install request",
-                                request_id,
-                            ))
-                            .into());
-                        }
-                    }
-                    // Proceed with install.
-                } else {
-                    // Create pending approval request and return structured response.
-                    // Use short 8-char ID for human-friendliness (avoids LLM truncation issues)
-                    let request_id = format!("apr-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-                    let summary = args
-                        .instructions
-                        .lines()
-                        .next()
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| args.agent_id.clone());
-                    let request = ApprovalRequest {
-                        request_id: request_id.clone(),
-                        agent_id: manifest.agent.id.clone(),
-                        session_id: session_id.unwrap_or("").to_string(),
-                        action: ScheduledAction::AgentInstall {
-                            agent_id: args.agent_id.clone(),
-                            summary,
-                            requested_by_agent_id: manifest.agent.id.clone(),
-                            install_fingerprint: install_fingerprint.clone(),
-                        },
-                        created_at: Utc::now().to_rfc3339(),
-                        reason: Some("agent.install requires human approval".to_string()),
-                        evidence_ref: None,
-                    };
-                    let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
-                        .join(format!("{request_id}.json"));
-                    std::fs::create_dir_all(pending_path.parent().unwrap())?;
-                    crate::scheduler::store::write_json_file(&pending_path, &request)?;
-
-                    // Store the exact install payload for deterministic retry.
-                    // This ensures the caller can retry with install_approval_ref
-                    // and the gateway will use the approved payload (avoiding fingerprint mismatch).
-                    if let Err(e) = store_install_payload(cfg, &request_id, &args) {
-                        tracing::warn!(
-                            target: "agent.install",
-                            request_id = %request_id,
-                            error = %e,
-                            "Failed to store install payload for retry (non-fatal)"
-                        );
-                    }
-
-                    return Ok(serde_json::json!({
-                        "ok": false,
-                        "approval_required": true,
-                        "request_id": request_id,
-                        "message": format!("Install requires approval. To proceed: 1) Get the request approved by an operator, 2) Retry agent.install with the EXACT same payload PLUS add promotion_gate.install_approval_ref = '{}' to your JSON.", request_id),
-                        "retry_instruction": format!("Add this to your promotion_gate: \"install_approval_ref\": \"{}\"", request_id)
-                    })
-                    .to_string());
-                }
-            }
-        }
-
         let agents_dir = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
@@ -3926,7 +4283,7 @@ impl NativeTool for AgentInstallTool {
 
             let instruction_body = ensure_output_contract_section(
                 &args.instructions,
-                &args.files,
+                &resolved_files,
                 scheduled_action.is_some(),
             );
             let skill_yaml = render_skill_frontmatter(&child_manifest)?;
@@ -3954,17 +4311,18 @@ impl NativeTool for AgentInstallTool {
                 serde_yaml::to_string(&runtime_lock)?,
             )?;
 
-            for file in &args.files {
+            // Write resolved artifact files to install directory
+            for file in &resolved_files {
                 validate_relative_agent_path(&file.path)?;
                 anyhow::ensure!(
-                    file.path != "SKILL.md" && file.path != child_manifest.runtime.runtime_lock,
+                    file.path.as_str() != "SKILL.md" && file.path.as_str() != child_manifest.runtime.runtime_lock.as_str(),
                     "files may not overwrite generated SKILL.md or runtime.lock"
                 );
                 let target = install_tmp_dir.join(&file.path);
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(target, &file.content)?;
+                std::fs::write(target, file.content.as_bytes())?;
             }
 
             if let Some(action) = scheduled_action.clone() {
@@ -4377,6 +4735,9 @@ pub(crate) struct SandboxExecArgs {
     dependencies: Option<SandboxExecDependencies>,
     #[serde(default)]
     approval_ref: Option<String>,
+    /// When provided, only mount artifact files instead of all session content.
+    #[serde(default)]
+    artifact_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4427,7 +4788,9 @@ pub fn default_registry() -> NativeToolRegistry {
     // Content-addressable storage tools
     registry.register(Box::new(ContentWriteTool));
     registry.register(Box::new(ContentReadTool));
-    registry.register(Box::new(ContentPersistTool));
+    // Artifact tools
+    registry.register(Box::new(ArtifactBuildTool));
+    registry.register(Box::new(ArtifactInspectTool));
     // Knowledge tools (durable facts with provenance)
     registry.register(Box::new(KnowledgeStoreTool));
     registry.register(Box::new(KnowledgeRecallTool));
@@ -4440,6 +4803,9 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(AgentInstallTool));
     registry.register(Box::new(AgentExistsTool));
     registry.register(Box::new(AgentDiscoverTool));
+    // Promotion tools
+    registry.register(Box::new(crate::runtime::tools_promotion::PromotionRecordTool));
+    registry.register(Box::new(crate::runtime::tools_promotion::PromotionQueryTool));
     registry
 }
 
@@ -4524,6 +4890,59 @@ mod tests {
         (format!("http://{}", addr), handle)
     }
 
+    /// Helper: builds an artifact from a list of (path, content) pairs.
+    /// Creates a .gateway directory inside `base_dir`, writes files to content store,
+    /// builds an artifact, and creates promotion records for it.
+    /// Returns (artifact_id, gateway_dir_path).
+    fn build_test_artifact(
+        base_dir: &std::path::Path,
+        files: &[(&str, &str)],
+    ) -> (String, std::path::PathBuf) {
+        let gateway_dir = base_dir.join(".gateway");
+        std::fs::create_dir_all(&gateway_dir).unwrap();
+
+        let content_store = crate::runtime::content_store::ContentStore::new(&gateway_dir).unwrap();
+        let artifact_store = crate::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+        let promotion_store = crate::runtime::promotion_store::PromotionStore::new(&gateway_dir).unwrap();
+
+        let session_id = "test-session";
+        let mut input_names = Vec::new();
+        for (path, content) in files {
+            let handle = content_store.write(content.as_bytes()).unwrap();
+            content_store
+                .register_name(session_id, path, &handle)
+                .unwrap();
+            input_names.push(path.to_string());
+        }
+
+        let bundle = artifact_store
+            .build(&input_names, None, session_id)
+            .unwrap();
+
+        // Create promotion records so tests claiming evaluator_pass/auditor_pass are backed
+        use autonoetic_types::promotion::PromotionRole;
+        let _ = promotion_store.record_promotion(
+            bundle.artifact_id.clone(),
+            Some(bundle.digest.clone()),
+            PromotionRole::Evaluator,
+            "evaluator.default",
+            true,
+            vec![],
+            Some("Test auto-pass".to_string()),
+        );
+        let _ = promotion_store.record_promotion(
+            bundle.artifact_id.clone(),
+            Some(bundle.digest.clone()),
+            PromotionRole::Auditor,
+            "auditor.default",
+            true,
+            vec![],
+            Some("Test auto-pass".to_string()),
+        );
+
+        (bundle.artifact_id, gateway_dir)
+    }
+
     fn spawn_counting_http_server(
         status: &str,
         content_type: &str,
@@ -4576,10 +4995,12 @@ mod tests {
             Capability::WriteAccess { scopes: vec![] },
         ]);
         let defs_all = registry.available_definitions(&manifest_all);
-        // sandbox.exec (1) + content.write, content.read, content.persist (3) +
+        // sandbox.exec (1) + content.write, content.read (2) +
+        // artifact.build, artifact.inspect (2) +
         // knowledge.store, knowledge.recall, knowledge.search (3) +
-        // session.snapshot (1) + knowledge.share (1) = 9
-        assert_eq!(defs_all.len(), 9);
+        // session.snapshot (1) + knowledge.share (1) +
+        // promotion.query (1) = 11
+        assert_eq!(defs_all.len(), 11);
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
@@ -5215,9 +5636,13 @@ mod tests {
         let parent_dir = agents_dir.join("specialized_builder.default");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "child.worker",
-            "instructions": "# Child Worker\nDo one job."
+            "instructions": "# Child Worker\nDo one job.",
+            "artifact_id": artifact_id,
         });
 
         let registry = default_registry();
@@ -5227,7 +5652,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5246,12 +5671,16 @@ mod tests {
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "net.worker",
             "instructions": "Worker with network access.",
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -5282,7 +5711,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5297,6 +5726,28 @@ mod tests {
             Some(true)
         );
         assert!(parsed.get("request_id").is_some());
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("kind"))
+                .and_then(|v| v.as_str()),
+            Some("agent_install")
+        );
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("retry_field"))
+                .and_then(|v| v.as_str()),
+            Some("promotion_gate.install_approval_ref")
+        );
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("subject"))
+                .and_then(|v| v.get("agent_id"))
+                .and_then(|v| v.as_str()),
+            Some("net.worker")
+        );
     }
 
     #[test]
@@ -5311,9 +5762,13 @@ mod tests {
         let parent_dir = agents_dir.join("specialized_builder.default");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "child.worker",
             "instructions": "# Child Worker\nDo one job.",
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5327,7 +5782,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5346,6 +5801,12 @@ mod tests {
         let agents_dir = temp.path().join("agents");
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
+
+        // Build artifact from test files
+        let (artifact_id, gateway_dir) = build_test_artifact(temp.path(), &[
+            ("scripts/fibonacci_worker.py", "import json\nfrom pathlib import Path\nstate_path = Path('state/fib.json')\nstate = json.loads(state_path.read_text())\nstate['previous'], state['current'] = state['current'], state['previous'] + state['current']\nstate['index'] += 1\nstate_path.write_text(json.dumps(state))\n"),
+            ("state/fib.json", "{\"previous\": 0, \"current\": 1, \"index\": 1}"),
+        ]);
 
         let args = serde_json::json!({
             "agent_id": "fib_worker",
@@ -5375,16 +5836,7 @@ mod tests {
                 "command": "python3 scripts/fibonacci_worker.py"
             },
             "validate_on_install": false,
-            "files": [
-                {
-                    "path": "scripts/fibonacci_worker.py",
-                    "content": "import json\nfrom pathlib import Path\nstate_path = Path('state/fib.json')\nstate = json.loads(state_path.read_text())\nstate['previous'], state['current'] = state['current'], state['previous'] + state['current']\nstate['index'] += 1\nstate_path.write_text(json.dumps(state))\n"
-                },
-                {
-                    "path": "state/fib.json",
-                    "content": "{\"previous\": 0, \"current\": 1, \"index\": 1}"
-                }
-            ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5398,7 +5850,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5444,11 +5896,15 @@ mod tests {
         let parent_dir = agents_dir.join("planner.default");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "researcher.default",
             "name": "Researcher Default",
             "description": "Research specialist",
             "instructions": "# Researcher Default\nCollect evidence and summarize it.",
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5462,7 +5918,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5487,6 +5943,9 @@ mod tests {
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "fib_worker",
             "instructions": "# Worker\nInstalled from shorthand scheduled_action.",
@@ -5508,6 +5967,7 @@ mod tests {
                 "command": "python3 scripts/fibonacci_worker.py"
             },
             "validate_on_install": false,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5521,7 +5981,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5550,6 +6010,9 @@ mod tests {
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "fib_worker",
             "instructions": "# Worker\nInstalled from real model shorthand.",
@@ -5561,6 +6024,7 @@ mod tests {
                 "script": "python3 scripts/fibonacci_worker.py"
             },
             "validate_on_install": false,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5574,7 +6038,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5610,6 +6074,9 @@ mod tests {
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "sequence_worker",
             "instructions": "# Worker\nInstalled from tool_use shorthand.",
@@ -5626,6 +6093,7 @@ mod tests {
                 }
             },
             "validate_on_install": false,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5639,7 +6107,7 @@ mod tests {
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -5851,6 +6319,28 @@ dependencies:
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            first_json
+                .get("approval")
+                .and_then(|v| v.get("kind"))
+                .and_then(|v| v.as_str()),
+            Some("sandbox_exec")
+        );
+        assert_eq!(
+            first_json
+                .get("approval")
+                .and_then(|v| v.get("retry_field"))
+                .and_then(|v| v.as_str()),
+            Some("approval_ref")
+        );
+        assert_eq!(
+            first_json
+                .get("approval")
+                .and_then(|v| v.get("subject"))
+                .and_then(|v| v.get("command"))
+                .and_then(|v| v.as_str()),
+            Some(command)
+        );
 
         // Write an approved decision for the same command.
         let request_id = "apr-test1234";
@@ -5930,6 +6420,9 @@ dependencies:
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "test_worker",
             "instructions": "A test worker agent.",
@@ -5943,6 +6436,7 @@ dependencies:
                 "content": "{\"initialized\": true}"
             },
             "validate_on_install": true,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -5955,7 +6449,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &args.to_string(),
                 None,
                 None,
@@ -5998,6 +6492,9 @@ dependencies:
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "failing_worker",
             "instructions": "A worker that fails validation.",
@@ -6010,6 +6507,7 @@ dependencies:
                 "command": "exit 1"
             },
             "validate_on_install": true,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6022,7 +6520,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &args.to_string(),
                 None,
                 None,
@@ -6053,15 +6551,15 @@ dependencies:
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        // Build artifact that tries to overwrite SKILL.md (should fail)
+        let (artifact_id, gateway_dir) = build_test_artifact(temp.path(), &[
+            ("SKILL.md", "should fail because SKILL.md is generated"),
+        ]);
+
         let args = serde_json::json!({
             "agent_id": "broken_worker",
             "instructions": "# Broken Worker\nThis install should fail.",
-            "files": [
-                {
-                    "path": "SKILL.md",
-                    "content": "should fail because SKILL.md is generated"
-                }
-            ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6075,7 +6573,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -6106,10 +6604,14 @@ dependencies:
         let parent_dir = agents_dir.join("specialized_builder.default");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Malformed: NetworkAccess without required "hosts" field
         let malformed_args = serde_json::json!({
             "agent_id": "repaired.worker",
             "instructions": "# Repaired Worker\nMinimal specialist.",
+            "artifact_id": artifact_id,
             "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
             "capabilities": [
                 { "type": "NetworkAccess" }
@@ -6123,7 +6625,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&malformed_args).expect("json"),
                 None,
                 None,
@@ -6147,6 +6649,7 @@ dependencies:
         let repaired_args = serde_json::json!({
             "agent_id": "repaired.worker",
             "instructions": "# Repaired Worker\nMinimal specialist.",
+            "artifact_id": artifact_id,
             "promotion_gate": { "evaluator_pass": true, "auditor_pass": true },
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["example.com"] }
@@ -6159,7 +6662,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&repaired_args).expect("json"),
                 None,
                 None,
@@ -6187,6 +6690,9 @@ dependencies:
         let registry = default_registry();
         let policy = PolicyEngine::new(manifest.clone());
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "deferred_worker",
             "instructions": "A worker with deferred validation.",
@@ -6199,6 +6705,7 @@ dependencies:
                 "command": "exit 1"
             },
             "validate_on_install": false,
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6211,7 +6718,7 @@ dependencies:
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &args.to_string(),
                 None,
                 None,
@@ -6715,6 +7222,10 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) = build_test_artifact(temp.path(), &[
+            ("scripts/fetch_weather.py", "import json\nimport sys\n\ndef main():\n    city = sys.argv[1] if len(sys.argv) > 1 else 'Paris'\n    # In real implementation, this would call open-meteo API\n    result = {'city': city, 'temp': 15.5, 'condition': 'sunny'}\n    print(json.dumps(result))\n\nif __name__ == '__main__':\n    main()\n"),
+        ]);
+
         let args = serde_json::json!({
             "agent_id": "weather.script.default",
             "name": "Weather Script Agent",
@@ -6722,12 +7233,7 @@ Research agent instructions.
             "instructions": "# Weather Script\nFetch weather data from public API.",
             "execution_mode": "script",
             "script_entry": "scripts/fetch_weather.py",
-            "files": [
-                {
-                    "path": "scripts/fetch_weather.py",
-                    "content": "import json\nimport sys\n\ndef main():\n    city = sys.argv[1] if len(sys.argv) > 1 else 'Paris'\n    # In real implementation, this would call open-meteo API\n    result = {'city': city, 'temp': 15.5, 'condition': 'sunny'}\n    print(json.dumps(result))\n\nif __name__ == '__main__':\n    main()\n"
-                }
-            ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6741,7 +7247,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -6790,11 +7296,15 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Script mode without script_entry should fail
         let args = serde_json::json!({
             "agent_id": "bad.script.agent",
             "instructions": "# Bad Script Agent\nMissing script_entry.",
             "execution_mode": "script",
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6807,7 +7317,7 @@ Research agent instructions.
             &manifest,
             &policy,
             &parent_dir,
-            None,
+            Some(&gateway_dir),
             &serde_json::to_string(&args).expect("json should encode"),
             None,
             None,
@@ -6832,17 +7342,16 @@ Research agent instructions.
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
         // Script mode should work without llm_config
+        let (artifact_id, gateway_dir) = build_test_artifact(temp.path(), &[
+            ("scripts/main.py", "print('hello')"),
+        ]);
+
         let args = serde_json::json!({
             "agent_id": "no.llm.script",
             "instructions": "# Script Agent\nNo LLM needed.",
             "execution_mode": "script",
             "script_entry": "scripts/main.py",
-            "files": [
-                {
-                    "path": "scripts/main.py",
-                    "content": "print('hello')"
-                }
-            ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6855,7 +7364,7 @@ Research agent instructions.
             &manifest,
             &policy,
             &parent_dir,
-            None,
+            Some(&gateway_dir),
             &serde_json::to_string(&args).expect("json should encode"),
             None,
             None,
@@ -6883,6 +7392,9 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder_agent");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "reasoning.agent",
             "instructions": "# Reasoning Agent\nUses LLM for reasoning.",
@@ -6891,6 +7403,7 @@ Research agent instructions.
                 "provider": "openai",
                 "model": "gpt-4o"
             },
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true
@@ -6903,7 +7416,7 @@ Research agent instructions.
             &manifest,
             &policy,
             &parent_dir,
-            None,
+            Some(&gateway_dir),
             &serde_json::to_string(&args).expect("json should encode"),
             None,
             None,
@@ -6939,6 +7452,9 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Try to install with approval-required capability (NetworkAccess is high-risk)
         let args = serde_json::json!({
             "agent_id": "pending.worker",
@@ -6946,6 +7462,7 @@ Research agent instructions.
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -6976,7 +7493,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -6992,6 +7509,28 @@ Research agent instructions.
             Some(true)
         );
         assert!(parsed.get("request_id").is_some());
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("kind"))
+                .and_then(|v| v.as_str()),
+            Some("agent_install")
+        );
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("retry_field"))
+                .and_then(|v| v.as_str()),
+            Some("promotion_gate.install_approval_ref")
+        );
+        assert_eq!(
+            parsed
+                .get("approval")
+                .and_then(|v| v.get("subject"))
+                .and_then(|v| v.get("agent_id"))
+                .and_then(|v| v.as_str()),
+            Some("pending.worker")
+        );
         assert!(
             parsed
                 .get("message")
@@ -7021,6 +7560,9 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Try to install with a fake approval_ref that doesn't exist
         let args = serde_json::json!({
             "agent_id": "fake.approval.worker",
@@ -7028,6 +7570,7 @@ Research agent instructions.
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7058,7 +7601,7 @@ Research agent instructions.
             &manifest,
             &policy,
             &parent_dir,
-            None,
+            Some(&gateway_dir),
             &serde_json::to_string(&args).expect("json should encode"),
             None,
             None,
@@ -7099,10 +7642,14 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Low-risk install: no NetworkAccess, no background
         let args = serde_json::json!({
             "agent_id": "simple.worker",
             "instructions": "A simple worker.",
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7133,7 +7680,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -7166,12 +7713,16 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "stored.payload.worker",
             "instructions": "Worker for payload storage test.",
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7202,7 +7753,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -7254,6 +7805,9 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         // Original install payload
         let original_args = serde_json::json!({
             "agent_id": "retry.test.worker",
@@ -7261,6 +7815,7 @@ Research agent instructions.
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7293,7 +7848,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&original_args).expect("json should encode"),
                 None,
                 None,
@@ -7342,6 +7897,7 @@ Research agent instructions.
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["different.api.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7366,7 +7922,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&retry_args).expect("json should encode"),
                 None,
                 None,
@@ -7405,12 +7961,16 @@ Research agent instructions.
         let parent_dir = agents_dir.join("builder");
         std::fs::create_dir_all(&parent_dir).expect("parent dir should create");
 
+        let (artifact_id, gateway_dir) =
+            build_test_artifact(temp.path(), &[("placeholder.txt", "placeholder")]);
+
         let args = serde_json::json!({
             "agent_id": "cleanup.test.worker",
             "instructions": "Worker for cleanup test.",
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7443,7 +8003,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&args).expect("json should encode"),
                 None,
                 None,
@@ -7503,6 +8063,7 @@ Research agent instructions.
             "capabilities": [
                 { "type": "NetworkAccess", "hosts": ["api.example.com"] }
             ],
+            "artifact_id": artifact_id,
             "promotion_gate": {
                 "evaluator_pass": true,
                 "auditor_pass": true,
@@ -7527,7 +8088,7 @@ Research agent instructions.
                 &manifest,
                 &policy,
                 &parent_dir,
-                None,
+                Some(&gateway_dir),
                 &serde_json::to_string(&retry_args).expect("json should encode"),
                 None,
                 None,

@@ -9,11 +9,54 @@ mod support;
 
 use autonoetic_gateway::policy::PolicyEngine;
 use autonoetic_gateway::runtime::content_store::ContentStore;
+use autonoetic_gateway::runtime::promotion_store::PromotionStore;
 use autonoetic_gateway::runtime::tools::default_registry;
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, RuntimeDeclaration};
 use autonoetic_types::capability::Capability;
 use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig};
+use autonoetic_types::promotion::PromotionRole;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+
+fn build_test_artifact(base_dir: &Path, files: &[(&str, &str)]) -> (String, PathBuf) {
+    let gateway_dir = base_dir.join(".gateway");
+    std::fs::create_dir_all(&gateway_dir).unwrap();
+    let content_store = ContentStore::new(&gateway_dir).unwrap();
+    let artifact_store =
+        autonoetic_gateway::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+    let session_id = "test-session";
+    let mut input_names = Vec::new();
+    for (path, content) in files {
+        let handle = content_store.write(content.as_bytes()).unwrap();
+        content_store
+            .register_name(session_id, path, &handle)
+            .unwrap();
+        input_names.push(path.to_string());
+    }
+    let bundle = artifact_store
+        .build(&input_names, None, session_id)
+        .unwrap();
+    let promotion_store = PromotionStore::new(&gateway_dir).unwrap();
+    let _ = promotion_store.record_promotion(
+        bundle.artifact_id.clone(),
+        Some(bundle.digest.clone()),
+        PromotionRole::Evaluator,
+        "evaluator.default",
+        true,
+        vec![],
+        Some("Test auto-pass".to_string()),
+    );
+    let _ = promotion_store.record_promotion(
+        bundle.artifact_id.clone(),
+        Some(bundle.digest.clone()),
+        PromotionRole::Auditor,
+        "auditor.default",
+        true,
+        vec![],
+        Some("Test auto-pass".to_string()),
+    );
+    (bundle.artifact_id, gateway_dir)
+}
 
 fn evolution_manifest() -> AgentManifest {
     AgentManifest {
@@ -50,9 +93,25 @@ fn evolution_manifest() -> AgentManifest {
 async fn test_promotion_reject_no_records() {
     let temp = tempdir().expect("tempdir should create");
     let agents_dir = temp.path().join("agents");
-    let gateway_dir = agents_dir.join(".gateway");
+    let gateway_dir = temp.path().join(".gateway");
     let builder_dir = agents_dir.join("specialized_builder.default");
     std::fs::create_dir_all(&builder_dir).expect("builder dir should create");
+    std::fs::create_dir_all(&gateway_dir).unwrap();
+
+    // Manually create stores without promotion records
+    let content_store = ContentStore::new(&gateway_dir).unwrap();
+    let artifact_store =
+        autonoetic_gateway::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+    let session_id = "test-session";
+    let script_content = "print('hello')\n";
+    let handle = content_store.write(script_content.as_bytes()).unwrap();
+    content_store
+        .register_name(session_id, "main.py", &handle)
+        .unwrap();
+    let bundle = artifact_store
+        .build(&["main.py".to_string()], None, session_id)
+        .unwrap();
+    let artifact_id = bundle.artifact_id;
 
     let config = GatewayConfig {
         agents_dir: agents_dir.clone(),
@@ -60,13 +119,10 @@ async fn test_promotion_reject_no_records() {
         ..Default::default()
     };
 
-    // Write content to content store (handle is valid)
-    let store = ContentStore::new(&gateway_dir).expect("content store should create");
-    let script_content = b"print('hello')\n";
-    let content_handle = store.write(script_content).expect("content should write");
+    let content_handle = handle;
 
     // Verify content exists
-    assert!(store.exists(&content_handle), "content should exist in store");
+    assert!(content_store.exists(&content_handle), "content should exist in store");
 
     // Try to install WITHOUT recording promotion → should REJECT
     let registry = default_registry();
@@ -76,9 +132,7 @@ async fn test_promotion_reject_no_records() {
         "description": "An agent that was never validated",
         "instructions": "---\nname: unvalidated.agent\ndescription: Not validated\nexecution_mode: script\nscript_entry: main.py\n---\n# Unvalidated Agent\n",
         "capabilities": [],
-        "files": [
-            { "path": "main.py", "content": "print('hello')\n" }
-        ],
+        "artifact_id": artifact_id,
         "source_content_handle": content_handle,
         "promotion_gate": {
             "evaluator_pass": true,
@@ -118,6 +172,7 @@ async fn test_promotion_reject_no_records() {
     assert!(
         err_msg.contains("evaluator_pass is true but no evaluator promotion record exists")
             || err_msg.contains("no evaluator promotion record exists")
+            || err_msg.contains("no passing evaluator promotion record exists")
             || err_msg.contains("PromotionStore"),
         "Error should mention missing promotion record, got: {}",
         err_msg
@@ -212,6 +267,18 @@ async fn test_promotion_reject_auditor_failed() {
     let store = ContentStore::new(&gateway_dir).expect("content store should create");
     let content_handle = store.write(b"good script").expect("content should write");
 
+    let artifact_store =
+        autonoetic_gateway::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+    let session_id = "test-session";
+    let handle = store.write(b"good script").unwrap();
+    store
+        .register_name(session_id, "main.py", &handle)
+        .unwrap();
+    let bundle = artifact_store
+        .build(&["main.py".to_string()], None, session_id)
+        .unwrap();
+    let artifact_id = bundle.artifact_id;
+
     let registry = default_registry();
     let install_args = serde_json::json!({
         "agent_id": "half_approved.agent",
@@ -219,6 +286,7 @@ async fn test_promotion_reject_auditor_failed() {
         "description": "Evaluator passed but auditor failed",
         "instructions": "# Half Approved Agent",
         "capabilities": [],
+        "artifact_id": artifact_id,
         "source_content_handle": content_handle,
         "promotion_gate": {
             "evaluator_pass": true,
@@ -258,6 +326,7 @@ async fn test_promotion_reject_auditor_failed() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("no evaluator promotion record exists")
+            || err_msg.contains("no passing evaluator promotion record exists")
             || err_msg.contains("PromotionStore")
             || err_msg.contains("promotion"),
         "Error should mention missing promotion record, got: {}",
@@ -283,6 +352,19 @@ async fn test_promotion_reject_invalid_handle() {
         ..Default::default()
     };
 
+    let content_store = ContentStore::new(&gateway_dir).expect("content store should create");
+    let artifact_store =
+        autonoetic_gateway::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+    let session_id = "test-session";
+    let handle = content_store.write(b"test content").unwrap();
+    content_store
+        .register_name(session_id, "main.py", &handle)
+        .unwrap();
+    let bundle = artifact_store
+        .build(&["main.py".to_string()], None, session_id)
+        .unwrap();
+    let artifact_id = bundle.artifact_id;
+
     let registry = default_registry();
     let install_args = serde_json::json!({
         "agent_id": "fake_handle.agent",
@@ -290,6 +372,7 @@ async fn test_promotion_reject_invalid_handle() {
         "description": "Agent with non-existent content handle",
         "instructions": "# Fake Handle Agent",
         "capabilities": [],
+        "artifact_id": artifact_id,
         "source_content_handle": "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         "promotion_gate": {
             "evaluator_pass": true,
@@ -328,6 +411,7 @@ async fn test_promotion_reject_invalid_handle() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("no evaluator promotion record exists")
+            || err_msg.contains("no passing evaluator promotion record exists")
             || err_msg.contains("PromotionStore")
             || err_msg.contains("promotion"),
         "Error should mention missing promotion, got: {}",

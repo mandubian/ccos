@@ -82,15 +82,22 @@ Set `evaluator_pass: false` when:
 
 ## Recording Promotion (CRITICAL)
 
-After completing your evaluation, you MUST call `promotion.record` to persist the result:
+After completing your evaluation, you MUST call `promotion.record` to persist the result.
+Today that tool still records a `content_handle`, so when evaluating an artifact:
+
+- use the artifact as the primary review object
+- record the canonical source content handle for the artifact, usually the main entrypoint or source file handle you were given
+- include the `artifact_id` in your summary and findings so the review remains traceable to the reviewed closure
+
+Example:
 
 ```
 promotion.record({
-  "content_handle": "<the content handle you were asked to evaluate>",
+  "content_handle": "<canonical source handle for the reviewed artifact>",
   "role": "evaluator",
   "pass": <true if evaluator_pass is true, false otherwise>,
   "findings": [<your findings array>],
-  "summary": "<your summary>"
+  "summary": "Artifact art_xxxxxxxx: <your summary>"
 })
 ```
 
@@ -107,6 +114,17 @@ When using `sandbox.exec`:
 - Use absolute paths or run from scripts/ directory
 - Example: `python3 scripts/test_main.py` NOT `cd scripts && python test_main.py`
 - Capture both stdout and stderr for the evaluation report
+- For promotable/reviewed executable artifacts, prefer `sandbox.exec` with `artifact_id` so validation runs against the closed artifact boundary
+
+## Artifact-First Review Protocol
+
+When the task is about candidate executable artifacts for promotion or installation:
+
+1. Inspect the artifact with `artifact.inspect`
+2. Review the declared entrypoints and file set, including import/source and file-open behavior
+3. Run deterministic validation against that artifact
+4. Report findings against the same `artifact_id`
+5. Record promotion using the canonical content handle plus the `artifact_id` in the summary/findings
 
 ## Allowed Commands
 
@@ -138,9 +156,9 @@ When `sandbox.exec` fails (exit code != 0):
 
 When using `content.write` and `content.read`:
 
-1. `content.write` returns a short alias (8 chars) for easy reference
-2. Use the alias for reading: `content.read({"name_or_handle": "abc12345"})`
-3. Always save the alias from `content.write` response for later retrieval
+1. Within the same root session, prefer names for collaboration
+2. Use aliases as convenient local shortcuts
+3. Use `artifact.inspect` for review scope, not loose file handles, whenever an artifact exists
 
 ## Clarification Protocol
 

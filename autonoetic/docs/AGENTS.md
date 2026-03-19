@@ -206,8 +206,8 @@ Capabilities fall into three categories:
 
 | Capability | Gates These Tools |
 |------------|------------------|
-| `ReadAccess` | `content.read`, `memory.read`, `knowledge.recall`, `knowledge.search` |
-| `WriteAccess` | `content.write`, `content.persist`, `memory.write`, `knowledge.store`, `knowledge.share` |
+| `ReadAccess` | `content.read`, `artifact.inspect`, `memory.read`, `knowledge.recall`, `knowledge.search` |
+| `WriteAccess` | `content.write`, `artifact.build`, `memory.write`, `knowledge.store`, `knowledge.share` |
 
 **Privilege capabilities gate boundary-crossing operations:**
 
@@ -257,9 +257,17 @@ For files and data within a session:
 
 | Tool | Signature | Description |
 |------|-----------|-------------|
-| `content.write` | `(name: string, content: string) → handle` | Write content, returns SHA-256 handle |
-| `content.read` | `(name_or_handle: string) → content` | Read by name or handle |
-| `content.persist` | `(handle: string) → void` | Mark content for cross-session survival |
+| `content.write` | `(name: string, content: string, visibility?: string) → handle` | Write content with visibility (private/session/global). Default: session |
+| `content.read` | `(name_or_handle: string) → content` | Read by name or handle with root-based resolution |
+
+### Artifact Tools (Trust Boundary)
+
+For reviewable/installable file bundles:
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `artifact.build` | `(inputs: [string], entrypoints?: [string]) → artifact` | Build immutable artifact from session content |
+| `artifact.inspect` | `(artifact_id: string) → artifact` | Inspect artifact files, entrypoints, digest |
 
 ### Knowledge Tools (Durable Memory)
 

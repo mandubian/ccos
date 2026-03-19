@@ -172,24 +172,30 @@ Retrieves weather data for a given location.
     println!("✅ Artifact creation and retrieval works");
 }
 
-/// Test: Cross-session content sharing via handles
+/// Test: Cross-session content sharing via handles (root visibility)
 #[test]
 fn test_cross_session_content_sharing() {
     let workspace = TestWorkspace::new().unwrap();
     let gateway_dir = workspace.path().join(".gateway");
     std::fs::create_dir_all(&gateway_dir).unwrap();
     
-    use autonoetic_gateway::runtime::content_store::ContentStore;
+    use autonoetic_gateway::runtime::content_store::{ContentStore, ContentVisibility};
     let store = ContentStore::new(&gateway_dir).unwrap();
-    
-    // Coder session writes content
-    let coder_session = "coder-session";
+
+    let root_session = "workflow-root";
+    let coder_session = "workflow-root/coder";
+    let builder_session = "workflow-root/builder";
+
+    // Set up root visibility
+    store.set_root_session(coder_session, root_session).unwrap();
+    store.set_root_session(builder_session, root_session).unwrap();
+
+    // Coder writes session-visible content
     let code = "def process(data): return data.upper()";
     let handle = store.write(code.as_bytes()).unwrap();
-    store.register_name(coder_session, "processor/main.py", &handle).unwrap();
+    store.register_name_with_visibility(coder_session, "processor/main.py", &handle, ContentVisibility::Session).unwrap();
     
-    // Builder session reads by handle (different session!)
-    let builder_session = "builder-session";
+    // Builder reads by handle — visible because session-scoped under same root
     let content = store.read_by_name_or_handle(builder_session, &handle).unwrap();
     assert_eq!(String::from_utf8(content).unwrap(), code);
     
@@ -198,7 +204,7 @@ fn test_cross_session_content_sharing() {
     let content2 = store.read_by_name(builder_session, "imported/processor.py").unwrap();
     assert_eq!(String::from_utf8(content2).unwrap(), code);
     
-    println!("✅ Cross-session content sharing works");
+    println!("✅ Cross-session content sharing works (root-based visibility)");
 }
 
 /// Test: Knowledge store and recall across sessions
@@ -289,15 +295,21 @@ fn test_full_artifact_lifecycle() {
     let gateway_dir = workspace.path().join(".gateway");
     std::fs::create_dir_all(&gateway_dir).unwrap();
     
-    use autonoetic_gateway::runtime::content_store::ContentStore;
+    use autonoetic_gateway::runtime::content_store::{ContentStore, ContentVisibility};
     let store = ContentStore::new(&gateway_dir).unwrap();
+
+    let root_session = "artifact-root";
+    let coder_session = "artifact-root/coder";
+    let builder_session = "artifact-root/builder";
+
+    // Set up root visibility
+    store.set_root_session(coder_session, root_session).unwrap();
+    store.set_root_session(builder_session, root_session).unwrap();
     
-    // Step 1: Coder creates an artifact
-    let coder_session = "coder-session";
-    
+    // Step 1: Coder creates session-visible content
     let main_py = "def calculate(a, b): return a + b";
     let main_handle = store.write(main_py.as_bytes()).unwrap();
-    store.register_name(coder_session, "calculator/main.py", &main_handle).unwrap();
+    store.register_name_with_visibility(coder_session, "calculator/main.py", &main_handle, ContentVisibility::Session).unwrap();
     
     let skill_md = r#"---
 name: "calculator"
@@ -307,19 +319,9 @@ script_entry: "main.py"
 # Calculator
 "#;
     let skill_handle = store.write(skill_md.as_bytes()).unwrap();
-    store.register_name(coder_session, "calculator/SKILL.md", &skill_handle).unwrap();
+    store.register_name_with_visibility(coder_session, "calculator/SKILL.md", &skill_handle, ContentVisibility::Session).unwrap();
     
-    // Step 2: Persist the artifact (make it survive cleanup)
-    store.persist(coder_session, &main_handle).unwrap();
-    store.persist(coder_session, &skill_handle).unwrap();
-    
-    // Step 3: Verify persistence
-    let persisted = store.list_persisted(coder_session).unwrap();
-    assert!(persisted.contains(&main_handle));
-    assert!(persisted.contains(&skill_handle));
-    
-    // Step 4: Builder reads the artifact via handles
-    let builder_session = "builder-session";
+    // Step 2: Builder reads the artifact via handles (visible because session-scoped under same root)
     let main_content = store.read_by_name_or_handle(builder_session, &main_handle).unwrap();
     assert!(String::from_utf8(main_content).unwrap().contains("calculate"));
     

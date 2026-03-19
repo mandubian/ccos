@@ -22,9 +22,14 @@ This document describes the capability system used by CCOS agents. Capabilities 
 | Tool | Requires Capability | Notes |
 |------|---------------------|-------|
 | `content.read` | `ReadAccess` | Read from content store |
-| `content.write` | `WriteAccess` | Write to content store |
-| `content.persist` | `WriteAccess` | Make content persistent |
+| `content.write` | `WriteAccess` | Write to content store with visibility |
 | `content.search` | `ReadAccess` | Search content (included) |
+
+### Artifact Tools
+| Tool | Requires Capability | Notes |
+|------|---------------------|-------|
+| `artifact.build` | `WriteAccess` | Build immutable artifact from session content |
+| `artifact.inspect` | `ReadAccess` | Inspect artifact files and metadata |
 
 ### Agent Tools
 | Tool | Requires Capability | Notes |

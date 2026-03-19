@@ -278,6 +278,110 @@ fn extract_uuid(text: &str) -> Option<String> {
     None
 }
 
+#[derive(Debug, Clone)]
+struct StructuredApprovalView {
+    request_id: Option<String>,
+    card: String,
+}
+
+fn json_array_to_csv(value: Option<&serde_json::Value>) -> Option<String> {
+    let Some(serde_json::Value::Array(values)) = value else {
+        return None;
+    };
+    let parts: Vec<String> = values
+        .iter()
+        .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+fn extract_structured_approval(text: &str) -> Option<StructuredApprovalView> {
+    let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
+    let approval = parsed.get("approval")?;
+    let kind = approval
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let summary = approval
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Approval required");
+    let reason = approval
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Operator approval required");
+    let retry_field = approval
+        .get("retry_field")
+        .and_then(|v| v.as_str())
+        .unwrap_or("approval_ref");
+    let request_id = parsed
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+
+    let subject = approval.get("subject").cloned().unwrap_or_default();
+    let mut details = Vec::new();
+    match kind {
+        "sandbox_exec" => {
+            if let Some(command) = subject.get("command").and_then(|v| v.as_str()) {
+                details.push(format!("command: {}", command));
+            }
+            if let Some(hosts) = json_array_to_csv(subject.get("hosts")) {
+                details.push(format!("hosts: {}", hosts));
+            }
+            if let Some(deps) = subject.get("dependencies") {
+                let runtime = deps.get("runtime").and_then(|v| v.as_str()).unwrap_or("-");
+                let packages = json_array_to_csv(deps.get("packages")).unwrap_or_default();
+                if !packages.is_empty() {
+                    details.push(format!("deps: {} ({})", runtime, packages));
+                } else {
+                    details.push(format!("deps: {}", runtime));
+                }
+            }
+        }
+        "agent_install" => {
+            if let Some(agent_id) = subject.get("agent_id").and_then(|v| v.as_str()) {
+                details.push(format!("agent: {}", agent_id));
+            }
+            if let Some(artifact_id) = subject.get("artifact_id").and_then(|v| v.as_str()) {
+                details.push(format!("artifact: {}", artifact_id));
+            }
+            if let Some(risk_factors) = json_array_to_csv(subject.get("risk_factors")) {
+                details.push(format!("risk: {}", risk_factors));
+            }
+            if let Some(capabilities) = json_array_to_csv(subject.get("capabilities")) {
+                details.push(format!("capabilities: {}", capabilities));
+            }
+        }
+        _ => {}
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Approval required{}",
+        request_id
+            .as_ref()
+            .map(|id| format!(": {}", id))
+            .unwrap_or_default()
+    ));
+    lines.push(format!("kind: {}", kind));
+    lines.push(format!("summary: {}", summary));
+    lines.push(format!("reason: {}", reason));
+    if !details.is_empty() {
+        lines.push(format!("subject: {}", details.join(" | ")));
+    }
+    lines.push(format!("retry field: {}", retry_field));
+
+    Some(StructuredApprovalView {
+        request_id,
+        card: lines.join("\n"),
+    })
+}
+
 // ============================================================================
 // Drawing
 // ============================================================================
@@ -641,9 +745,17 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                         .and_then(|v| v.get("assistant_reply").and_then(|r| r.as_str().map(ToOwned::to_owned)))
                                         .unwrap_or_else(|| "[No response]".to_string());
 
-                                    if let Some(req_id) = extract_approval_request_id(&reply) {
+                                    if let Some(structured) = extract_structured_approval(&reply) {
+                                        if let Some(req_id) = structured.request_id.clone() {
+                                            app.add_awaiting_approval(req_id);
+                                        }
+                                        app.add_message(MessageRole::Signal, structured.card);
+                                    } else if let Some(req_id) = extract_approval_request_id(&reply) {
                                         app.add_awaiting_approval(req_id.clone());
-                                        app.add_message(MessageRole::Signal, format!("Approval required: {}", req_id));
+                                        app.add_message(
+                                            MessageRole::Signal,
+                                            format!("Approval required: {}", req_id),
+                                        );
                                     }
 
                                     app.add_message(MessageRole::Assistant, reply);
@@ -1014,7 +1126,7 @@ fn copy_selection_to_clipboard(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_approval_request_id;
+    use super::{extract_approval_request_id, extract_structured_approval};
 
     #[test]
     fn test_extract_approval_request_id_short_form() {
@@ -1032,5 +1144,59 @@ mod tests {
             extract_approval_request_id(text).as_deref(),
             Some("c19a8a50-d6c8-4c5f-aa3c-6ba119751b11")
         );
+    }
+
+    #[test]
+    fn test_extract_structured_approval_sandbox_exec() {
+        let payload = serde_json::json!({
+            "ok": false,
+            "approval_required": true,
+            "request_id": "apr-1234abcd",
+            "approval": {
+                "kind": "sandbox_exec",
+                "reason": "Remote access detected",
+                "summary": "Sandbox exec: curl https://api.example.com",
+                "retry_field": "approval_ref",
+                "subject": {
+                    "command": "curl https://api.example.com",
+                    "hosts": ["api.example.com"]
+                }
+            }
+        })
+        .to_string();
+
+        let parsed = extract_structured_approval(&payload).expect("structured approval expected");
+        assert_eq!(parsed.request_id.as_deref(), Some("apr-1234abcd"));
+        assert!(parsed.card.contains("kind: sandbox_exec"));
+        assert!(parsed.card.contains("retry field: approval_ref"));
+        assert!(parsed.card.contains("hosts: api.example.com"));
+    }
+
+    #[test]
+    fn test_extract_structured_approval_agent_install() {
+        let payload = serde_json::json!({
+            "ok": false,
+            "approval_required": true,
+            "request_id": "apr-89abcdef",
+            "approval": {
+                "kind": "agent_install",
+                "reason": "High-risk install requires approval",
+                "summary": "weather.fetcher with NetworkAccess",
+                "retry_field": "promotion_gate.install_approval_ref",
+                "subject": {
+                    "agent_id": "weather.fetcher",
+                    "artifact_id": "art_123",
+                    "risk_factors": ["network_access", "scheduled_action"],
+                    "capabilities": ["NetworkAccess"]
+                }
+            }
+        })
+        .to_string();
+
+        let parsed = extract_structured_approval(&payload).expect("structured approval expected");
+        assert_eq!(parsed.request_id.as_deref(), Some("apr-89abcdef"));
+        assert!(parsed.card.contains("kind: agent_install"));
+        assert!(parsed.card.contains("agent: weather.fetcher"));
+        assert!(parsed.card.contains("retry field: promotion_gate.install_approval_ref"));
     }
 }
