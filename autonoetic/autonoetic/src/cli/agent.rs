@@ -287,15 +287,15 @@ background_scheduler_enabled: false
 llm_presets:
   agentic:
     provider: "openrouter"
-    model: "google/gemini-2.5-flash-lite"
+    model: "minimax/minimax-m2.7"
     temperature: 0.2
   coding:
     provider: "openrouter"
-    model: "google/gemini-2.5-flash-lite"
+    model: "minimax/minimax-m2.7"
     temperature: 0.1
   research:
     provider: "openrouter"
-    model: "google/gemini-2.5-flash-lite"
+    model: "minimax/minimax-m2.7"
     temperature: 0.3
   fallback:
     provider: "openai"
@@ -311,6 +311,7 @@ llm_preset_mapping:
   coder: coding
   debugger: coding
   auditor: agentic
+  evaluator: agentic
   specialized_builder: agentic
   default: agentic
 "#;
