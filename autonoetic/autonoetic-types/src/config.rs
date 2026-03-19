@@ -18,6 +18,9 @@ pub struct LlmPreset {
     /// Set to true if the provider only supports basic chat (no tools at all)
     #[serde(default)]
     pub chat_only: Option<bool>,
+    /// Optional context window for CLI "% of context" when preset is applied to SKILL.
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
 }
 
 /// When `agent.install` requires human approval before proceeding.
@@ -72,6 +75,41 @@ impl Default for SchemaEnforcementConfig {
             agent_overrides: std::collections::HashMap::new(),
         }
     }
+}
+
+/// Session-scoped resource limits enforced by the gateway (role-agnostic).
+///
+/// All limits are optional: `None` means unlimited for that dimension.
+/// Counters are keyed by **session id** (the same id passed to `agent.spawn` / chat),
+/// so nested specialist runs in one user session share one budget pool.
+///
+/// **Related (not duplicated here):** per-agent [`crate::agent::Capability::AgentSpawn`]
+/// `max_children` still caps how many child runs a single agent may start per session;
+/// configure that on the lead manifest. Future versions may add optional alignment
+/// between these knobs via config only.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionBudgetConfig {
+    /// Optional profile name for logging and ops (e.g. `dev`, `production`).
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Maximum LLM `complete()` calls per session (each provider round-trip, including retries).
+    #[serde(default)]
+    pub max_llm_rounds: Option<u64>,
+    /// Maximum tool invocations processed per session (each tool call in a batch counts).
+    #[serde(default)]
+    pub max_tool_invocations: Option<u64>,
+    /// Maximum total LLM tokens (input + output) reported by providers per session.
+    #[serde(default)]
+    pub max_llm_tokens: Option<u64>,
+    /// Maximum wall-clock seconds from first budget touch for this session.
+    #[serde(default)]
+    pub max_wall_clock_secs: Option<u64>,
+    /// Maximum estimated session spend in USD (OpenRouter pricing from the public models API when provider is `openrouter`).
+    #[serde(default)]
+    pub max_session_price_usd: Option<f64>,
+    /// Names of future budget extension modules (reserved; no effect until implemented).
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 /// Top-level Gateway daemon configuration.
@@ -142,6 +180,10 @@ pub struct GatewayConfig {
     /// Controls how the gateway analyzes code for capabilities and security.
     #[serde(default)]
     pub code_analysis: CodeAnalysisConfig,
+
+    /// Optional per-session budgets (LLM rounds, tools, tokens, wall clock).
+    #[serde(default)]
+    pub session_budget: SessionBudgetConfig,
 }
 
 /// Configuration for pluggable code analysis.
@@ -294,6 +336,7 @@ impl Default for GatewayConfig {
             llm_presets: HashMap::new(),
             llm_preset_mapping: HashMap::new(),
             code_analysis: CodeAnalysisConfig::default(),
+            session_budget: SessionBudgetConfig::default(),
         }
     }
 }
@@ -310,5 +353,24 @@ mod tests {
         assert_eq!(config.background_min_interval_secs, 60);
         assert_eq!(config.max_background_due_per_tick, 32);
         assert_eq!(config.default_lead_agent_id, "planner.default");
+    }
+
+    #[test]
+    fn session_budget_config_json_roundtrip() {
+        let j = serde_json::json!({
+            "profile": "staging",
+            "max_llm_rounds": 120,
+            "max_tool_invocations": 400,
+            "max_llm_tokens": 2_000_000u64,
+            "max_wall_clock_secs": 7200,
+            "extensions": ["future_org_limiter"]
+        });
+        let parsed: SessionBudgetConfig = serde_json::from_value(j).expect("parse json");
+        assert_eq!(parsed.profile.as_deref(), Some("staging"));
+        assert_eq!(parsed.max_llm_rounds, Some(120));
+        assert_eq!(parsed.max_tool_invocations, Some(400));
+        assert_eq!(parsed.max_llm_tokens, Some(2_000_000));
+        assert_eq!(parsed.max_wall_clock_secs, Some(7200));
+        assert_eq!(parsed.extensions, vec!["future_org_limiter"]);
     }
 }

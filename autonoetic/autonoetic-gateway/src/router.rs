@@ -323,6 +323,7 @@ impl JsonRpcRouter {
                                 "assistant_reply": result.assistant_reply,
                                 "artifacts": result.artifacts,
                                 "shared_knowledge": result.shared_knowledge,
+                                "llm_usage": result.llm_usage,
                             }),
                         )
                     }
@@ -417,6 +418,7 @@ impl JsonRpcRouter {
                                 "assistant_reply": result.assistant_reply,
                                 "artifacts": result.artifacts,
                                 "shared_knowledge": result.shared_knowledge,
+                                "llm_usage": result.llm_usage,
                             }),
                         )
                     }

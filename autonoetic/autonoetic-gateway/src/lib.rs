@@ -28,6 +28,8 @@ pub use autonoetic_types::config::GatewayConfig;
 pub use autonoetic_types::runtime_lock::RuntimeLock;
 pub use causal_chain::CausalLogger;
 pub use execution::{GatewayExecutionService, SpawnResult};
+pub use runtime::openrouter_catalog::OpenRouterCatalog;
+pub use runtime::session_budget::SessionBudgetRegistry;
 pub use llm::{build_driver, LlmDriver};
 pub use policy::PolicyEngine;
 pub use router::{JsonRpcRequest, JsonRpcResponse, JsonRpcRouter};

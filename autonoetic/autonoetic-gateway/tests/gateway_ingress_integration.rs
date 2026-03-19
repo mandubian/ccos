@@ -61,6 +61,10 @@ async fn test_event_ingest_live_jsonrpc_ingress_writes_gateway_and_agent_traces(
     let result = response.result.expect("result should exist");
     assert_eq!(result["assistant_reply"], "stub assistant reply");
     assert_eq!(result["session_id"], session_id);
+    let llm_usage = result["llm_usage"].as_array().expect("llm_usage should be an array");
+    assert_eq!(llm_usage.len(), 1);
+    assert_eq!(llm_usage[0]["input_tokens"], 12);
+    assert_eq!(llm_usage[0]["output_tokens"], 3);
 
     let request_bodies = stub.captured_bodies();
     assert_eq!(request_bodies.len(), 1);

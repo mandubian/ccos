@@ -21,9 +21,11 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use super::agent::format_llm_usage_for_cli;
 use super::common::{
     default_terminal_channel_id, default_terminal_sender_id, terminal_channel_envelope,
 };
+use autonoetic_types::agent::LlmExchangeUsage;
 use autonoetic_gateway::router::{
     JsonRpcRequest as GatewayJsonRpcRequest, JsonRpcResponse as GatewayJsonRpcResponse,
 };
@@ -740,8 +742,8 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                 if let Some(error) = resp.error {
                                     app.add_message(MessageRole::System, format!("Error: {}", error.message));
                                 } else {
-                                    let reply = resp
-                                        .result
+                                    let result_json = resp.result.as_ref();
+                                    let reply = result_json
                                         .and_then(|v| v.get("assistant_reply").and_then(|r| r.as_str().map(ToOwned::to_owned)))
                                         .unwrap_or_else(|| "[No response]".to_string());
 
@@ -759,6 +761,18 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                     }
 
                                     app.add_message(MessageRole::Assistant, reply);
+
+                                    if let Some(arr) =
+                                        result_json.and_then(|v| v.get("llm_usage"))
+                                    {
+                                        if let Ok(usages) =
+                                            serde_json::from_value::<Vec<LlmExchangeUsage>>(arr.clone())
+                                        {
+                                            if let Some(text) = format_llm_usage_for_cli(&usages) {
+                                                app.add_message(MessageRole::System, text);
+                                            }
+                                        }
+                                    }
 
                                     if let Some(request_id) = signal_resume_request_id {
                                         let gateway_dir = config.agents_dir.join(".gateway");
