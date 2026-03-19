@@ -2,9 +2,8 @@
 //!
 //! Provides REST endpoints for content operations:
 //! - POST /api/content/write - Write content
-//! - GET /api/content/{handle} - Read content by handle  
-//! - POST /api/content/persist - Mark content as persistent
-//! - GET /api/content/session/{session_id}/names - List content names in session
+//! - POST /api/content/read - Read content by name, handle, or alias
+//! - GET /api/content/names - List content names in session
 //!
 //! ## Security
 //!
@@ -38,9 +37,14 @@ pub struct HttpState {
 /// Default max body size: 10MB
 const DEFAULT_MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
-/// Valid session_id pattern (alphanumeric, dash, underscore, dot)
+/// Valid session_id pattern (alphanumeric, dash, underscore, dot, slash for delegated sessions)
 fn is_valid_session_id(s: &str) -> bool {
-    s.len() <= 128 && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    s.len() <= 128
+        && !s.starts_with('/')
+        && !s.contains("//")
+        && !s.contains("..")
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
 }
 
 /// Valid content name pattern (alphanumeric, dash, underscore, dot, slash for paths)
@@ -109,6 +113,8 @@ pub struct WriteRequest {
     pub content: String, // Base64 encoded for binary content
     #[serde(default)]
     pub encoding: Option<String>, // "utf8" (default) or "base64"
+    #[serde(default)]
+    pub visibility: Option<String>, // "private", "session" (default), "global"
 }
 
 impl WriteRequest {
@@ -149,20 +155,6 @@ pub struct ReadResponse {
     pub handle: String,
 }
 
-/// Request body for content.persist
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PersistRequest {
-    pub session_id: String,
-    pub handle: String,
-}
-
-/// Response for content.persist
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PersistResponse {
-    pub handle: String,
-    pub persisted: bool,
-}
-
 /// Query params for listing content names
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListQuery {
@@ -201,7 +193,6 @@ pub fn create_router(state: HttpState) -> Router {
         .route("/api/content/write", post(handle_write))
         .route("/api/content/read/{session_id}/{name_or_handle}", get(handle_read_get))
         .route("/api/content/read", post(handle_read_post))
-        .route("/api/content/persist", post(handle_persist))
         .route("/api/content/names", get(handle_list_names))
         .layer(CorsLayer::very_permissive())  // More restrictive than permissive
         .with_state(Arc::new(state))
@@ -263,12 +254,23 @@ async fn handle_write(
 
     let size_bytes = content_bytes.len();
 
+    // Parse visibility
+    let content_visibility = match req.visibility.as_deref() {
+        Some("private") => crate::runtime::content_store::ContentVisibility::Private,
+        Some("session") | None => crate::runtime::content_store::ContentVisibility::Session,
+        Some("global") => crate::runtime::content_store::ContentVisibility::Global,
+        Some(other) => return Err(ErrorResponse {
+            error: format!("Invalid visibility '{}'. Must be one of: private, session, global", other),
+            code: 400,
+        }),
+    };
+
     // Write to content store
     let handle = store.write(&content_bytes)
         .map_err(|e| ErrorResponse { error: e.to_string(), code: 500 })?;
 
-    // Register name in session
-    store.register_name(&req.session_id, &req.name, &handle)
+    // Register name in session with visibility
+    store.register_name_with_visibility(&req.session_id, &req.name, &handle, content_visibility)
         .map_err(|e| ErrorResponse { error: e.to_string(), code: 500 })?;
 
     Ok(Json(WriteResponse {
@@ -331,29 +333,6 @@ async fn read_content(
         encoding: "base64".to_string(),
         size_bytes,
         handle,
-    }))
-}
-
-/// POST /api/content/persist - Mark content as persistent
-async fn handle_persist(
-    State(state): State<Arc<HttpState>>,
-    headers: HeaderMap,
-    Json(req): Json<PersistRequest>,
-) -> Result<Json<PersistResponse>, ErrorResponse> {
-    // Authentication
-    validate_auth(&headers, &state.shared_secret)?;
-    
-    // Validation
-    validate_session_id(&req.session_id)?;
-
-    let store = state.store.lock().await;
-
-    store.persist(&req.session_id, &req.handle)
-        .map_err(|e| ErrorResponse { error: e.to_string(), code: 500 })?;
-
-    Ok(Json(PersistResponse {
-        handle: req.handle,
-        persisted: true,
     }))
 }
 
@@ -432,6 +411,7 @@ mod tests {
             name: "test.txt".to_string(),
             content: "Hello, World!".to_string(),
             encoding: None,
+            visibility: None,
         };
         
         let resp = client
@@ -479,6 +459,7 @@ mod tests {
             name: "test.txt".to_string(),
             content: "Hello, World!".to_string(),
             encoding: None,
+            visibility: None,
         };
         
         let resp = client
@@ -503,6 +484,7 @@ mod tests {
             name: "test.txt".to_string(),
             content: "Hello, World!".to_string(),
             encoding: None,
+            visibility: None,
         };
         
         let resp = client
@@ -529,6 +511,7 @@ mod tests {
             name: "test.txt".to_string(),
             content: "Hello, World!".to_string(),
             encoding: None,
+            visibility: None,
         };
         
         let resp = client
@@ -539,51 +522,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 400, "Should reject invalid session_id");
-        
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_persist_content() {
-        let (addr, handle, _dir) = setup_test_server().await;
-        let client = reqwest::Client::new();
-        let base = format!("http://{}", addr);
-        let (auth_name, auth_value) = auth_header();
-        
-        // Write content first
-        let write_req = WriteRequest {
-            session_id: "test-session".to_string(),
-            name: "persistent.txt".to_string(),
-            content: "Persistent data".to_string(),
-            encoding: None,
-        };
-        
-        let resp = client
-            .post(&format!("{}/api/content/write", base))
-            .header(&auth_name, &auth_value)
-            .json(&write_req)
-            .send()
-            .await
-            .unwrap();
-        let write_resp: WriteResponse = resp.json().await.unwrap();
-        
-        // Persist it
-        let persist_req = PersistRequest {
-            session_id: "test-session".to_string(),
-            handle: write_resp.handle.clone(),
-        };
-        
-        let resp = client
-            .post(&format!("{}/api/content/persist", base))
-            .header(&auth_name, &auth_value)
-            .json(&persist_req)
-            .send()
-            .await
-            .unwrap();
-        assert!(resp.status().is_success());
-        
-        let persist_resp: PersistResponse = resp.json().await.unwrap();
-        assert!(persist_resp.persisted);
         
         handle.abort();
     }
@@ -601,6 +539,7 @@ mod tests {
             name: "file1.txt".to_string(),
             content: "Content of file1".to_string(),
             encoding: None,
+            visibility: None,
         };
         let resp1 = client
             .post(&format!("{}/api/content/write", base))
@@ -617,6 +556,7 @@ mod tests {
             name: "file2.txt".to_string(),
             content: "Content of file2".to_string(),
             encoding: None,
+            visibility: None,
         };
         let resp2 = client
             .post(&format!("{}/api/content/write", base))

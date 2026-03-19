@@ -1,7 +1,7 @@
 //! Promotion Registry Tools.
 //!
-//! Provides tools for recording and querying content promotion status
-//! (evaluator/auditor validation) per content handle.
+//! Provides tools for recording and querying artifact promotion status
+//! (evaluator/auditor validation) per artifact ID.
 
 use crate::causal_chain::CausalLogger;
 use crate::llm::ToolDefinition;
@@ -28,16 +28,6 @@ fn is_promotion_agent(manifest: &AgentManifest) -> bool {
 
 pub struct PromotionRecordTool;
 
-impl PromotionRecordTool {
-    fn validate_content_handle(handle: &str) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            handle.starts_with("sha256:"),
-            "content_handle must be a valid SHA-256 content handle (sha256:...)"
-        );
-        Ok(())
-    }
-}
-
 impl NativeTool for PromotionRecordTool {
     fn name(&self) -> &'static str {
         "promotion.record"
@@ -46,13 +36,17 @@ impl NativeTool for PromotionRecordTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Records promotion status (evaluator or auditor validation result) for a content handle. Only evaluator.default and auditor.default agents can call this tool.".to_string(),
+            description: "Records promotion status (evaluator or auditor validation result) for an artifact. Only evaluator.default and auditor.default agents can call this tool.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "content_handle": {
+                    "artifact_id": {
                         "type": "string",
-                        "description": "SHA-256 content handle (e.g., 'sha256:abc123...') of the content being promoted"
+                        "description": "Artifact ID being promoted (e.g., 'art_a1b2c3d4')"
+                    },
+                    "artifact_digest": {
+                        "type": "string",
+                        "description": "Optional SHA-256 digest of the artifact for integrity verification"
                     },
                     "role": {
                         "type": "string",
@@ -71,17 +65,10 @@ impl NativeTool for PromotionRecordTool {
                             "properties": {
                                 "severity": {
                                     "type": "string",
-                                    "description": "Severity: 'info', 'warning', 'error', 'critical'",
                                     "enum": ["info", "warning", "error", "critical"]
                                 },
-                                "description": {
-                                    "type": "string",
-                                    "description": "Description of the finding"
-                                },
-                                "evidence": {
-                                    "type": "string",
-                                    "description": "Optional evidence supporting this finding"
-                                }
+                                "description": { "type": "string" },
+                                "evidence": { "type": "string" }
                             },
                             "required": ["severity", "description"]
                         }
@@ -91,7 +78,7 @@ impl NativeTool for PromotionRecordTool {
                         "description": "Human-readable summary of the validation result"
                     }
                 },
-                "required": ["content_handle", "role", "pass"],
+                "required": ["artifact_id", "role", "pass"],
                 "additionalProperties": false
             }),
         }
@@ -115,7 +102,10 @@ impl NativeTool for PromotionRecordTool {
         let args: PromotionRecordArgs = serde_json::from_str(arguments_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
-        Self::validate_content_handle(&args.content_handle)?;
+        anyhow::ensure!(
+            args.artifact_id.starts_with("art_"),
+            "artifact_id must start with 'art_'"
+        );
 
         let Some(gw_dir) = gateway_dir else {
             anyhow::bail!("Promotion store requires gateway directory to be configured");
@@ -124,7 +114,8 @@ impl NativeTool for PromotionRecordTool {
         let store = PromotionStore::new(gw_dir)?;
 
         let record = store.record_promotion(
-            args.content_handle.clone(),
+            args.artifact_id.clone(),
+            args.artifact_digest.clone(),
             args.role.clone(),
             &manifest.agent.id,
             args.pass,
@@ -142,13 +133,13 @@ impl NativeTool for PromotionRecordTool {
                 &manifest.agent.id,
                 session_id.unwrap_or("unknown"),
                 turn_id,
-                0, // turn_index unknown in tool context
+                0,
                 "tool",
                 "promotion.record",
                 EntryStatus::Success,
                 Some(serde_json::json!({
                     "arguments": {
-                        "content_handle": args.content_handle,
+                        "artifact_id": args.artifact_id,
                         "role": args.role.as_str(),
                         "pass": args.pass,
                     }
@@ -179,16 +170,16 @@ impl NativeTool for PromotionQueryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Queries the promotion status of a content handle. Returns evaluator and auditor validation results, or null if no promotion record exists.".to_string(),
+            description: "Queries the promotion status of an artifact. Returns evaluator and auditor validation results, or null if no promotion record exists.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "content_handle": {
+                    "artifact_id": {
                         "type": "string",
-                        "description": "SHA-256 content handle (e.g., 'sha256:abc123...') to query promotion status for"
+                        "description": "Artifact ID to query promotion status for (e.g., 'art_a1b2c3d4')"
                     }
                 },
-                "required": ["content_handle"],
+                "required": ["artifact_id"],
                 "additionalProperties": false
             }),
         }
@@ -218,8 +209,8 @@ impl NativeTool for PromotionQueryTool {
             .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
 
         anyhow::ensure!(
-            args.content_handle.starts_with("sha256:"),
-            "content_handle must be a valid SHA-256 content handle (sha256:...)"
+            args.artifact_id.starts_with("art_"),
+            "artifact_id must start with 'art_'"
         );
 
         let Some(gw_dir) = gateway_dir else {
@@ -228,9 +219,9 @@ impl NativeTool for PromotionQueryTool {
 
         let store = PromotionStore::new(gw_dir)?;
 
-        let response = match store.get_promotion(&args.content_handle) {
+        let response = match store.get_promotion(&args.artifact_id) {
             Some(record) => PromotionQueryResponse {
-                content_handle: record.content_handle,
+                artifact_id: record.artifact_id,
                 evaluator_pass: Some(record.evaluator_pass),
                 auditor_pass: Some(record.auditor_pass),
                 evaluator_id: record.evaluator_id,
@@ -243,8 +234,8 @@ impl NativeTool for PromotionQueryTool {
             },
             None => {
                 return serde_json::to_string(&serde_json::json!({
-                    "content_handle": args.content_handle,
-                    "error": "No promotion record found for this content handle"
+                    "artifact_id": args.artifact_id,
+                    "error": "No promotion record found for this artifact"
                 }))
                 .map_err(Into::into)
             }

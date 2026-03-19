@@ -16,8 +16,49 @@ use autonoetic_gateway::runtime::tools::default_registry;
 use autonoetic_types::agent::{AgentIdentity, AgentManifest, RuntimeDeclaration};
 use autonoetic_types::capability::Capability;
 use autonoetic_types::config::{AgentInstallApprovalPolicy, GatewayConfig};
-use autonoetic_types::promotion::{PromotionRole};
+use autonoetic_types::promotion::PromotionRole;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+
+fn build_test_artifact(base_dir: &Path, files: &[(&str, &str)]) -> (String, PathBuf) {
+    let gateway_dir = base_dir.join(".gateway");
+    std::fs::create_dir_all(&gateway_dir).unwrap();
+    let content_store = ContentStore::new(&gateway_dir).unwrap();
+    let artifact_store =
+        autonoetic_gateway::artifact_store::ArtifactStore::new(&gateway_dir).unwrap();
+    let session_id = "test-session";
+    let mut input_names = Vec::new();
+    for (path, content) in files {
+        let handle = content_store.write(content.as_bytes()).unwrap();
+        content_store
+            .register_name(session_id, path, &handle)
+            .unwrap();
+        input_names.push(path.to_string());
+    }
+    let bundle = artifact_store
+        .build(&input_names, None, session_id)
+        .unwrap();
+    let promotion_store = PromotionStore::new(&gateway_dir).unwrap();
+    let _ = promotion_store.record_promotion(
+        bundle.artifact_id.clone(),
+        Some(bundle.digest.clone()),
+        PromotionRole::Evaluator,
+        "evaluator.default",
+        true,
+        vec![],
+        Some("Test auto-pass".to_string()),
+    );
+    let _ = promotion_store.record_promotion(
+        bundle.artifact_id.clone(),
+        Some(bundle.digest.clone()),
+        PromotionRole::Auditor,
+        "auditor.default",
+        true,
+        vec![],
+        Some("Test auto-pass".to_string()),
+    );
+    (bundle.artifact_id, gateway_dir)
+}
 
 fn evolution_manifest() -> AgentManifest {
     AgentManifest {
@@ -149,9 +190,14 @@ fn promotion_gate_with_evidence(
 async fn test_promotion_record_full_pass_flow() {
     let temp = tempdir().expect("tempdir should create");
     let agents_dir = temp.path().join("agents");
-    let gateway_dir = agents_dir.join(".gateway");
     let builder_dir = agents_dir.join("specialized_builder.default");
     std::fs::create_dir_all(&builder_dir).expect("builder dir should create");
+
+    let script_content = b"import json\nprint(json.dumps({'temp': 22}))\n";
+    let (artifact_id, gateway_dir) = build_test_artifact(
+        temp.path(),
+        &[("main.py", &String::from_utf8_lossy(script_content))],
+    );
 
     let config = GatewayConfig {
         agents_dir: agents_dir.clone(),
@@ -161,7 +207,6 @@ async fn test_promotion_record_full_pass_flow() {
 
     // --- Step 1: Coder writes content to content store ---
     let store = ContentStore::new(&gateway_dir).expect("content store should create");
-    let script_content = b"import json\nprint(json.dumps({'temp': 22}))\n";
     let content_handle = store.write(script_content).expect("content should write");
     assert!(content_handle.starts_with("sha256:"));
     println!("Content handle: {}", content_handle);
@@ -172,7 +217,7 @@ async fn test_promotion_record_full_pass_flow() {
     let registry = default_registry();
 
     let eval_args = serde_json::json!({
-        "content_handle": content_handle,
+        "artifact_id": artifact_id,
         "role": "evaluator",
         "pass": true,
         "findings": [],
@@ -201,7 +246,7 @@ async fn test_promotion_record_full_pass_flow() {
     let audit_policy = PolicyEngine::new(audit_manifest.clone());
 
     let audit_args = serde_json::json!({
-        "content_handle": content_handle,
+        "artifact_id": artifact_id,
         "role": "auditor",
         "pass": true,
         "findings": [],
@@ -228,15 +273,15 @@ async fn test_promotion_record_full_pass_flow() {
     // --- Step 4: Verify promotion store has both records ---
     let store = PromotionStore::new(&gateway_dir).expect("promotion store should create");
     assert!(
-        store.has_passed(&content_handle, &PromotionRole::Evaluator),
+        store.has_passed(&artifact_id, &PromotionRole::Evaluator),
         "evaluator should have passed"
     );
     assert!(
-        store.has_passed(&content_handle, &PromotionRole::Auditor),
+        store.has_passed(&artifact_id, &PromotionRole::Auditor),
         "auditor should have passed"
     );
     assert!(
-        store.is_fully_promoted(&content_handle),
+        store.is_fully_promoted(&artifact_id),
         "content should be fully promoted"
     );
 
@@ -249,9 +294,7 @@ async fn test_promotion_record_full_pass_flow() {
         "capabilities": [
             { "type": "NetworkAccess", "hosts": ["api.open-meteo.com"] }
         ],
-        "files": [
-            { "path": "main.py", "content": String::from_utf8_lossy(script_content) }
-        ],
+        "artifact_id": artifact_id,
         "source_content_handle": content_handle,
         "promotion_gate": promotion_gate_with_evidence(
             &["NetworkAccess"],

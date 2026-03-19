@@ -121,7 +121,6 @@ class _RpcClient:
         method_map = {
             "content.write": f"{base}/api/content/write",
             "content.read": f"{base}/api/content/read",
-            "content.persist": f"{base}/api/content/persist",
             "content.names": f"{base}/api/content/names",
         }
         if method not in method_map:
@@ -226,10 +225,6 @@ class _FilesApi:
         if isinstance(content, bytes):
             content = content.decode("utf-8")
         return self._rpc.request("content.write", {"name": name, "content": content})
-
-    def persist(self, handle: str) -> Any:
-        """Mark content as persistent (survives session cleanup)."""
-        return self._rpc.request("content.persist", {"handle": handle})
 
 
 class _ArtifactsApi:

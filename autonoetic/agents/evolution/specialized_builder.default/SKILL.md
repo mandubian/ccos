@@ -53,6 +53,7 @@ The `agent.install` tool creates a complete agent with SKILL.md. **DO NOT pass a
   "name": "Weather Fetcher",            // display name
   "description": "Fetches weather data",// what it does
   "instructions": "# Weather Agent\n\nYou are a weather agent...",  // SKILL.md BODY (after frontmatter)
+  "artifact_id": "art_a1b2c3d4",        // REQUIRED: reviewed artifact to install from
   "capabilities": [
     {"type": "ReadAccess", "scopes": ["self.*"]},
     {"type": "WriteAccess", "scopes": ["self.*"]}
@@ -66,23 +67,24 @@ The `agent.install` tool creates a complete agent with SKILL.md. **DO NOT pass a
 
 ### Key Rules:
 1. **`instructions`** = the markdown body of SKILL.md (everything after `---` frontmatter)
-2. **DO NOT** include a file named "SKILL.md" in the `files` array - it will be rejected
-3. **Frontmatter is auto-generated** from agent_id, name, description, capabilities, llm_config
+2. **`artifact_id` is required** - install from the reviewed artifact, not from loose content handles
+3. **DO NOT** include a file named "SKILL.md" in the `files` array - it will be rejected
+4. **Frontmatter is auto-generated** from agent_id, name, description, capabilities, llm_config
 
 ### Required: Capabilities (CRITICAL)
 
-**The gateway automatically analyzes code to detect required capabilities.** If your `capabilities` don't match what the code actually uses, the install will be REJECTED.
+**The gateway automatically analyzes executable behavior to detect required capabilities.** If your `capabilities` don't match what the artifact/runtime behavior actually uses, the install will be REJECTED.
 
 **Capability Detection Rules:**
 
-| Code Pattern | Required Capability |
+| Executable Pattern | Required Capability |
 |--------------|---------------------|
 | `urllib`, `requests`, `httpx`, `fetch()`, `http://`, `https://` | `NetworkAccess` |
 | `with open(`, `pathlib.Path(`, `fs.readFile`, `.read_text()` | `ReadAccess` |
 | `os.remove`, `fs.unlink`, `os.makedirs`, `.write_text()` | `WriteAccess` |
 | `subprocess.run`, `os.system`, `shell=True`, `exec(` | `CodeExecution` |
 
-**Example: Code with network access requires NetworkAccess:**
+**Example: Executable behavior with network access requires NetworkAccess:**
 ```python
 import urllib.request  # ← This means you MUST declare NetworkAccess!
 
@@ -109,7 +111,7 @@ Add these capabilities to your install request.
 ```
 
 **How to determine required capabilities:**
-1. Read the code files you're about to install
+1. Inspect the artifact and the source files you're about to install
 2. Check for network calls → add `NetworkAccess`
 3. Check for file reads → add `ReadAccess`
 4. Check for file writes → add `WriteAccess`
@@ -124,7 +126,7 @@ For `execution_mode: "script"`, you MUST include ALL of:
   "instructions": "# Instructions...",
   "execution_mode": "script",
   "script_entry": "main.py",          // REQUIRED - path to entry script
-  "files": [{"path": "main.py", "content": "..."}],  // The script file
+  "artifact_id": "art_a1b2c3d4",      // REQUIRED - reviewed artifact containing main.py
   "capabilities": [...]
 }
 ```
@@ -170,16 +172,13 @@ Before calling `agent.install`, ensure:
 
 ## Content System (CRITICAL)
 
-When using `content.write` and `content.read`:
+When using content and artifact tools:
 
 1. **`content.write` returns a short alias** (8 chars) for easy reference
-2. Use the alias for reading: `content.read({"name_or_handle": "abc12345"})`
+2. Within the same root session, prefer session-visible names first, then aliases
+3. For installs and promotion boundaries, prefer `artifact_id` over raw file identifiers
 
 ### Cross-Session Content (IMPORTANT)
-- **Aliases are session-scoped** - you can only use aliases for content written in YOUR session
-- **To read content from another session** (e.g., created by coder), use the **full SHA256 handle**:
-  ```json
-  content.read({"name_or_handle": "sha256:abc123def456..."})
-  ```
-- The full handle is always provided in `content.write` response
-- If the planner gives you a content name like "weather_script.py", ask for the **handle**, not the name
+- Same-root sessions can collaborate through session-visible names
+- Full SHA256 handles are no longer the normal cross-session transport mechanism
+- If planner gives you loose files or only raw handles for something that should be installed, ask for the **artifact_id** or ask coder to build one first

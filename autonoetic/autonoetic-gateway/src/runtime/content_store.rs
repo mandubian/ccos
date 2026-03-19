@@ -2,6 +2,11 @@
 //!
 //! Provides SHA-256 based content addressing that works locally and remotely.
 //! Content is stored as immutable blobs; session manifests map names to handles.
+//!
+//! Visibility model:
+//! - `private`: visible only to the writing session
+//! - `session`: visible to all sessions under the same root_session_id (default)
+//! - `global`: durable and cross-session readable
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -11,20 +16,47 @@ use std::sync::{Arc, Mutex};
 /// A content handle is a SHA-256 hash prefixed with "sha256:".
 pub type ContentHandle = String;
 
+/// Visibility scope for content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentVisibility {
+    /// Visible only to the writing session.
+    Private,
+    /// Visible to all sessions under the same root_session_id.
+    /// This is the default and matches the collaboration model.
+    #[default]
+    Session,
+    /// Durable and cross-session readable.
+    Global,
+}
+
+/// Returns the root session id — the portion before the first `/`.
+///
+/// `"demo-session/coder.default-abc"` → `"demo-session"`
+/// `"demo-session"` → `"demo-session"`
+pub fn root_session_id(session_id: &str) -> &str {
+    session_id.split('/').next().unwrap_or(session_id)
+}
+
 /// Session manifest mapping content names to handles.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct SessionManifest {
     /// Map of content name → handle
     pub names: HashMap<String, ContentHandle>,
-    /// Set of persisted handles (survive session cleanup)
-    pub persisted: std::collections::HashSet<ContentHandle>,
     /// Map of short alias (8 hex chars) → full handle for LLM-friendly lookup
     pub aliases: HashMap<String, ContentHandle>,
-    /// Parent session ID for hierarchical content visibility.
-    /// If set, content in this session is visible to the parent.
+    /// Root session ID for content visibility.
+    /// All sessions sharing the same root_session_id can read each other's
+    /// session-visible content.
     #[serde(default)]
-    pub parent_session_id: Option<String>,
+    pub root_session_id: Option<String>,
+    /// Per-handle visibility tracking.
+    #[serde(default)]
+    pub visibility: HashMap<ContentHandle, ContentVisibility>,
 }
+
+/// Session ID used for the global content manifest.
+const GLOBAL_SESSION_ID: &str = "__global__";
 
 /// Short alias prefix length (8 hex chars = 32 bits, collision probability < 1/4B)
 pub const SHORT_ALIAS_LEN: usize = 8;
@@ -132,35 +164,6 @@ impl ContentStore {
         self.handle_to_path(handle).exists()
     }
 
-    /// Marks content as persistent (survives session cleanup).
-    pub fn persist(&self, session_id: &str, handle: &ContentHandle) -> anyhow::Result<()> {
-        if !self.exists(handle) {
-            anyhow::bail!("Cannot persist non-existent content: {}", handle);
-        }
-
-        let mut manifests = self.manifests.lock().unwrap();
-        if !manifests.contains_key(session_id) {
-            let disk_manifest = self.load_manifest_from_disk_uncached(session_id)?;
-            manifests.insert(session_id.to_string(), disk_manifest);
-        }
-        let manifest = manifests
-            .get_mut(session_id)
-            .ok_or_else(|| anyhow::anyhow!("Failed to load manifest for session '{}'", session_id))?;
-        manifest.persisted.insert(handle.clone());
-
-        // Persist to disk
-        self.save_manifest(session_id, manifest)?;
-
-        tracing::info!(
-            target: "content_store",
-            session_id = %session_id,
-            handle = %handle,
-            "Marked content as persistent"
-        );
-
-        Ok(())
-    }
-
     /// Loads a session manifest from disk (or returns cached).
     pub fn load_manifest(&self, session_id: &str) -> anyhow::Result<SessionManifest> {
         {
@@ -177,7 +180,10 @@ impl ContentStore {
         Ok(manifest)
     }
 
-    fn load_manifest_from_disk_uncached(&self, session_id: &str) -> anyhow::Result<SessionManifest> {
+    fn load_manifest_from_disk_uncached(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionManifest> {
         let path = self.manifest_path(session_id);
         if path.exists() {
             let json = std::fs::read_to_string(&path)?;
@@ -217,9 +223,9 @@ impl ContentStore {
             let disk_manifest = self.load_manifest_from_disk_uncached(session_id)?;
             manifests.insert(session_id.to_string(), disk_manifest);
         }
-        let manifest = manifests
-            .get_mut(session_id)
-            .ok_or_else(|| anyhow::anyhow!("Failed to load manifest for session '{}'", session_id))?;
+        let manifest = manifests.get_mut(session_id).ok_or_else(|| {
+            anyhow::anyhow!("Failed to load manifest for session '{}'", session_id)
+        })?;
         manifest.names.insert(name.to_string(), handle.clone());
 
         // Also register the short alias for LLM-friendly lookup
@@ -230,170 +236,145 @@ impl ContentStore {
         Ok(())
     }
 
-    /// Sets the parent session ID for hierarchical content visibility.
-    /// Content written to this session will be visible to the parent.
-    pub fn set_parent_session(
-        &self,
-        session_id: &str,
-        parent_session_id: &str,
-    ) -> anyhow::Result<()> {
+    /// Sets the root session ID for content visibility.
+    /// All sessions sharing the same root_session_id can read each other's
+    /// session-visible content.
+    pub fn set_root_session(&self, session_id: &str, root: &str) -> anyhow::Result<()> {
         let mut manifests = self.manifests.lock().unwrap();
         if !manifests.contains_key(session_id) {
             let disk_manifest = self.load_manifest_from_disk_uncached(session_id)?;
             manifests.insert(session_id.to_string(), disk_manifest);
         }
-        let manifest = manifests
-            .get_mut(session_id)
-            .ok_or_else(|| anyhow::anyhow!("Failed to load manifest for session '{}'", session_id))?;
-        manifest.parent_session_id = Some(parent_session_id.to_string());
+        let manifest = manifests.get_mut(session_id).ok_or_else(|| {
+            anyhow::anyhow!("Failed to load manifest for session '{}'", session_id)
+        })?;
+        manifest.root_session_id = Some(root.to_string());
         self.save_manifest(session_id, manifest)?;
         Ok(())
     }
 
-    /// Registers content in both the current session AND its parent session.
-    /// This enables hierarchical content visibility where parent agents can
-    /// read content written by their child agents.
+    /// Registers content with the given visibility.
     ///
-    /// For example, if coder (session: "demo-session/coder-abc123") writes "weather.py":
-    /// - It's registered in the child session under "weather.py"
-    /// - It's registered in the parent session under "weather.py" (flat, last-writer-wins)
-    /// - It's also registered in the parent under "demo-session/coder-abc123/weather.py"
-    ///   for explicit disambiguation when multiple children write the same name.
-    ///
-    /// This allows the planner to do content.read("weather.py") after delegating to the coder.
-    pub fn register_name_in_hierarchy(
+    /// - `Private`: only registers in the current session's manifest.
+    /// - `Session`: registers in both the current session AND the root session's manifest.
+    /// - `Global`: registers in the current session, root session, AND a global index.
+    pub fn register_name_with_visibility(
         &self,
         session_id: &str,
         name: &str,
         handle: &ContentHandle,
+        visibility: ContentVisibility,
     ) -> anyhow::Result<()> {
         // Always register in current session
         self.register_name(session_id, name, handle)?;
 
-        // Load from disk — ContentStore is re-instantiated on every tool call so the
-        // in-memory manifests cache is always empty; we must go to disk here.
-        let manifest = self.load_manifest(session_id)?;
+        // Track visibility
+        {
+            let mut manifests = self.manifests.lock().unwrap();
+            if !manifests.contains_key(session_id) {
+                let disk_manifest = self.load_manifest_from_disk_uncached(session_id)?;
+                manifests.insert(session_id.to_string(), disk_manifest);
+            }
+            if let Some(manifest) = manifests.get_mut(session_id) {
+                manifest.visibility.insert(handle.clone(), visibility);
+                self.save_manifest(session_id, manifest)?;
+            }
+        }
 
-        if let Some(parent_session_id) = manifest.parent_session_id {
-            // Register flat name in parent (last-writer-wins).
-            // This lets the planner do content.read("weather_fetcher.py") naturally.
-            self.register_name(&parent_session_id, name, handle)?;
+        // For session/global visibility, also register in root session
+        if visibility != ContentVisibility::Private {
+            let manifest = self.load_manifest(session_id)?;
+            if let Some(root_id) = manifest.root_session_id {
+                if root_id != session_id {
+                    self.register_name(&root_id, name, handle)?;
+                }
+            }
 
-            // Also register the namespaced name so the parent can disambiguate when
-            // multiple children wrote files with the same flat name.
-            let namespaced_name = format!("{}/{}", session_id, name);
-            self.register_name(&parent_session_id, &namespaced_name, handle)?;
+            // For global visibility, also register in the global manifest
+            if visibility == ContentVisibility::Global {
+                self.register_name(GLOBAL_SESSION_ID, name, handle)?;
 
-            tracing::debug!(
-                target: "content_store",
-                session_id = %session_id,
-                parent_session_id = %parent_session_id,
-                name = %name,
-                namespaced_name = %namespaced_name,
-                "Registered content in parent session (flat + namespaced)"
-            );
+                tracing::debug!(
+                    target: "content_store",
+                    session_id = %session_id,
+                    name = %name,
+                    "Registered content in global manifest"
+                );
+            }
         }
 
         Ok(())
     }
 
-    /// Resolves a name by walking up the delegation chain.
+    /// Resolves a name by checking current session, then root session, then global manifest.
     ///
-    /// Resolution rules:
-    /// 1. Try the flat name in the caller's own session.
-    /// 2. Walk up to parent sessions, but only match the **namespaced** form
-    ///    `"{child_session}/{name}"` — NOT flat names in the parent.
-    ///
-    /// This preserves sibling isolation: flat names registered in the parent by
-    /// `register_name_in_hierarchy` are only visible to the parent itself, not to
-    /// sibling child agents that also happen to walk up to the same parent.
-    pub fn resolve_name_hierarchical(
+    /// This enables session-visible and global content to be read by any session.
+    pub fn resolve_name_with_root(
         &self,
         session_id: &str,
         name: &str,
     ) -> anyhow::Result<ContentHandle> {
-        // 1. Try the caller's own session directly (flat name).
+        // 1. Try the caller's own session
         if let Ok(handle) = self.resolve_name(session_id, name) {
             return Ok(handle);
         }
 
-        // 2. Walk up the delegation chain looking for the namespaced form only.
-        //    A child searching for "weather.py" looks for
-        //    "{child_session}/weather.py" in the parent's manifest.
-        //    This means siblings can't accidentally access each other's work
-        //    through the shared parent namespace.
-        let mut current_session = session_id.to_string();
-        loop {
-            let manifest = self.load_manifest(&current_session)?;
-
-            if let Some(parent_id) = manifest.parent_session_id.clone() {
-                let namespaced_name = format!("{}/{}", current_session, name);
-                let parent_manifest = self.load_manifest(&parent_id)?;
-                if let Some(handle) = parent_manifest.names.get(&namespaced_name) {
-                    return Ok(handle.clone());
+        // 2. Try the root session (for session-visible content)
+        let manifest = self.load_manifest(session_id)?;
+        if let Some(root_id) = manifest.root_session_id {
+            if root_id != session_id {
+                if let Ok(handle) = self.resolve_name(&root_id, name) {
+                    return Ok(handle);
                 }
-                current_session = parent_id;
-            } else {
-                break;
+            }
+        }
+
+        // 3. Try the global manifest (for global-visible content)
+        if session_id != GLOBAL_SESSION_ID {
+            if let Ok(handle) = self.resolve_name(GLOBAL_SESSION_ID, name) {
+                return Ok(handle);
             }
         }
 
         Err(anyhow::anyhow!(
-            "Content name '{}' not found in session '{}' or parent sessions",
+            "Content name '{}' not found in session '{}', root session, or global",
             name,
             session_id
         ))
     }
 
-    /// Reads content by name, handle, or short alias with hierarchical lookup.
-    /// If not found in current session, walks up the parent chain.
-    pub fn read_by_name_or_handle_hierarchical(
-        &self,
-        session_id: &str,
-        name_or_handle: &str,
-    ) -> anyhow::Result<Vec<u8>> {
-        if name_or_handle.starts_with("sha256:") {
-            // Full handle - read directly from content store
-            self.read(&name_or_handle.to_string())
-        } else if name_or_handle.len() == SHORT_ALIAS_LEN
-            && name_or_handle.chars().all(|c| c.is_ascii_hexdigit())
-        {
-            // Short alias - try current session first, then walk up parent chain
-            self.resolve_alias_hierarchical(session_id, name_or_handle)
-                .and_then(|handle| self.read(&handle))
-        } else {
-            // Name lookup - use hierarchical resolution
-            self.resolve_name_hierarchical(session_id, name_or_handle)
-                .and_then(|handle| self.read(&handle))
-        }
-    }
-
-    /// Resolves an alias by walking up the delegation chain.
-    fn resolve_alias_hierarchical(
+    /// Resolves an alias by checking current session, then root session, then global.
+    fn resolve_alias_with_root(
         &self,
         session_id: &str,
         alias: &str,
     ) -> anyhow::Result<ContentHandle> {
-        let mut current_session = session_id.to_string();
+        // Check current session
+        let manifest = self.load_manifest(session_id)?;
+        if let Some(handle) = manifest.aliases.get(alias) {
+            return Ok(handle.clone());
+        }
 
-        loop {
-            let manifest = self.load_manifest(&current_session)?;
-
-            // Check alias in current session
-            if let Some(handle) = manifest.aliases.get(alias) {
-                return Ok(handle.clone());
+        // Check root session
+        if let Some(root_id) = manifest.root_session_id {
+            if root_id != session_id {
+                let root_manifest = self.load_manifest(&root_id)?;
+                if let Some(handle) = root_manifest.aliases.get(alias) {
+                    return Ok(handle.clone());
+                }
             }
+        }
 
-            // Walk up to parent
-            if let Some(parent_id) = manifest.parent_session_id.clone() {
-                current_session = parent_id;
-            } else {
-                break;
+        // Check global manifest
+        if session_id != GLOBAL_SESSION_ID {
+            let global_manifest = self.load_manifest(GLOBAL_SESSION_ID)?;
+            if let Some(handle) = global_manifest.aliases.get(alias) {
+                return Ok(handle.clone());
             }
         }
 
         Err(anyhow::anyhow!(
-            "Content alias '{}' not found in session '{}' or parent sessions",
+            "Content alias '{}' not found in session '{}', root session, or global",
             alias,
             session_id
         ))
@@ -422,41 +403,88 @@ impl ContentStore {
         self.read(&handle)
     }
 
-    /// Reads content by name, handle, or short alias.
+    /// Checks whether a handle is visible in the current session, its root session, or global.
+    ///
+    /// A handle is visible if it is registered (by name or alias) in:
+    /// - The current session's manifest
+    /// - The root session's manifest
+    /// - The global manifest
+    pub fn is_handle_visible(&self, session_id: &str, handle: &str) -> anyhow::Result<bool> {
+        // Check current session
+        let manifest = self.load_manifest(session_id)?;
+        if manifest.names.values().any(|h| h == handle) {
+            return Ok(true);
+        }
+        if manifest.aliases.values().any(|h| h == handle) {
+            return Ok(true);
+        }
+
+        // Check root session
+        if let Some(root_id) = manifest.root_session_id {
+            if root_id != session_id {
+                let root_manifest = self.load_manifest(&root_id)?;
+                if root_manifest.names.values().any(|h| h == handle) {
+                    return Ok(true);
+                }
+                if root_manifest.aliases.values().any(|h| h == handle) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        // Check global manifest
+        if session_id != GLOBAL_SESSION_ID {
+            let global_manifest = self.load_manifest(GLOBAL_SESSION_ID)?;
+            if global_manifest.names.values().any(|h| h == handle) {
+                return Ok(true);
+            }
+            if global_manifest.aliases.values().any(|h| h == handle) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Resolves a handle with visibility check — reads only if handle is visible
+    /// in the current or root session.
+    fn resolve_handle_with_visibility(
+        &self,
+        session_id: &str,
+        handle: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        if self.is_handle_visible(session_id, handle)? {
+            self.read(&handle.to_string())
+        } else {
+            Err(anyhow::anyhow!(
+                "Content handle '{}' is not visible in session '{}' or its root session",
+                handle,
+                session_id
+            ))
+        }
+    }
+
+    /// Reads content by name, handle, or short alias with root-based lookup.
     ///
     /// Resolution order:
-    /// 1. If starts with "sha256:" → full handle lookup
-    /// 2. If 8 hex chars → short alias lookup
-    /// 3. Otherwise → session name lookup
+    /// 1. If starts with "sha256:" → check visibility, then read
+    /// 2. If 8 hex chars → short alias lookup (session, then root)
+    /// 3. Otherwise → name lookup (session, then root)
     pub fn read_by_name_or_handle(
         &self,
         session_id: &str,
         name_or_handle: &str,
     ) -> anyhow::Result<Vec<u8>> {
         if name_or_handle.starts_with("sha256:") {
-            // Full handle
-            self.read(&name_or_handle.to_string())
+            self.resolve_handle_with_visibility(session_id, name_or_handle)
         } else if name_or_handle.len() == SHORT_ALIAS_LEN
             && name_or_handle.chars().all(|c| c.is_ascii_hexdigit())
         {
-            // Short alias (8 hex chars) - lookup in session manifest
-            // Use load_manifest to ensure we load from disk if not in memory cache
-            let manifest = self.load_manifest(session_id)?;
-            let handle = manifest
-                .aliases
-                .get(name_or_handle)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Content alias '{}' not found in session '{}'",
-                        name_or_handle,
-                        session_id
-                    )
-                })?;
-            self.read(&handle)
+            self.resolve_alias_with_root(session_id, name_or_handle)
+                .and_then(|handle| self.read(&handle))
         } else {
-            // Name lookup
-            self.read_by_name(session_id, name_or_handle)
+            self.resolve_name_with_root(session_id, name_or_handle)
+                .and_then(|handle| self.read(&handle))
         }
     }
 
@@ -479,43 +507,21 @@ impl ContentStore {
         Ok(entries)
     }
 
-    /// Lists all persisted handles in a session.
-    pub fn list_persisted(&self, session_id: &str) -> anyhow::Result<Vec<ContentHandle>> {
-        let manifest = self.load_manifest(session_id)?;
-        let mut handles: Vec<ContentHandle> = manifest.persisted.iter().cloned().collect();
-        handles.sort();
-        Ok(handles)
-    }
-
-    /// Removes session content that is not persisted.
-    ///
-    /// Returns the number of handles removed.
+    /// Clears a session manifest.
     pub fn cleanup_session(&self, session_id: &str) -> anyhow::Result<usize> {
         let manifest = self.load_manifest(session_id)?;
-        let mut removed = 0;
+        let removed = manifest.names.len();
 
-        for (name, handle) in &manifest.names {
-            if !manifest.persisted.contains(handle) {
-                let path = self.handle_to_path(handle);
-                if path.exists() {
-                    // Only remove if no other sessions reference this handle
-                    // (For simplicity, we don't track cross-session refs yet)
-                    tracing::debug!(
-                        target: "content_store",
-                        name = %name,
-                        handle = %handle,
-                        "Session cleanup (content remains in store)"
-                    );
-                }
-            }
-            removed += 1;
-        }
+        tracing::debug!(
+            target: "content_store",
+            session_id = %session_id,
+            names_removed = removed,
+            "Session cleanup"
+        );
 
-        // Clear the manifest (keep persisted handles)
+        // Clear the manifest
         let mut manifests = self.manifests.lock().unwrap();
-        let mut new_manifest = SessionManifest::default();
-        new_manifest.persisted = manifest.persisted;
-        manifests.insert(session_id.to_string(), new_manifest);
+        manifests.insert(session_id.to_string(), SessionManifest::default());
 
         Ok(removed)
     }
@@ -625,17 +631,196 @@ mod tests {
     }
 
     #[test]
-    fn test_content_store_persist() {
+    fn test_root_session_visibility() {
         let temp = tempdir().unwrap();
         let store = ContentStore::new(temp.path()).unwrap();
 
-        let content = b"Persistent content";
+        let parent_session = "demo-session";
+        let child_session = "demo-session/coder-abc123";
+
+        store
+            .set_root_session(child_session, parent_session)
+            .unwrap();
+
+        // Child writes content with session visibility
+        let content = b"print('Hello from coder')";
         let handle = store.write(content).unwrap();
+        store
+            .register_name_with_visibility(
+                child_session,
+                "weather.py",
+                &handle,
+                ContentVisibility::Session,
+            )
+            .unwrap();
 
-        store.persist("session-1", &handle).unwrap();
+        // Child can read its own content
+        let child_read = store
+            .read_by_name_or_handle(child_session, "weather.py")
+            .unwrap();
+        assert_eq!(child_read, content);
 
-        let persisted = store.list_persisted("session-1").unwrap();
-        assert!(persisted.contains(&handle));
+        // Parent (root session) can read child's content
+        let parent_read = store
+            .read_by_name_or_handle(parent_session, "weather.py")
+            .unwrap();
+        assert_eq!(parent_read, content);
+
+        // Full handle also works
+        let parent_read_handle = store
+            .read_by_name_or_handle(parent_session, &handle)
+            .unwrap();
+        assert_eq!(parent_read_handle, content);
+
+        // Short alias also works
+        let short_alias = ContentStore::get_short_alias(&handle);
+        let parent_read_alias = store
+            .read_by_name_or_handle(parent_session, &short_alias)
+            .unwrap();
+        assert_eq!(parent_read_alias, content);
+    }
+
+    #[test]
+    fn test_private_visibility_isolates_from_root() {
+        let temp = tempdir().unwrap();
+        let store = ContentStore::new(temp.path()).unwrap();
+
+        let parent_session = "demo-session";
+        let child_session = "demo-session/coder-abc123";
+
+        store
+            .set_root_session(child_session, parent_session)
+            .unwrap();
+
+        // Child writes private content
+        let content = b"private scratchpad";
+        let handle = store.write(content).unwrap();
+        store
+            .register_name_with_visibility(
+                child_session,
+                "scratch.txt",
+                &handle,
+                ContentVisibility::Private,
+            )
+            .unwrap();
+
+        // Child can read its own content
+        let child_read = store
+            .read_by_name_or_handle(child_session, "scratch.txt")
+            .unwrap();
+        assert_eq!(child_read, content);
+
+        // Parent CANNOT read child's private content by name
+        let parent_attempt = store.read_by_name_or_handle(parent_session, "scratch.txt");
+        assert!(parent_attempt.is_err());
+    }
+
+    #[test]
+    fn test_sibling_session_visibility() {
+        let temp = tempdir().unwrap();
+        let store = ContentStore::new(temp.path()).unwrap();
+
+        let parent_session = "demo-session";
+        let child1_session = "demo-session/coder-abc";
+        let child2_session = "demo-session/coder-def";
+
+        store
+            .set_root_session(child1_session, parent_session)
+            .unwrap();
+        store
+            .set_root_session(child2_session, parent_session)
+            .unwrap();
+
+        // Child1 writes session-visible content
+        let content1 = b"child1 output";
+        let handle1 = store.write(content1).unwrap();
+        store
+            .register_name_with_visibility(
+                child1_session,
+                "output.py",
+                &handle1,
+                ContentVisibility::Session,
+            )
+            .unwrap();
+
+        // Child2 can read sibling's session-visible content via root
+        let child2_read = store
+            .read_by_name_or_handle(child2_session, "output.py")
+            .unwrap();
+        assert_eq!(child2_read, content1);
+
+        // Child1 writes private content
+        let content2 = b"child1 private";
+        let handle2 = store.write(content2).unwrap();
+        store
+            .register_name_with_visibility(
+                child1_session,
+                "draft.py",
+                &handle2,
+                ContentVisibility::Private,
+            )
+            .unwrap();
+
+        // Child2 cannot read sibling's private content
+        let child2_attempt = store.read_by_name_or_handle(child2_session, "draft.py");
+        assert!(child2_attempt.is_err());
+    }
+
+    #[test]
+    fn test_root_session_last_writer_wins() {
+        let temp = tempdir().unwrap();
+        let store = ContentStore::new(temp.path()).unwrap();
+
+        let parent_session = "demo-session";
+        let child1_session = "demo-session/coder-abc";
+        let child2_session = "demo-session/coder-def";
+
+        store
+            .set_root_session(child1_session, parent_session)
+            .unwrap();
+        store
+            .set_root_session(child2_session, parent_session)
+            .unwrap();
+
+        // Both write to same filename
+        let content1 = b"first version";
+        let handle1 = store.write(content1).unwrap();
+        store
+            .register_name_with_visibility(
+                child1_session,
+                "output.txt",
+                &handle1,
+                ContentVisibility::Session,
+            )
+            .unwrap();
+
+        let content2 = b"second version";
+        let handle2 = store.write(content2).unwrap();
+        store
+            .register_name_with_visibility(
+                child2_session,
+                "output.txt",
+                &handle2,
+                ContentVisibility::Session,
+            )
+            .unwrap();
+
+        // Root session gets the last writer's content
+        let root_read = store
+            .read_by_name_or_handle(parent_session, "output.txt")
+            .unwrap();
+        assert_eq!(root_read, content2);
+
+        // Each child can still read its own version
+        let child1_read = store
+            .read_by_name_or_handle(child1_session, "output.txt")
+            .unwrap();
+        assert_eq!(child1_read, content1);
+
+        let child2_read = store
+            .read_by_name_or_handle(child2_session, "output.txt")
+            .unwrap();
+        assert_eq!(child2_read, content2);
     }
 
     #[test]
@@ -665,171 +850,6 @@ mod tests {
         let stats = store.stats().unwrap();
         assert_eq!(stats.entry_count, 2); // deduplicated
         assert!(stats.total_size_bytes > 0);
-    }
-
-    #[test]
-    fn test_content_store_skill_md_artifact() {
-        let temp = tempdir().unwrap();
-        let store = ContentStore::new(temp.path()).unwrap();
-
-        let skill_content = r#"---
-name: "weather.script.default"
-description: "Retrieves weather from Open-Meteo API"
-script_entry: "main.py"
-io:
-  accepts:
-    type: object
-    required: [latitude, longitude]
-  returns:
-    type: object
----
-# Weather Script Agent
-
-Retrieves current or forecast weather.
-"#;
-        let main_py = r#"print("Hello from weather script")"#;
-
-        let h1 = store.write(skill_content.as_bytes()).unwrap();
-        let h2 = store.write(main_py.as_bytes()).unwrap();
-
-        store
-            .register_name("session-1", "weather_agent/SKILL.md", &h1)
-            .unwrap();
-        store
-            .register_name("session-1", "weather_agent/main.py", &h2)
-            .unwrap();
-
-        let names = store.list_names("session-1").unwrap();
-        assert_eq!(names.len(), 2);
-        assert!(names.contains(&"weather_agent/SKILL.md".to_string()));
-        assert!(names.contains(&"weather_agent/main.py".to_string()));
-    }
-
-    #[test]
-    fn test_hierarchical_content_visibility() {
-        let temp = tempdir().unwrap();
-        let store = ContentStore::new(temp.path()).unwrap();
-
-        // Set up parent-child relationship
-        // Parent session: "planner-session"
-        // Child session: "planner-session/coder-abc123"
-        let parent_session = "planner-session";
-        let child_session = "planner-session/coder-abc123";
-
-        store.set_parent_session(child_session, parent_session).unwrap();
-
-        // Child writes content using hierarchical registration
-        let content = b"print('Hello from coder')";
-        let handle = store.write(content).unwrap();
-        store.register_name_in_hierarchy(child_session, "weather.py", &handle).unwrap();
-
-        // Child can read its own content directly by flat name
-        let child_read = store.read_by_name_or_handle_hierarchical(child_session, "weather.py").unwrap();
-        assert_eq!(child_read, content);
-
-        // Parent can read child's content using the FLAT name (primary use-case)
-        let parent_read_flat = store.read_by_name_or_handle_hierarchical(parent_session, "weather.py").unwrap();
-        assert_eq!(parent_read_flat, content);
-
-        // Parent can also read using the fully-qualified namespaced name for disambiguation
-        let namespaced_name = format!("{}/{}", child_session, "weather.py");
-        let parent_read_namespaced = store.read_by_name_or_handle_hierarchical(parent_session, &namespaced_name).unwrap();
-        assert_eq!(parent_read_namespaced, content);
-
-        // Short alias should also work for parent (aliases are global to content store)
-        let short_alias = ContentStore::get_short_alias(&handle);
-        let parent_read_alias = store.read_by_name_or_handle_hierarchical(parent_session, &short_alias).unwrap();
-        assert_eq!(parent_read_alias, content);
-
-        // Full handle should also work
-        let parent_read_handle = store.read_by_name_or_handle_hierarchical(parent_session, &handle).unwrap();
-        assert_eq!(parent_read_handle, content);
-    }
-
-    #[test]
-    fn test_hierarchical_content_isolation() {
-        let temp = tempdir().unwrap();
-        let store = ContentStore::new(temp.path()).unwrap();
-
-        // Two sibling sessions with same parent
-        let parent_session = "planner-session";
-        let child1_session = "planner-session/coder-abc";
-        let child2_session = "planner-session/coder-def";
-
-        store.set_parent_session(child1_session, parent_session).unwrap();
-        store.set_parent_session(child2_session, parent_session).unwrap();
-
-        // Child1 writes content
-        let content1 = b"child1 content";
-        let handle1 = store.write(content1).unwrap();
-        store.register_name_in_hierarchy(child1_session, "file1.py", &handle1).unwrap();
-
-        // Child2 writes content
-        let content2 = b"child2 content";
-        let handle2 = store.write(content2).unwrap();
-        store.register_name_in_hierarchy(child2_session, "file2.py", &handle2).unwrap();
-
-        // Parent can read both children's content using hierarchical names
-        let parent_read1 = store.read_by_name_or_handle_hierarchical(
-            parent_session,
-            &format!("{}/{}", child1_session, "file1.py")
-        ).unwrap();
-        assert_eq!(parent_read1, content1);
-
-        let parent_read2 = store.read_by_name_or_handle_hierarchical(
-            parent_session,
-            &format!("{}/{}", child2_session, "file2.py")
-        ).unwrap();
-        assert_eq!(parent_read2, content2);
-
-        // Each child can read its own content directly
-        let child1_read = store.read_by_name_or_handle_hierarchical(child1_session, "file1.py").unwrap();
-        assert_eq!(child1_read, content1);
-
-        let child2_read = store.read_by_name_or_handle_hierarchical(child2_session, "file2.py").unwrap();
-        assert_eq!(child2_read, content2);
-
-        // Siblings cannot read each other's content by direct name (sibling isolation)
-        let sibling_attempt = store.read_by_name_or_handle_hierarchical(child1_session, "file2.py");
-        assert!(sibling_attempt.is_err());
-
-        // Parent can read both via flat name (each child has a distinct flat name here)
-        let parent_flat1 = store.read_by_name_or_handle_hierarchical(parent_session, "file1.py").unwrap();
-        assert_eq!(parent_flat1, content1);
-        let parent_flat2 = store.read_by_name_or_handle_hierarchical(parent_session, "file2.py").unwrap();
-        assert_eq!(parent_flat2, content2);
-    }
-
-    #[test]
-    fn test_hierarchical_flat_name_last_writer_wins() {
-        let temp = tempdir().unwrap();
-        let store = ContentStore::new(temp.path()).unwrap();
-
-        // Two sibling sessions both writing the same flat name
-        let parent_session = "planner-session";
-        let child1_session = "planner-session/coder-abc";
-        let child2_session = "planner-session/coder-def";
-
-        store.set_parent_session(child1_session, parent_session).unwrap();
-        store.set_parent_session(child2_session, parent_session).unwrap();
-
-        let content1 = b"first version";
-        let handle1 = store.write(content1).unwrap();
-        store.register_name_in_hierarchy(child1_session, "output.txt", &handle1).unwrap();
-
-        let content2 = b"second version";
-        let handle2 = store.write(content2).unwrap();
-        store.register_name_in_hierarchy(child2_session, "output.txt", &handle2).unwrap();
-
-        // Parent gets the last writer's content under the flat name
-        let parent_flat = store.read_by_name_or_handle_hierarchical(parent_session, "output.txt").unwrap();
-        assert_eq!(parent_flat, content2);
-
-        // Both namespaced names are still independently accessible
-        let ns1 = format!("{}/output.txt", child1_session);
-        let ns2 = format!("{}/output.txt", child2_session);
-        assert_eq!(store.read_by_name_or_handle_hierarchical(parent_session, &ns1).unwrap(), content1);
-        assert_eq!(store.read_by_name_or_handle_hierarchical(parent_session, &ns2).unwrap(), content2);
     }
 
     #[test]
@@ -878,21 +898,30 @@ Retrieves current or forecast weather.
     }
 
     #[test]
-    fn test_register_name_preserves_parent_session_across_instances() {
+    fn test_root_session_preserved_across_instances() {
         let temp = tempdir().unwrap();
-        let child = "planner/coder-123";
-        let parent = "planner";
+        let child = "demo-session/coder-123";
+        let parent = "demo-session";
 
         let store1 = ContentStore::new(temp.path()).unwrap();
-        store1.set_parent_session(child, parent).unwrap();
+        store1.set_root_session(child, parent).unwrap();
 
-        // Fresh instance should preserve parent_session_id when adding names.
         let store2 = ContentStore::new(temp.path()).unwrap();
         let h = store2.write(b"print('hi')").unwrap();
         store2.register_name(child, "weather.py", &h).unwrap();
 
         let manifest = store2.load_manifest(child).unwrap();
-        assert_eq!(manifest.parent_session_id.as_deref(), Some(parent));
+        assert_eq!(manifest.root_session_id.as_deref(), Some(parent));
         assert_eq!(manifest.names.get("weather.py"), Some(&h));
+    }
+
+    #[test]
+    fn test_root_session_id_helper() {
+        assert_eq!(root_session_id("demo-session"), "demo-session");
+        assert_eq!(
+            root_session_id("demo-session/coder.default-abc"),
+            "demo-session"
+        );
+        assert_eq!(root_session_id("a/b/c"), "a");
     }
 }

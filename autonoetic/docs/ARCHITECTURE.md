@@ -249,9 +249,9 @@ Agent-local files for per-tick determinism:
 └── skills/          # Installed skills
 ```
 
-**Tools:** `content.write`, `content.read`, `content.persist`
+**Tools:** `content.write`, `content.read`, `artifact.build`, `artifact.inspect`
 
-Content is session-scoped by default. Use `content.persist` for cross-session durability.
+Content uses root-session visibility. Default is `session` (collaborative within root). Use `visibility: "private"` for scratch work. Artifacts are the mandatory boundary for review/install/execution.
 
 ### Tier 2: Durable Memory (Knowledge)
 
@@ -288,9 +288,9 @@ Content-addressable storage that works locally and remotely:
 ### Key Properties
 
 - **Content-addressed**: SHA-256 handles, natural deduplication
-- **Session-scoped**: Files named within a session
-- **Cross-session**: `content.persist` makes content permanent
-- **Cross-agent**: Any agent can read by handle
+- **Session-scoped**: Files named within a session with visibility control
+- **Cross-session**: `session` visibility makes content visible under same root
+- **Cross-agent**: Siblings see each other's session-visible content
 - **Remote-accessible**: HTTP API for distributed agents
 
 ### Remote Agents

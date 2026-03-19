@@ -1,6 +1,6 @@
 //! Content Promotion Registry types.
 //!
-//! Tracks promotion status (evaluator/auditor validation) per content handle.
+//! Tracks promotion status (evaluator/auditor validation) per artifact.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,11 +39,14 @@ impl PromotionRole {
     }
 }
 
-/// Content promotion record linking validation results to a content handle.
+/// Promotion record linking validation results to an artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionRecord {
-    /// SHA256 content handle this promotion applies to.
-    pub content_handle: String,
+    /// Artifact ID this promotion applies to (e.g., "art_a1b2c3d4").
+    pub artifact_id: String,
+    /// SHA256 digest of the artifact at review time (for integrity verification).
+    #[serde(default)]
+    pub artifact_digest: Option<String>,
     /// Agent who validated (evaluator.default).
     #[serde(default)]
     pub evaluator_id: Option<String>,
@@ -75,8 +78,11 @@ pub struct PromotionRecord {
 /// Arguments for the `promotion.record` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionRecordArgs {
-    /// SHA256 handle of content being promoted.
-    pub content_handle: String,
+    /// Artifact ID being promoted.
+    pub artifact_id: String,
+    /// SHA256 digest of the artifact (optional, for integrity verification).
+    #[serde(default)]
+    pub artifact_digest: Option<String>,
     /// Role recording this promotion (evaluator or auditor).
     pub role: PromotionRole,
     /// Whether this role's validation passed.
@@ -99,15 +105,14 @@ pub struct PromotionRecordResponse {
 /// Arguments for the `promotion.query` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionQueryArgs {
-    /// SHA256 handle to query promotion status for.
-    pub content_handle: String,
+    /// Artifact ID to query promotion status for.
+    pub artifact_id: String,
 }
 
 /// Response from the `promotion.query` tool.
-/// Returns None if no promotion record exists for the handle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionQueryResponse {
-    pub content_handle: String,
+    pub artifact_id: String,
     pub evaluator_pass: Option<bool>,
     pub auditor_pass: Option<bool>,
     pub evaluator_id: Option<String>,

@@ -1255,9 +1255,6 @@ fn persist_history_to_content_store(
     // Register in session
     store.register_name(session_id, "session_history", &history_handle)?;
 
-    // Persist for cross-session access
-    store.persist(session_id, &history_handle)?;
-
     // Log causal chain entry
     tracer.log_history_persisted(history.len(), &history_handle);
 

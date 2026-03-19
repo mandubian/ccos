@@ -109,17 +109,6 @@ impl SessionSnapshot {
         Ok(snapshot)
     }
 
-    /// Marks the snapshot's content as persistent (survives cleanup).
-    pub fn persist(&self, session_id: &str, gateway_dir: &Path) -> anyhow::Result<()> {
-        let store = ContentStore::new(gateway_dir)?;
-
-        if let Some(handle) = &self.content_handle {
-            store.persist(session_id, handle)?;
-        }
-
-        Ok(())
-    }
-
     /// Returns the content handle for this snapshot.
     pub fn handle(&self) -> Option<&str> {
         self.content_handle.as_deref()
@@ -178,9 +167,6 @@ impl SessionFork {
         let history_handle = store.write(history_json.as_bytes())?;
         store.register_name(&new_session_id, "session_history", &history_handle)?;
 
-        // Persist the history
-        store.persist(&new_session_id, &history_handle)?;
-
         Ok(SessionFork {
             new_session_id,
             source_session_id: snapshot.source_session_id.clone(),
@@ -231,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_persist() {
+    fn test_snapshot_content_readable() {
         let temp = tempdir().unwrap();
         let gateway_dir = temp.path().join(".gateway");
         std::fs::create_dir_all(&gateway_dir).unwrap();
@@ -242,12 +228,11 @@ mod tests {
             SessionSnapshot::capture("test-session", &history, 1, None, None, &gateway_dir)
                 .unwrap();
 
-        snapshot.persist("test-session", &gateway_dir).unwrap();
-
-        // Verify persisted
+        // Content is readable by handle
         let store = ContentStore::new(&gateway_dir).unwrap();
-        let persisted = store.list_persisted("test-session").unwrap();
-        assert!(!persisted.is_empty());
+        let handle = snapshot.content_handle.as_ref().unwrap();
+        let content = store.read(handle).unwrap();
+        assert!(!content.is_empty());
     }
 
     #[test]

@@ -68,36 +68,106 @@ fn test_content_store_read_by_name_or_handle() {
 }
 
 #[test]
-fn test_content_store_persist_survives_cleanup() {
+fn test_content_store_session_visibility_across_sessions() {
     let (_dir, gateway_dir) = create_test_gateway();
     let store = ContentStore::new(&gateway_dir).unwrap();
 
-    let content = b"persistent data";
+    let root_session = "demo-session";
+    let child_session = "demo-session/coder-abc";
+
+    store.set_root_session(child_session, root_session).unwrap();
+
+    let content = b"session visible data";
     let handle = store.write(content).unwrap();
 
-    // Mark as persistent
-    store.persist("session-1", &handle).unwrap();
+    // Write with session visibility
+    store
+        .register_name_with_visibility(
+            child_session,
+            "shared.txt",
+            &handle,
+            autonoetic_gateway::runtime::content_store::ContentVisibility::Session,
+        )
+        .unwrap();
 
-    // Verify it's in persisted list
-    let persisted = store.list_persisted("session-1").unwrap();
-    assert!(persisted.contains(&handle));
+    // Root session can read child's session-visible content
+    let root_read = store
+        .read_by_name_or_handle(root_session, "shared.txt")
+        .unwrap();
+    assert_eq!(root_read, content);
 }
 
 #[test]
-fn test_content_store_cross_session_handle_access() {
+fn test_content_store_handle_visibility_enforced() {
     let (_dir, gateway_dir) = create_test_gateway();
     let store = ContentStore::new(&gateway_dir).unwrap();
 
-    // Agent A writes content
+    let root = "root-session";
+    let child_a = "root-session/agent-a";
+    let child_b = "root-session/agent-b";
+
+    store.set_root_session(child_a, root).unwrap();
+    store.set_root_session(child_b, root).unwrap();
+
+    // Agent A writes session-visible content
     let content = b"shared across sessions";
     let handle = store.write(content).unwrap();
     store
-        .register_name("session-a", "shared.txt", &handle)
+        .register_name_with_visibility(
+            child_a,
+            "shared.txt",
+            &handle,
+            autonoetic_gateway::runtime::content_store::ContentVisibility::Session,
+        )
         .unwrap();
 
-    // Agent B reads by handle (different session)
-    let result = store.read_by_name_or_handle("session-b", &handle).unwrap();
+    // Agent B CAN read by handle because it's session-visible via root
+    let result = store.read_by_name_or_handle(child_b, &handle).unwrap();
     assert_eq!(result, content);
+
+    // Agent A writes PRIVATE content
+    let private_content = b"private data";
+    let private_handle = store.write(private_content).unwrap();
+    store
+        .register_name_with_visibility(
+            child_a,
+            "private.txt",
+            &private_handle,
+            autonoetic_gateway::runtime::content_store::ContentVisibility::Private,
+        )
+        .unwrap();
+
+    // Agent B CANNOT read private handle
+    let result = store.read_by_name_or_handle(child_b, &private_handle);
+    assert!(
+        result.is_err(),
+        "private handle should not be visible cross-session"
+    );
+
+    // Agent A CAN read its own private handle
+    let result = store
+        .read_by_name_or_handle(child_a, &private_handle)
+        .unwrap();
+    assert_eq!(result, private_content);
+}
+
+#[test]
+fn test_content_store_handle_not_visible_across_roots() {
+    let (_dir, gateway_dir) = create_test_gateway();
+    let store = ContentStore::new(&gateway_dir).unwrap();
+
+    // Two sessions with DIFFERENT roots
+    let handle = store.write(b"data").unwrap();
+    store
+        .register_name("root-a/agent-1", "file.txt", &handle)
+        .unwrap();
+
+    // Session under different root cannot read by handle
+    let result = store.read_by_name_or_handle("root-b/agent-2", &handle);
+    assert!(
+        result.is_err(),
+        "handle should not be visible across different root sessions"
+    );
 }
 
 #[test]

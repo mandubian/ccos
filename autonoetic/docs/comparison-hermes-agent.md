@@ -27,7 +27,7 @@
 
 | Feature | Autonoetic | Hermes-Agent |
 |---------|-----------|--------------|
-| **Tier 1 (working)** | Content-addressable store (SHA-256), session-scoped, `content.persist` for durability | File-based working memory, conversation context |
+| **Tier 1 (working)** | Content-addressable store (SHA-256), visibility model (private/session/global), artifacts for trust boundary | File-based working memory, conversation context |
 | **Tier 2 (durable)** | Gateway-managed `knowledge.*` tools with provenance, scope, visibility | Procedural memory via **Skills** (autonomous creation from experience), `MEMORY.md`/`USER.md` |
 | **Cross-session recall** | Session forking via `autonoetic trace fork`, causal chain replay | FTS5 session search with LLM summarization, Honcho dialectic user modeling |
 | **Self-improvement** | Evolution agents (`specialized_builder`, `memory-curator`, `evolution-steward`) promote learnings | **Closed learning loop**: skills self-improve during use, autonomous skill creation, periodic nudges to persist knowledge |

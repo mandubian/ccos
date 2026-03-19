@@ -55,19 +55,13 @@ fn test_snapshot_content_handle_permanence() {
         autonoetic_gateway::llm::Message::assistant("Test response"),
     ];
 
-    // Capture and persist snapshot
+    // Capture snapshot
     let snapshot =
         SessionSnapshot::capture(session_id, &history, 1, None, None, &gateway_dir).unwrap();
 
-    snapshot.persist(session_id, &gateway_dir).unwrap();
-
-    // Verify handle is in persisted list
-    let store = ContentStore::new(&gateway_dir).unwrap();
-    let persisted = store.list_persisted(session_id).unwrap();
-    assert!(!persisted.is_empty());
-
-    // Can still read content by handle
+    // Can read content by handle
     let handle = snapshot.content_handle.as_ref().unwrap();
+    let store = ContentStore::new(&gateway_dir).unwrap();
     let content = store.read(handle).unwrap();
     let loaded_history: Vec<autonoetic_gateway::llm::Message> =
         serde_json::from_slice(&content).unwrap();
@@ -218,11 +212,10 @@ fn test_snapshot_survives_restart() {
         autonoetic_gateway::llm::Message::assistant("I'll remember"),
     ];
 
-    // Create and persist snapshot
+    // Create snapshot
     let snapshot =
         SessionSnapshot::capture(session_id, &history, 1, None, None, &gateway_dir).unwrap();
 
-    snapshot.persist(session_id, &gateway_dir).unwrap();
     let handle = snapshot.content_handle.clone().unwrap();
 
     // Simulate "restart" by creating new store instance

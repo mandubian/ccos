@@ -1,7 +1,7 @@
 //! Content Promotion Registry.
 //!
-//! Tracks promotion status (evaluator/auditor validation) per content handle.
-//! This is the authoritative source for whether content has passed validation gates.
+//! Tracks promotion status (evaluator/auditor validation) per artifact.
+//! This is the authoritative source for whether an artifact has passed validation gates.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use autonoetic_types::promotion::{Finding, PromotionRecord, PromotionRole};
 
-/// Thread-safe promotion registry mapping content handles to promotion records.
+/// Thread-safe promotion registry mapping artifact IDs to promotion records.
 pub struct PromotionStore {
     store_path: std::path::PathBuf,
     records: Arc<Mutex<HashMap<String, PromotionRecord>>>,
@@ -39,12 +39,13 @@ impl PromotionStore {
         })
     }
 
-    /// Records or updates a promotion record for a content handle.
+    /// Records or updates a promotion record for an artifact.
     ///
-    /// If a record already exists for this content handle, updates the role-specific fields.
+    /// If a record already exists for this artifact, updates the role-specific fields.
     pub fn record_promotion(
         &self,
-        content_handle: String,
+        artifact_id: String,
+        artifact_digest: Option<String>,
         role: PromotionRole,
         agent_id: &str,
         pass: bool,
@@ -56,9 +57,10 @@ impl PromotionStore {
         let mut records = self.records.lock().unwrap();
 
         let record = records
-            .entry(content_handle.clone())
+            .entry(artifact_id.clone())
             .or_insert_with(|| PromotionRecord {
-                content_handle: content_handle.clone(),
+                artifact_id: artifact_id.clone(),
+                artifact_digest: artifact_digest.clone(),
                 evaluator_id: None,
                 evaluator_pass: false,
                 evaluator_findings: vec![],
@@ -67,7 +69,7 @@ impl PromotionStore {
                 auditor_pass: false,
                 auditor_findings: vec![],
                 auditor_timestamp: None,
-                promotion_gate_version: "1.0".to_string(),
+                promotion_gate_version: "2.0".to_string(),
             });
 
         match role {
@@ -78,7 +80,7 @@ impl PromotionStore {
                 record.evaluator_timestamp = Some(timestamp);
                 tracing::info!(
                     target: "promotion_store",
-                    content_handle = %content_handle,
+                    artifact_id = %artifact_id,
                     agent_id = %agent_id,
                     pass = pass,
                     findings_count = record.evaluator_findings.len(),
@@ -92,7 +94,7 @@ impl PromotionStore {
                 record.auditor_timestamp = Some(timestamp);
                 tracing::info!(
                     target: "promotion_store",
-                    content_handle = %content_handle,
+                    artifact_id = %artifact_id,
                     agent_id = %agent_id,
                     pass = pass,
                     findings_count = record.auditor_findings.len(),
@@ -104,7 +106,7 @@ impl PromotionStore {
         if let Some(summary) = summary {
             tracing::debug!(
                 target: "promotion_store",
-                content_handle = %content_handle,
+                artifact_id = %artifact_id,
                 summary = %summary,
                 "Promotion summary recorded"
             );
@@ -118,10 +120,10 @@ impl PromotionStore {
         Ok(record)
     }
 
-    /// Gets a promotion record by content handle.
-    pub fn get_promotion(&self, content_handle: &str) -> Option<PromotionRecord> {
+    /// Gets a promotion record by artifact ID.
+    pub fn get_promotion(&self, artifact_id: &str) -> Option<PromotionRecord> {
         let records = self.records.lock().unwrap();
-        records.get(content_handle).cloned()
+        records.get(artifact_id).cloned()
     }
 
     /// Lists all promotion records.
@@ -130,10 +132,10 @@ impl PromotionStore {
         records.values().cloned().collect()
     }
 
-    /// Returns true if a content handle has passed promotion for the given role.
-    pub fn has_passed(&self, content_handle: &str, role: &PromotionRole) -> bool {
+    /// Returns true if an artifact has passed promotion for the given role.
+    pub fn has_passed(&self, artifact_id: &str, role: &PromotionRole) -> bool {
         let records = self.records.lock().unwrap();
-        if let Some(record) = records.get(content_handle) {
+        if let Some(record) = records.get(artifact_id) {
             match role {
                 PromotionRole::Evaluator => record.evaluator_pass,
                 PromotionRole::Auditor => record.auditor_pass,
@@ -143,10 +145,10 @@ impl PromotionStore {
         }
     }
 
-    /// Returns true if a content handle has passed both evaluator and auditor promotion.
-    pub fn is_fully_promoted(&self, content_handle: &str) -> bool {
+    /// Returns true if an artifact has passed both evaluator and auditor promotion.
+    pub fn is_fully_promoted(&self, artifact_id: &str) -> bool {
         let records = self.records.lock().unwrap();
-        if let Some(record) = records.get(content_handle) {
+        if let Some(record) = records.get(artifact_id) {
             record.evaluator_pass && record.auditor_pass
         } else {
             false
@@ -184,11 +186,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = PromotionStore::new(temp.path()).unwrap();
 
-        let handle = "sha256:abc123def456".to_string();
+        let artifact_id = "art_abc123".to_string();
 
         let record = store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                Some("sha256:abc123".to_string()),
                 PromotionRole::Evaluator,
                 "evaluator.default",
                 true,
@@ -197,13 +200,13 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(record.content_handle, handle);
+        assert_eq!(record.artifact_id, artifact_id);
         assert_eq!(record.evaluator_id, Some("evaluator.default".to_string()));
         assert!(record.evaluator_pass);
         assert_eq!(record.evaluator_findings.len(), 1);
 
-        let retrieved = store.get_promotion(&handle).unwrap();
-        assert_eq!(retrieved.content_handle, handle);
+        let retrieved = store.get_promotion(&artifact_id).unwrap();
+        assert_eq!(retrieved.artifact_id, artifact_id);
         assert!(retrieved.evaluator_pass);
     }
 
@@ -212,11 +215,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = PromotionStore::new(temp.path()).unwrap();
 
-        let handle = "sha256:abc123".to_string();
+        let artifact_id = "art_both".to_string();
 
         store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                None,
                 PromotionRole::Evaluator,
                 "evaluator.default",
                 true,
@@ -227,7 +231,8 @@ mod tests {
 
         store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                None,
                 PromotionRole::Auditor,
                 "auditor.default",
                 true,
@@ -236,9 +241,9 @@ mod tests {
             )
             .unwrap();
 
-        assert!(store.has_passed(&handle, &PromotionRole::Evaluator));
-        assert!(store.has_passed(&handle, &PromotionRole::Auditor));
-        assert!(store.is_fully_promoted(&handle));
+        assert!(store.has_passed(&artifact_id, &PromotionRole::Evaluator));
+        assert!(store.has_passed(&artifact_id, &PromotionRole::Auditor));
+        assert!(store.is_fully_promoted(&artifact_id));
     }
 
     #[test]
@@ -246,11 +251,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = PromotionStore::new(temp.path()).unwrap();
 
-        let handle = "sha256:abc123".to_string();
+        let artifact_id = "art_fail".to_string();
 
         store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                None,
                 PromotionRole::Evaluator,
                 "evaluator.default",
                 false,
@@ -263,8 +269,8 @@ mod tests {
             )
             .unwrap();
 
-        assert!(!store.has_passed(&handle, &PromotionRole::Evaluator));
-        assert!(!store.is_fully_promoted(&handle));
+        assert!(!store.has_passed(&artifact_id, &PromotionRole::Evaluator));
+        assert!(!store.is_fully_promoted(&artifact_id));
     }
 
     #[test]
@@ -272,11 +278,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = PromotionStore::new(temp.path()).unwrap();
 
-        let handle = "sha256:abc123".to_string();
+        let artifact_id = "art_update".to_string();
 
         store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                None,
                 PromotionRole::Evaluator,
                 "evaluator.default",
                 false,
@@ -287,7 +294,8 @@ mod tests {
 
         store
             .record_promotion(
-                handle.clone(),
+                artifact_id.clone(),
+                None,
                 PromotionRole::Evaluator,
                 "evaluator.default",
                 true,
@@ -296,7 +304,7 @@ mod tests {
             )
             .unwrap();
 
-        let record = store.get_promotion(&handle).unwrap();
+        let record = store.get_promotion(&artifact_id).unwrap();
         assert!(record.evaluator_pass);
         assert_eq!(record.evaluator_id, Some("evaluator.default".to_string()));
     }
@@ -305,13 +313,14 @@ mod tests {
     fn test_promotion_store_persistence() {
         let temp = tempdir().unwrap();
 
-        let handle = "sha256:abc123".to_string();
+        let artifact_id = "art_persist".to_string();
 
         {
             let store = PromotionStore::new(temp.path()).unwrap();
             store
                 .record_promotion(
-                    handle.clone(),
+                    artifact_id.clone(),
+                    None,
                     PromotionRole::Evaluator,
                     "evaluator.default",
                     true,
@@ -323,7 +332,7 @@ mod tests {
 
         {
             let store = PromotionStore::new(temp.path()).unwrap();
-            let record = store.get_promotion(&handle).unwrap();
+            let record = store.get_promotion(&artifact_id).unwrap();
             assert!(record.evaluator_pass);
             assert_eq!(record.evaluator_id, Some("evaluator.default".to_string()));
         }
@@ -334,8 +343,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = PromotionStore::new(temp.path()).unwrap();
 
-        assert!(store.get_promotion("sha256:nonexistent").is_none());
-        assert!(!store.has_passed("sha256:nonexistent", &PromotionRole::Evaluator));
-        assert!(!store.is_fully_promoted("sha256:nonexistent"));
+        assert!(store.get_promotion("art_nonexistent").is_none());
+        assert!(!store.has_passed("art_nonexistent", &PromotionRole::Evaluator));
+        assert!(!store.is_fully_promoted("art_nonexistent"));
     }
 }

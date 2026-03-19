@@ -105,31 +105,31 @@ When asked to create a new agent (e.g., "create a weather agent"), follow this f
 agent.spawn("architect.default", message="Design a weather-fetcher agent: purpose, interfaces, task decomposition for the script")
 ```
 
-**Step 2: Coder writes the script**
+**Step 2: Coder writes the files and builds an artifact**
 ```
-agent.spawn("coder.default", message="Implement the weather script based on architect's design. Save it using content.write. Do NOT run it - just write it and return the content handle.")
-```
-
-**Step 3: evaluator validates the script before install**
-```
-agent.spawn("evaluator.default", message="Validate the candidate script from handle: [coder handle]. Run deterministic tests in sandbox. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation. IMPORTANT: After completing your evaluation, you MUST call promotion.record with the content handle.")
+agent.spawn("coder.default", message="Implement the weather agent files based on architect's design. Write them with content.write, then build an artifact with artifact.build. Do NOT run it. Return the artifact_id, entrypoints, and the key file names.")
 ```
 
-**Step 4: auditor reviews risk and capability coverage**
+**Step 3: evaluator validates the artifact before install**
 ```
-agent.spawn("auditor.default", message="Audit the candidate script from handle: [coder handle] for correctness/security/reproducibility. Return auditor_pass, findings, and recommendation. IMPORTANT: After completing your audit, you MUST call promotion.record with the content handle.")
+agent.spawn("evaluator.default", message="Validate artifact [artifact_id] with artifact.inspect and artifact-closed sandbox execution when applicable. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation. IMPORTANT: promotion.record still requires a content_handle, so use the canonical source handle for the artifact and include artifact_id in your summary/findings.")
+```
+
+**Step 4: auditor reviews risk and capability coverage for the same artifact**
+```
+agent.spawn("auditor.default", message="Audit artifact [artifact_id] for correctness/security/reproducibility using artifact.inspect. Return auditor_pass, findings, and recommendation. IMPORTANT: promotion.record still requires a content_handle, so use the canonical source handle for the artifact and include artifact_id in your summary/findings.")
 ```
 
 **Step 5: if evaluator/auditor fail, send findings back to coder and iterate**
 ```
-agent.spawn("coder.default", message="Fix the script using these evaluator/auditor findings: [...]. Save updated script with content.write and return new handle.")
+agent.spawn("coder.default", message="Fix the implementation using these evaluator/auditor findings: [...]. Save updated files with content.write, rebuild the artifact, and return the new artifact_id plus key file names.")
 ```
 
 Repeat Steps 3-5 until evaluator/auditor both return pass=true AND have called promotion.record.
 
 **Step 6: specialized_builder installs the agent with promotion evidence**
 ```
-agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using content handle [coder handle]. Include promotion_gate with evaluator_pass=true, auditor_pass=true, and concrete security_analysis/capability_analysis evidence. Also include source_content_handle=[coder handle].")
+agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using artifact_id [artifact_id]. Include promotion_gate with evaluator_pass=true, auditor_pass=true, and concrete security_analysis/capability_analysis evidence. Include the canonical source content handle only for promotion.record linkage if needed.")
 ```
 
 **Step 7: post-install smoke test before user-facing use**
@@ -152,6 +152,7 @@ agent.spawn("weather-fetcher", message={"location": "Paris"})
 **IMPORTANT:**
 - Do NOT try to spawn an agent that doesn't exist yet
 - Do NOT assume coder has installed the agent - coder only writes scripts
+- Do NOT proceed with install from loose files or raw content handles when an artifact should exist
 - ALWAYS wait for specialized_builder to complete installation before using the agent
 - ALWAYS run evaluator validation before install and post-install smoke tests before user-facing execution
 
@@ -169,7 +170,7 @@ agent.spawn("specialized_builder.default", message="Install a new agent called '
 ")
 ```
 
-**Important:** The gateway automatically analyzes agent code for required capabilities. If the code uses network calls (urllib, requests) but `NetworkAccess` isn't declared, the install will be REJECTED. When describing a new agent, be clear about what capabilities it needs based on what the code will do.
+**Important:** The gateway automatically analyzes executable behavior for required capabilities. If the artifact/runtime behavior uses network calls (urllib, requests, fetch, etc.) but `NetworkAccess` isn't declared, the install will be REJECTED. When describing a new agent, be clear about what capabilities it needs based on what the executable file set will do.
 
 ## Structured Delegation Metadata
 
@@ -277,7 +278,7 @@ A child agent needs clarification when its spawn result includes:
 
 **When respawning after clarification, include in the new message:**
 - The clarified instruction (incorporating the answer)
-- A reference to the child's previous work: "Your previous work is saved as handle:sha256:..."
+- A reference to the child's previous work: artifact ID when available, otherwise the named session-visible files
 - Original task context so the child continues from where it left off
 
 **When NOT to request clarification from the user:**
