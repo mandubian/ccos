@@ -25,8 +25,8 @@ pub enum EvidenceMode {
 impl EvidenceMode {
     pub fn parse(value: &str) -> anyhow::Result<Self> {
         match value.to_ascii_lowercase().as_str() {
-            "" | "off" => Ok(Self::Off),
-            "full" => Ok(Self::Full),
+            "" | "full" => Ok(Self::Full),
+            "off" => Ok(Self::Off),
             other => anyhow::bail!(
                 "Invalid {}='{}'. Expected one of: off, full",
                 EVIDENCE_MODE_ENV,
@@ -46,12 +46,13 @@ impl EvidenceMode {
 pub struct EvidenceStore {
     mode: EvidenceMode,
     agent_dir: std::path::PathBuf,
+    session_id: String,
     base_dir: Option<std::path::PathBuf>,
 }
 
 impl EvidenceStore {
     pub fn from_env(agent_dir: &Path, session_id: &str) -> anyhow::Result<Self> {
-        let raw = std::env::var(EVIDENCE_MODE_ENV).unwrap_or_else(|_| "off".to_string());
+        let raw = std::env::var(EVIDENCE_MODE_ENV).unwrap_or_else(|_| "full".to_string());
         let mode = EvidenceMode::parse(&raw)?;
         let base_dir = if mode == EvidenceMode::Full {
             let dir = agent_dir.join("history").join("evidence").join(session_id);
@@ -63,8 +64,22 @@ impl EvidenceStore {
         Ok(Self {
             mode,
             agent_dir: agent_dir.to_path_buf(),
+            session_id: session_id.to_string(),
             base_dir,
         })
+    }
+
+    fn ensure_base_dir(&self) -> anyhow::Result<std::path::PathBuf> {
+        if let Some(dir) = &self.base_dir {
+            return Ok(dir.clone());
+        }
+        let dir = self
+            .agent_dir
+            .join("history")
+            .join("evidence")
+            .join(&self.session_id);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     pub fn capture_json(
@@ -77,10 +92,29 @@ impl EvidenceStore {
         if self.mode != EvidenceMode::Full {
             return Ok(None);
         }
-        let base = self
-            .base_dir
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Evidence base directory is not initialized"))?;
+        let base = self.ensure_base_dir()?;
+        let file_name = format!(
+            "{}-{}-{}-{}-{}.json",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ"),
+            sanitize_token(turn_id.unwrap_or("session")),
+            sanitize_token(category),
+            sanitize_token(action),
+            uuid::Uuid::new_v4()
+        );
+        let path = base.join(file_name);
+        std::fs::write(&path, serde_json::to_string_pretty(payload)?)?;
+        let rel = path.strip_prefix(&self.agent_dir).unwrap_or(&path);
+        Ok(Some(rel.display().to_string()))
+    }
+
+    pub fn capture_json_force(
+        &self,
+        turn_id: Option<&str>,
+        category: &str,
+        action: &str,
+        payload: &serde_json::Value,
+    ) -> anyhow::Result<Option<String>> {
+        let base = self.ensure_base_dir()?;
         let file_name = format!(
             "{}-{}-{}-{}-{}.json",
             chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ"),
@@ -351,12 +385,22 @@ impl SessionTracer {
             "tool_name": tool_name,
             "result": redact_text_for_logs(result)
         });
-        if let Some(evidence_ref) = self.evidence_store.capture_json(
-            self.turn_id.as_deref(),
-            "tool_invoke",
-            "completed",
-            &completed_evidence,
-        )? {
+        let evidence_ref = if should_force_tool_result_evidence(result) {
+            self.evidence_store.capture_json_force(
+                self.turn_id.as_deref(),
+                "tool_invoke",
+                "completed",
+                &completed_evidence,
+            )?
+        } else {
+            self.evidence_store.capture_json(
+                self.turn_id.as_deref(),
+                "tool_invoke",
+                "completed",
+                &completed_evidence,
+            )?
+        };
+        if let Some(evidence_ref) = evidence_ref {
             completed_payload["evidence_ref"] = serde_json::json!(evidence_ref);
         }
         self.log_event(
@@ -502,6 +546,35 @@ fn find_approval_request_id_in_result(result: &str) -> Option<String> {
     }
 }
 
+fn should_force_tool_result_evidence(result: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(result) else {
+        return false;
+    };
+
+    if parsed
+        .get("approval_required")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    if parsed.get("ok") == Some(&serde_json::Value::Bool(false)) {
+        return true;
+    }
+
+    if parsed
+        .get("exit_code")
+        .and_then(|v| v.as_i64())
+        .map(|code| code != 0)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    parsed.get("error_type").is_some()
+}
+
 #[cfg(test)]
 impl SessionTracer {
     /// Creates a test tracer that discards all output.
@@ -515,9 +588,80 @@ impl SessionTracer {
             evidence_store: EvidenceStore {
                 mode: EvidenceMode::Off,
                 agent_dir: std::path::PathBuf::from("/tmp"),
+                session_id: "test-session".to_string(),
                 base_dir: None,
             },
             timeline_writer: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_force_tool_result_evidence_for_failures_and_approvals() {
+        assert!(should_force_tool_result_evidence(
+            r#"{"ok":false,"error_type":"validation","message":"boom"}"#
+        ));
+        assert!(should_force_tool_result_evidence(
+            r#"{"ok":false,"approval_required":true,"request_id":"apr-12345678"}"#
+        ));
+        assert!(should_force_tool_result_evidence(
+            r#"{"ok":true,"exit_code":1,"stderr":"failed"}"#
+        ));
+        assert!(!should_force_tool_result_evidence(
+            r#"{"ok":true,"exit_code":0,"stdout":"all good"}"#
+        ));
+    }
+
+    #[test]
+    fn test_log_tool_completed_captures_failure_evidence_even_when_off() {
+        let temp = tempdir().unwrap();
+        let agent_dir = temp.path().join("planner.default");
+        fs::create_dir_all(agent_dir.join("history")).unwrap();
+
+        let mut tracer = SessionTracer::new(&agent_dir, "planner.default", "demo-session").unwrap();
+        tracer.set_turn_id("turn-000001");
+
+        tracer
+            .log_tool_completed(
+                "sandbox.exec",
+                r#"{"ok":false,"exit_code":1,"stderr":"test failed","stdout":"full output"}"#,
+            )
+            .unwrap();
+
+        let causal_log = fs::read_to_string(agent_dir.join("history").join("causal_chain.jsonl")).unwrap();
+        assert!(
+            causal_log.contains("evidence_ref"),
+            "failed tool results should preserve a full evidence pointer"
+        );
+
+        let evidence_dir = agent_dir.join("history").join("evidence").join("demo-session");
+        let evidence_files: Vec<_> = fs::read_dir(evidence_dir).unwrap().collect();
+        assert_eq!(evidence_files.len(), 1);
+    }
+
+    #[test]
+    fn test_evidence_defaults_to_full_when_env_unset() {
+        let temp = tempdir().unwrap();
+        let agent_dir = temp.path().join("planner.default");
+        fs::create_dir_all(agent_dir.join("history")).unwrap();
+
+        let previous = std::env::var("AUTONOETIC_EVIDENCE_MODE").ok();
+        unsafe {
+            std::env::remove_var("AUTONOETIC_EVIDENCE_MODE");
+        }
+
+        let store = EvidenceStore::from_env(&agent_dir, "demo-session").unwrap();
+        assert_eq!(store.mode, EvidenceMode::Full);
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("AUTONOETIC_EVIDENCE_MODE", value) },
+            None => unsafe { std::env::remove_var("AUTONOETIC_EVIDENCE_MODE") },
         }
     }
 }

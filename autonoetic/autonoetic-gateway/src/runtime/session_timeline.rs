@@ -236,23 +236,41 @@ fn extract_details(
         ("tool_invoke", "completed") => {
             let tool = str_field(payload, "tool_name");
             let preview = str_field(payload, "result_preview");
+            let evidence_ref = str_field(payload, "evidence_ref");
+            let evidence_suffix = if evidence_ref.is_empty() {
+                String::new()
+            } else {
+                format!(" \\| evidence: `{}`", cell(&short_evidence_ref(evidence_ref)))
+            };
+
+            if let Some(exit_code) = parse_result_exit_code(preview) {
+                let mut details = format!("tool: `{}` \\| exit_code={}", cell(tool), exit_code);
+                if !preview.is_empty() {
+                    details.push_str(&format!(" \\| `{}`", cell(&truncate(preview, 70))));
+                }
+                details.push_str(&evidence_suffix);
+                return details;
+            }
+
             if preview.contains("\"approval_required\":true")
                 || preview.contains("approval_required")
             {
                 let apr_id = find_approval_id_in_payload(payload);
                 if apr_id.is_empty() {
-                    format!("tool: `{}` **[APPROVAL NEEDED]**", cell(tool))
+                    format!("tool: `{}` **[APPROVAL NEEDED]**{}", cell(tool), evidence_suffix)
                 } else {
                     format!("tool: `{}` **[APPROVAL NEEDED: `{}`]**", cell(tool), apr_id)
+                        + &evidence_suffix
                 }
             } else if !preview.is_empty() {
                 format!(
-                    "tool: `{}` → `{}`",
+                    "tool: `{}` → `{}`{}",
                     cell(tool),
-                    cell(&truncate(preview, 90))
+                    cell(&truncate(preview, 90)),
+                    evidence_suffix
                 )
             } else {
-                format!("tool: `{}`", cell(tool))
+                format!("tool: `{}`{}", cell(tool), evidence_suffix)
             }
         }
         ("gateway", "event.ingest.requested") => {
@@ -353,6 +371,9 @@ fn format_status(
                 if preview.contains("approval_required") {
                     return "**[WAIT]**".to_string();
                 }
+                if preview_contains_report_failure(preview) {
+                    return "**[REPORT FAIL]**".to_string();
+                }
                 // Surface explicit tool failures: `"ok":false` in the result.
                 if preview.contains("\"ok\":false") || preview.contains("\"exit_code\":1") {
                     return "**[FAIL]**".to_string();
@@ -379,6 +400,34 @@ fn count_data_rows(path: &Path) -> u32 {
                 && !l.contains("|---|")    // separator row
         })
         .count() as u32
+}
+
+fn short_evidence_ref(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= 3 {
+        path.to_string()
+    } else {
+        format!(".../{}", parts[parts.len() - 3..].join("/"))
+    }
+}
+
+fn parse_result_exit_code(preview: &str) -> Option<i64> {
+    let parsed: serde_json::Value = serde_json::from_str(preview).ok()?;
+    parsed.get("exit_code")?.as_i64()
+}
+
+fn preview_contains_report_failure(preview: &str) -> bool {
+    [
+        "\"evaluator_pass\": false",
+        "\\\"evaluator_pass\\\": false",
+        "\"auditor_pass\": false",
+        "\\\"auditor_pass\\\": false",
+        "\"status\": \"fail\"",
+        "\\\"status\\\": \\\"fail\\\"",
+        "Promotion Status**: ❌ BLOCKED",
+    ]
+    .iter()
+    .any(|needle| preview.contains(needle))
 }
 
 // ─── tests ───────────────────────────────────────────────────────────────────
@@ -560,5 +609,58 @@ mod tests {
         .unwrap();
         let content = std::fs::read_to_string(w.path()).unwrap();
         assert!(content.contains("APPROVAL NEEDED: `apr-1234abcd`"));
+    }
+
+    #[test]
+    fn test_completed_row_surfaces_failure_evidence_and_exit_code() {
+        let tmp = tempdir().unwrap();
+        let gw = tmp.path().join("gateway");
+        std::fs::create_dir_all(&gw).unwrap();
+        let mut w = SessionTimelineWriter::open(&gw, "fail-session").unwrap();
+        w.append(
+            "evaluator.default",
+            "fail-session",
+            "2026-03-18T12:00:00+00:00",
+            "tool_invoke",
+            "completed",
+            &EntryStatus::Success,
+            Some(&serde_json::json!({
+                "tool_name": "sandbox.exec",
+                "evidence_ref": "history/evidence/fail-session/20260318-tool_invoke-completed.json",
+                "result_preview": "{\"ok\":false,\"exit_code\":1,\"stderr\":\"test failed\"}"
+            })),
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(w.path()).unwrap();
+        assert!(content.contains("exit_code=1"));
+        assert!(
+            content.contains(
+                "evidence: `.../evidence/fail-session/20260318-tool_invoke-completed.json`"
+            )
+        );
+        assert!(content.contains("**[FAIL]**"));
+    }
+
+    #[test]
+    fn test_completed_row_marks_report_failures() {
+        let tmp = tempdir().unwrap();
+        let gw = tmp.path().join("gateway");
+        std::fs::create_dir_all(&gw).unwrap();
+        let mut w = SessionTimelineWriter::open(&gw, "report-session").unwrap();
+        w.append(
+            "planner.default",
+            "report-session",
+            "2026-03-18T12:00:00+00:00",
+            "tool_invoke",
+            "completed",
+            &EntryStatus::Success,
+            Some(&serde_json::json!({
+                "tool_name": "agent.spawn",
+                "result_preview": "{\"assistant_reply\":\"{\\\"status\\\": \\\"fail\\\", \\\"evaluator_pass\\\": false}\"}"
+            })),
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(w.path()).unwrap();
+        assert!(content.contains("**[REPORT FAIL]**"));
     }
 }
