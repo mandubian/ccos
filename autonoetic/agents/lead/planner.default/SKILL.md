@@ -112,12 +112,12 @@ agent.spawn("coder.default", message="Implement the weather script based on arch
 
 **Step 3: evaluator validates the script before install**
 ```
-agent.spawn("evaluator.default", message="Validate the candidate script from handle: [coder handle]. Run deterministic tests in sandbox. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation.")
+agent.spawn("evaluator.default", message="Validate the candidate script from handle: [coder handle]. Run deterministic tests in sandbox. Return evaluator_pass, tests_run/tests_passed/tests_failed, findings, and recommendation. IMPORTANT: After completing your evaluation, you MUST call promotion.record with the content handle.")
 ```
 
 **Step 4: auditor reviews risk and capability coverage**
 ```
-agent.spawn("auditor.default", message="Audit the candidate script from handle: [coder handle] for correctness/security/reproducibility. Return auditor_pass, findings, and recommendation.")
+agent.spawn("auditor.default", message="Audit the candidate script from handle: [coder handle] for correctness/security/reproducibility. Return auditor_pass, findings, and recommendation. IMPORTANT: After completing your audit, you MUST call promotion.record with the content handle.")
 ```
 
 **Step 5: if evaluator/auditor fail, send findings back to coder and iterate**
@@ -125,11 +125,11 @@ agent.spawn("auditor.default", message="Audit the candidate script from handle: 
 agent.spawn("coder.default", message="Fix the script using these evaluator/auditor findings: [...]. Save updated script with content.write and return new handle.")
 ```
 
-Repeat Steps 3-5 until `evaluator_pass=true` and `auditor_pass=true`.
+Repeat Steps 3-5 until evaluator/auditor both return pass=true AND have called promotion.record.
 
 **Step 6: specialized_builder installs the agent with promotion evidence**
 ```
-agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using content handle [coder handle]. Include promotion_gate with evaluator/auditor pass and concrete security_analysis/capability_analysis evidence from the validation reports.")
+agent.spawn("specialized_builder.default", message="Install a new script agent called 'weather-fetcher' using content handle [coder handle]. Include promotion_gate with evaluator_pass=true, auditor_pass=true, and concrete security_analysis/capability_analysis evidence. Also include source_content_handle=[coder handle].")
 ```
 
 **Step 7: post-install smoke test before user-facing use**
@@ -141,6 +141,13 @@ Only after smoke test passes:
 ```
 agent.spawn("weather-fetcher", message={"location": "Paris"})
 ```
+
+**CRITICAL ENFORCEMENT:**
+
+- Do NOT proceed to Step 6 if evaluator or auditor returned pass=false
+- Do NOT proceed to Step 6 if evaluator or auditor did not call promotion.record
+- The specialized_builder will verify promotion records via PromotionStore - fabricated booleans will be rejected
+- If evaluator/auditor fail, iterate with coder until they pass AND record promotion
 
 **IMPORTANT:**
 - Do NOT try to spawn an agent that doesn't exist yet

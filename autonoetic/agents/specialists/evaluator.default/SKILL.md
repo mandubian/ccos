@@ -80,6 +80,27 @@ Set `evaluator_pass: false` when:
 - Behavior deviates from specification
 - Results are not reproducible
 
+## Recording Promotion (CRITICAL)
+
+After completing your evaluation, you MUST call `promotion.record` to persist the result:
+
+```
+promotion.record({
+  "content_handle": "<the content handle you were asked to evaluate>",
+  "role": "evaluator",
+  "pass": <true if evaluator_pass is true, false otherwise>,
+  "findings": [<your findings array>],
+  "summary": "<your summary>"
+})
+```
+
+This records the promotion to the PromotionStore and causal chain. Without this call:
+- The promotion gate cannot verify your evaluation occurred
+- specialized_builder will be unable to install the agent
+- The causal chain will not contain evidence of your evaluation
+
+If your evaluation fails (evaluator_pass=false), you MUST still call `promotion.record` with pass=false to document the failure.
+
 ## Running Tests
 
 When using `sandbox.exec`:
