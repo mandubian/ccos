@@ -133,6 +133,9 @@ impl ContentStore {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&path, content)?;
+            let mut perms = std::fs::metadata(&path)?.permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(&path, perms)?;
             tracing::debug!(
                 target: "content_store",
                 handle = %handle,
@@ -142,6 +145,11 @@ impl ContentStore {
         }
 
         Ok(handle)
+    }
+
+    /// Returns the canonical on-disk path for an immutable content blob.
+    pub fn blob_path(&self, handle: &ContentHandle) -> PathBuf {
+        self.handle_to_path(handle)
     }
 
     /// Reads content by handle.

@@ -192,7 +192,7 @@ impl AgentExecutor {
         let turn_id = self.next_turn_id();
 
         let evidence_mode = EvidenceMode::parse(
-            &std::env::var("AUTONOETIC_EVIDENCE_MODE").unwrap_or_else(|_| "off".to_string()),
+            &std::env::var("AUTONOETIC_EVIDENCE_MODE").unwrap_or_else(|_| "full".to_string()),
         )?;
 
         let mut tracer = {

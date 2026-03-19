@@ -13,7 +13,7 @@
 //!     └── manifest.json
 //! ```
 
-use crate::runtime::content_store::{ContentStore, ContentVisibility};
+use crate::runtime::content_store::{root_session_id, ContentStore};
 use autonoetic_types::artifact::{ArtifactBundle, ArtifactFileEntry};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -30,6 +30,8 @@ struct ArtifactIndex {
 
 /// Store for immutable artifact bundles.
 pub struct ArtifactStore {
+    /// Root path for gateway-owned session and artifact projections.
+    gateway_dir: PathBuf,
     /// Root path for artifact storage (.gateway/artifacts/)
     artifacts_dir: PathBuf,
     /// Reference to the content store for resolving file handles
@@ -43,6 +45,7 @@ impl ArtifactStore {
         std::fs::create_dir_all(&artifacts_dir)?;
         let content_store = ContentStore::new(gateway_dir)?;
         Ok(Self {
+            gateway_dir: gateway_dir.to_path_buf(),
             artifacts_dir,
             content_store,
         })
@@ -195,8 +198,107 @@ impl ArtifactStore {
             .entries
             .insert(bundle.artifact_id.clone(), bundle.artifact_id.clone());
         self.save_index(&index)?;
+        self.materialize_session_projection(bundle)?;
 
         Ok(())
+    }
+
+    /// Creates a human-readable, session-local projection of the artifact files.
+    ///
+    /// This keeps the content- and artifact-addressed stores canonical while giving
+    /// operators a stable path like:
+    /// `.gateway/sessions/<session>/artifacts/<artifact_id>/<file>`
+    fn materialize_session_projection(&self, bundle: &ArtifactBundle) -> anyhow::Result<()> {
+        let base_session_id = root_session_id(&bundle.builder_session_id);
+        let artifact_dir = self
+            .gateway_dir
+            .join("sessions")
+            .join(base_session_id)
+            .join("artifacts")
+            .join(&bundle.artifact_id);
+        std::fs::create_dir_all(&artifact_dir)?;
+
+        for file in &bundle.files {
+            let output_path = artifact_dir.join(&file.name);
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            self.materialize_projection_file(&file.handle, &output_path)?;
+        }
+
+        std::fs::write(
+            artifact_dir.join("README.md"),
+            self.render_session_projection_readme(bundle),
+        )?;
+
+        Ok(())
+    }
+
+    fn materialize_projection_file(
+        &self,
+        handle: &str,
+        output_path: &Path,
+    ) -> anyhow::Result<()> {
+        if output_path.exists() || output_path.is_symlink() {
+            std::fs::remove_file(output_path)?;
+        }
+
+        let blob_path = self.content_store.blob_path(&handle.to_string());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&blob_path, output_path)?;
+            return Ok(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            if std::fs::hard_link(&blob_path, output_path).is_ok() {
+                return Ok(());
+            }
+            let content = self.content_store.read(&handle.to_string())?;
+            std::fs::write(output_path, content)?;
+            Ok(())
+        }
+    }
+
+    fn render_session_projection_readme(&self, bundle: &ArtifactBundle) -> String {
+        let mut lines = vec![
+            format!("# Artifact `{}`", bundle.artifact_id),
+            String::new(),
+            format!("- Digest: `{}`", bundle.digest),
+            format!("- Created At: `{}`", bundle.created_at),
+            format!("- Builder Session: `{}`", bundle.builder_session_id),
+            String::new(),
+            "## Entrypoints".to_string(),
+        ];
+
+        if bundle.entrypoints.is_empty() {
+            lines.push("- None".to_string());
+        } else {
+            for entrypoint in &bundle.entrypoints {
+                lines.push(format!("- `{}`", entrypoint));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push("## Files".to_string());
+        for file in &bundle.files {
+            lines.push(format!(
+                "- `{}` | alias `{}` | handle `{}`",
+                file.name, file.alias, file.handle
+            ));
+        }
+
+        lines.push(String::new());
+        lines.push(
+            "This directory is a human-readable projection of the canonical artifact bundle."
+                .to_string(),
+        );
+        lines.push("Edit neither these files nor this README; rebuild the artifact instead.".to_string());
+
+        lines.join("\n")
     }
 
     /// Inspects an artifact by ID — returns its manifest.
@@ -245,6 +347,7 @@ impl ArtifactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::content_store::ContentVisibility;
     use tempfile::tempdir;
 
     #[test]
@@ -293,6 +396,91 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].0, "main.py");
         assert_eq!(resolved[0].1, b"print('hello')");
+    }
+
+    #[test]
+    fn test_artifact_build_materializes_session_projection() {
+        let temp = tempdir().unwrap();
+        let gw = temp.path().join(".gateway");
+        std::fs::create_dir_all(&gw).unwrap();
+
+        let store = ArtifactStore::new(&gw).unwrap();
+        let content_store = ContentStore::new(&gw).unwrap();
+
+        let h1 = content_store.write(b"print('hello world')").unwrap();
+        content_store
+            .register_name("demo-session/coder.default-abc", "weather_fetch.py", &h1)
+            .unwrap();
+
+        let h2 = content_store.write(b"assert True").unwrap();
+        content_store
+            .register_name(
+                "demo-session/coder.default-abc",
+                "tests/test_weather_fetch.py",
+                &h2,
+            )
+            .unwrap();
+
+        let bundle = store
+            .build(
+                &["weather_fetch.py".into(), "tests/test_weather_fetch.py".into()],
+                Some(&["weather_fetch.py".into()]),
+                "demo-session/coder.default-abc",
+            )
+            .unwrap();
+
+        let session_artifact_dir = gw
+            .join("sessions")
+            .join("demo-session")
+            .join("artifacts")
+            .join(&bundle.artifact_id);
+
+        let projected_main =
+            std::fs::read_to_string(session_artifact_dir.join("weather_fetch.py")).unwrap();
+        assert_eq!(projected_main, "print('hello world')");
+
+        let projected_test =
+            std::fs::read_to_string(session_artifact_dir.join("tests/test_weather_fetch.py"))
+                .unwrap();
+        assert_eq!(projected_test, "assert True");
+
+        let readme = std::fs::read_to_string(session_artifact_dir.join("README.md")).unwrap();
+        assert!(readme.contains(&bundle.artifact_id));
+        assert!(readme.contains("weather_fetch.py"));
+        assert!(readme.contains("tests/test_weather_fetch.py"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_artifact_projection_uses_symlink_to_canonical_blob() {
+        let temp = tempdir().unwrap();
+        let gw = temp.path().join(".gateway");
+        std::fs::create_dir_all(&gw).unwrap();
+
+        let store = ArtifactStore::new(&gw).unwrap();
+        let content_store = ContentStore::new(&gw).unwrap();
+
+        let handle = content_store.write(b"print('linked')").unwrap();
+        content_store
+            .register_name("demo-session/coder.default-abc", "main.py", &handle)
+            .unwrap();
+
+        let bundle = store
+            .build(&["main.py".into()], Some(&["main.py".into()]), "demo-session/coder.default-abc")
+            .unwrap();
+
+        let projected = gw
+            .join("sessions")
+            .join("demo-session")
+            .join("artifacts")
+            .join(&bundle.artifact_id)
+            .join("main.py");
+
+        let metadata = std::fs::symlink_metadata(&projected).unwrap();
+        assert!(metadata.file_type().is_symlink());
+
+        let target = std::fs::read_link(&projected).unwrap();
+        assert_eq!(target, content_store.blob_path(&handle));
     }
 
     #[test]
