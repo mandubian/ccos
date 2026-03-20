@@ -8,6 +8,7 @@ use crate::runtime::reevaluation_state::execute_scheduled_action;
 use crate::runtime::openrouter_catalog::OpenRouterCatalog;
 use crate::runtime::session_budget::SessionBudgetRegistry;
 use crate::runtime::session_context::SessionContext;
+use crate::runtime::session_timeline::{base_session_id, SessionTimelineWriter};
 use autonoetic_types::agent::{AgentManifest, ExecutionMode, LlmExchangeUsage};
 use autonoetic_types::background::ScheduledAction;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
@@ -892,6 +893,63 @@ pub fn log_gateway_causal_event(
 
     if let Err(e) = update_session_index(logger, actor_id, session_id, event_seq, action, &status_clone, payload.as_ref()) {
         tracing::warn!(error = %e, action, "Failed to update session index");
+    }
+
+    // Mirror orchestration into the same Markdown timeline as agent rows (`timeline.md`).
+    if action.starts_with("workflow.") {
+        append_workflow_gateway_timeline_best_effort(
+            logger,
+            actor_id,
+            session_id,
+            action,
+            &status_clone,
+            payload.as_ref(),
+        );
+    }
+}
+
+/// Best-effort: append one row to `.gateway/sessions/{base}/timeline.md` for workflow mirror events.
+fn append_workflow_gateway_timeline_best_effort(
+    logger: &CausalLogger,
+    actor_id: &str,
+    session_id: &str,
+    action: &str,
+    status: &EntryStatus,
+    payload: Option<&serde_json::Value>,
+) {
+    let Some(gateway_dir) = logger.path().parent().and_then(|p| p.parent()) else {
+        tracing::warn!(path = ?logger.path(), "workflow timeline: cannot resolve gateway dir");
+        return;
+    };
+    let base = base_session_id(session_id).to_string();
+    let mut writer = match SessionTimelineWriter::open(gateway_dir, &base) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!(
+                target: "session_timeline",
+                error = %e,
+                base = %base,
+                "workflow timeline: open failed"
+            );
+            return;
+        }
+    };
+    let ts = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = writer.append(
+        actor_id,
+        session_id,
+        &ts,
+        "gateway",
+        action,
+        status,
+        payload,
+    ) {
+        tracing::warn!(
+            target: "session_timeline",
+            error = %e,
+            action = %action,
+            "workflow timeline: append failed"
+        );
     }
 }
 

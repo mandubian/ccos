@@ -7,6 +7,7 @@
 //! - `runs/<workflow_id>/tasks/<task_id>.json` — [`TaskRun`](autonoetic_types::workflow::TaskRun)
 
 use crate::execution::gateway_root_dir;
+use crate::runtime::session_timeline::base_session_id;
 use crate::scheduler::store::{append_jsonl_record, read_json_file, write_json_file};
 use autonoetic_types::causal_chain::EntryStatus;
 use autonoetic_types::config::GatewayConfig;
@@ -16,6 +17,7 @@ use autonoetic_types::workflow::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
@@ -214,10 +216,141 @@ pub fn ensure_workflow_for_root_session(
     Ok(run)
 }
 
+fn workflow_session_dir(config: &GatewayConfig, root_session_id: &str) -> PathBuf {
+    gateway_root_dir(config)
+        .join("sessions")
+        .join(base_session_id(root_session_id))
+}
+
+fn workflow_run_status_snake(s: WorkflowRunStatus) -> &'static str {
+    match s {
+        WorkflowRunStatus::Active => "active",
+        WorkflowRunStatus::WaitingChildren => "waiting_children",
+        WorkflowRunStatus::BlockedApproval => "blocked_approval",
+        WorkflowRunStatus::Resumable => "resumable",
+        WorkflowRunStatus::Completed => "completed",
+        WorkflowRunStatus::Failed => "failed",
+        WorkflowRunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn task_run_status_snake(s: TaskRunStatus) -> &'static str {
+    match s {
+        TaskRunStatus::Pending => "pending",
+        TaskRunStatus::Runnable => "runnable",
+        TaskRunStatus::Running => "running",
+        TaskRunStatus::AwaitingApproval => "awaiting_approval",
+        TaskRunStatus::Paused => "paused",
+        TaskRunStatus::Succeeded => "succeeded",
+        TaskRunStatus::Failed => "failed",
+        TaskRunStatus::Cancelled => "cancelled",
+    }
+}
+
+/// Rewrite `.gateway/sessions/{root}/workflow_graph.md` from current workflow + task + event state.
+///
+/// Called after each append to `events.jsonl` so operators can open it beside `timeline.md`.
+pub fn refresh_workflow_graph_markdown(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<()> {
+    let run = match load_workflow_run(config, workflow_id)? {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    let tasks = list_task_runs_for_workflow(config, workflow_id)?;
+    let events = load_workflow_events(config, workflow_id)?;
+    let start = events.len().saturating_sub(16);
+    let recent = &events[start..];
+
+    let dir = workflow_session_dir(config, &run.root_session_id);
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("workflow_graph.md");
+
+    let mut body = String::new();
+    writeln!(body, "# Workflow graph: `{}`", run.root_session_id)?;
+    writeln!(body)?;
+    writeln!(
+        body,
+        "_Auto-updated when workflow orchestration events append (`events.jsonl`)._"
+    )?;
+    writeln!(body)?;
+    writeln!(body, "| Field | Value |")?;
+    writeln!(body, "|-------|-------|")?;
+    writeln!(body, "| workflow_id | `{}` |", run.workflow_id)?;
+    writeln!(
+        body,
+        "| status | `{}` |",
+        workflow_run_status_snake(run.status)
+    )?;
+    let lead = if run.lead_agent_id.is_empty() {
+        "_(unknown)_"
+    } else {
+        run.lead_agent_id.as_str()
+    };
+    writeln!(body, "| lead (planner) | `{}` |", lead)?;
+    if !run.pending_approval_ids.is_empty() {
+        writeln!(
+            body,
+            "| pending_approvals | `{}` |",
+            run.pending_approval_ids.join(", ")
+        )?;
+    }
+    writeln!(body)?;
+    writeln!(body, "## Tasks")?;
+    writeln!(body)?;
+    if tasks.is_empty() {
+        writeln!(body, "_(none yet)_")?;
+    } else {
+        for t in &tasks {
+            writeln!(
+                body,
+                "- **{}** · `{}` · _{}_ — `{}`",
+                t.agent_id,
+                t.task_id,
+                task_run_status_snake(t.status),
+                t.session_id
+            )?;
+        }
+    }
+    writeln!(body)?;
+    writeln!(body, "## Recent workflow events")?;
+    writeln!(body)?;
+    if recent.is_empty() {
+        writeln!(body, "_(none)_")?;
+    } else {
+        for e in recent {
+            let tid = e.task_id.as_deref().unwrap_or("—");
+            let ts_short: String = e.occurred_at.chars().take(22).collect();
+            writeln!(
+                body,
+                "- `{}` · **{}** · task `{}`",
+                ts_short, e.event_type, tid
+            )?;
+        }
+    }
+    writeln!(body)?;
+    writeln!(body, "---")?;
+    writeln!(
+        body,
+        "_Generated: {} (UTC)_",
+        chrono::Utc::now().to_rfc3339()
+    )?;
+
+    fs::write(&path, body)?;
+    Ok(())
+}
+
 /// Append one event to the workflow's `events.jsonl`.
 pub fn append_workflow_event(config: &GatewayConfig, event: &WorkflowEventRecord) -> anyhow::Result<()> {
     let path = workflow_events_path(config, &event.workflow_id);
-    append_jsonl_record(&path, event)
+    append_jsonl_record(&path, event)?;
+    if let Err(e) = refresh_workflow_graph_markdown(config, &event.workflow_id) {
+        tracing::warn!(
+            target: "session_timeline",
+            workflow_id = %event.workflow_id,
+            error = %e,
+            "Failed to refresh workflow_graph.md"
+        );
+    }
+    Ok(())
 }
 
 /// Write or replace a task record and refresh `workflow.active_task_ids`.
@@ -457,5 +590,24 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert!(listed.iter().any(|t| t.task_id == t1));
         assert!(listed.iter().any(|t| t.task_id == t2));
+    }
+
+    #[test]
+    fn workflow_graph_md_written_on_event_append() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "graph-root", Some("lead.agent")).unwrap();
+        let graph_path = crate::execution::gateway_root_dir(&cfg)
+            .join("sessions")
+            .join("graph-root")
+            .join("workflow_graph.md");
+        assert!(graph_path.exists());
+        let text = std::fs::read_to_string(&graph_path).unwrap();
+        assert!(text.contains(&wf.workflow_id));
+        assert!(text.contains("graph-root"));
+        assert!(text.contains("lead.agent"));
+        assert!(text.contains("workflow.started") || text.contains("Recent workflow"));
     }
 }
