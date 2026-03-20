@@ -16,6 +16,7 @@ use autonoetic_types::workflow::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +248,37 @@ pub fn load_task_run(
     Ok(Some(read_json_file(&p)?))
 }
 
+/// List all persisted [`TaskRun`] records under `runs/<workflow_id>/tasks/`.
+pub fn list_task_runs_for_workflow(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Vec<TaskRun>> {
+    let dir: PathBuf = workflow_run_dir(config, workflow_id).join("tasks");
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<TaskRun> = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        match read_json_file::<TaskRun>(&path) {
+            Ok(t) => out.push(t),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skip invalid task json");
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.task_id.cmp(&b.task_id))
+    });
+    Ok(out)
+}
+
 /// Update task status (and optional result summary) and append a completion-style event.
 pub fn update_task_run_status(
     config: &GatewayConfig,
@@ -394,5 +426,36 @@ mod tests {
         let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
         assert!(!events.is_empty());
         assert_eq!(events[0].event_type, "workflow.started");
+    }
+
+    #[test]
+    fn list_task_runs_for_workflow_sorts_and_loads() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "root-list", None).unwrap();
+        let t1 = new_task_id();
+        let t2 = new_task_id();
+        let ts = now_rfc3339();
+        for (tid, agent) in [(&t1, "a.one"), (&t2, "a.two")] {
+            let task = TaskRun {
+                task_id: (*tid).clone(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: agent.to_string(),
+                session_id: format!("root-list/{agent}-x"),
+                parent_session_id: "root-list".to_string(),
+                status: TaskRunStatus::Running,
+                created_at: ts.clone(),
+                updated_at: ts.clone(),
+                source_agent_id: None,
+                result_summary: None,
+            };
+            save_task_run(&cfg, &task).unwrap();
+        }
+        let listed = list_task_runs_for_workflow(&cfg, &wf.workflow_id).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|t| t.task_id == t1));
+        assert!(listed.iter().any(|t| t.task_id == t2));
     }
 }

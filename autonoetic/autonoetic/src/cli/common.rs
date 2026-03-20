@@ -320,6 +320,17 @@ pub enum TraceCommands {
         #[arg(long)]
         follow: bool,
     },
+    /// Show a text workflow graph from the durable store (root session id or `wf-…`)
+    Graph {
+        /// Root session id (same tree as `agent.spawn` root) or a `wf-…` workflow id
+        session_or_workflow: String,
+        /// Emit machine-readable JSON (with `--follow`, one minified snapshot per poll line)
+        #[arg(long)]
+        json: bool,
+        /// Refresh the graph every second (clears the terminal when not using `--json`)
+        #[arg(long)]
+        follow: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -177,6 +177,19 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             }
+            cli::common::TraceCommands::Graph {
+                session_or_workflow,
+                json,
+                follow,
+            } => {
+                cli::trace::handle_trace_graph(
+                    &config_path,
+                    session_or_workflow,
+                    *json,
+                    *follow,
+                )
+                .await?;
+            }
         },
 
         Commands::Skill(args) => match &args.command {
