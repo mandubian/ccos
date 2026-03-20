@@ -231,6 +231,12 @@ pub struct ApprovalRequest {
     pub reason: Option<String>,
     #[serde(default)]
     pub evidence_ref: Option<String>,
+    /// Workflow this approval belongs to (for task-level unblocking on resolution).
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// Task this approval blocks (unblocked on approval resolution).
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -251,6 +257,12 @@ pub struct ApprovalDecision {
     pub decided_by: String,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Workflow this approval belongs to (copied from ApprovalRequest).
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// Task this approval blocks (copied from ApprovalRequest).
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 fn default_true() -> bool {

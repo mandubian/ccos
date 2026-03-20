@@ -147,6 +147,229 @@ async fn run_scheduler_tick_at(
         .await?;
     }
 
+    // Process queued async workflow tasks (Phase 2)
+    if let Err(e) = process_queued_workflow_tasks(execution).await {
+        tracing::warn!(error = %e, "Failed to process queued workflow tasks");
+    }
+
+    Ok(())
+}
+
+/// Process queued workflow tasks: dequeue, create TaskRun records, and spawn child agents.
+///
+/// Called by the scheduler tick after processing background agents.
+/// Each queued task is dequeued, marked as Running, and launched as a background tokio task.
+/// The tokio task runs `spawn_agent_once` and updates the TaskRun on completion.
+pub async fn process_queued_workflow_tasks(
+    execution: Arc<crate::execution::GatewayExecutionService>,
+) -> anyhow::Result<()> {
+    let config = execution.config();
+    let queued = workflow_store::load_all_queued_tasks(&config)?;
+    if queued.is_empty() {
+        return Ok(());
+    }
+
+    tracing::info!(
+        target: "workflow",
+        count = queued.len(),
+        "Processing queued workflow tasks"
+    );
+
+    for queued_task in queued {
+        // Dequeue first so the scheduler doesn't pick it up again
+        if let Err(e) = workflow_store::dequeue_task(
+            &config,
+            &queued_task.workflow_id,
+            &queued_task.task_id,
+        ) {
+            tracing::warn!(
+                target: "workflow",
+                task_id = %queued_task.task_id,
+                error = %e,
+                "Failed to dequeue task"
+            );
+            continue;
+        }
+
+        // Create or update the TaskRun to Running
+        let ts = chrono::Utc::now().to_rfc3339();
+        let task_run = autonoetic_types::workflow::TaskRun {
+            task_id: queued_task.task_id.clone(),
+            workflow_id: queued_task.workflow_id.clone(),
+            agent_id: queued_task.agent_id.clone(),
+            session_id: queued_task.child_session_id.clone(),
+            parent_session_id: queued_task.parent_session_id.clone(),
+            status: autonoetic_types::workflow::TaskRunStatus::Running,
+            created_at: ts.clone(),
+            updated_at: ts,
+            source_agent_id: Some(queued_task.source_agent_id.clone()),
+            result_summary: None,
+            join_group: queued_task.join_group.clone(),
+        };
+        if let Err(e) = workflow_store::save_task_run(&config, &task_run) {
+            tracing::warn!(
+                target: "workflow",
+                task_id = %queued_task.task_id,
+                error = %e,
+                "Failed to save task run"
+            );
+            continue;
+        }
+
+        // Emit task.started event
+        let _ = workflow_store::append_workflow_event(
+            &config,
+            &autonoetic_types::workflow::WorkflowEventRecord {
+                event_id: format!("wevt-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+                workflow_id: queued_task.workflow_id.clone(),
+                task_id: Some(queued_task.task_id.clone()),
+                event_type: "task.started".to_string(),
+                payload: serde_json::json!({
+                    "agent_id": queued_task.agent_id,
+                    "child_session_id": queued_task.child_session_id,
+                }),
+                occurred_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+
+        // Spawn background execution
+        let exec = execution.clone();
+        let agent_id = queued_task.agent_id.clone();
+        let message = queued_task.message.clone();
+        let session_id = queued_task.child_session_id.clone();
+        let source_id = queued_task.source_agent_id.clone();
+        let metadata = queued_task.metadata.clone();
+        let wf_id = queued_task.workflow_id.clone();
+        let t_id = queued_task.task_id.clone();
+        let cfg = config.clone();
+
+        tokio::spawn(async move {
+            tracing::info!(
+                target: "workflow",
+                task_id = %t_id,
+                agent_id = %agent_id,
+                "Starting async task execution"
+            );
+
+            // Load previous task checkpoint (if any) and checkpoint: starting execution
+            let prev_checkpoint = workflow_store::load_task_checkpoint(&cfg, &wf_id, &t_id).ok().flatten();
+            let checkpoint_context = if let Some(ref prev) = prev_checkpoint {
+                tracing::info!(
+                    target: "workflow",
+                    task_id = %t_id,
+                    prev_step = %prev.step,
+                    prev_version = prev.version,
+                    "Resuming task from checkpoint"
+                );
+                serde_json::json!({
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "message_preview": &message[..message.len().min(120)],
+                    "resuming_from": { "step": prev.step, "version": prev.version, "state": prev.state },
+                })
+            } else {
+                serde_json::json!({
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "message_preview": &message[..message.len().min(120)],
+                })
+            };
+            let _ = workflow_store::checkpoint_task(
+                &cfg,
+                &wf_id,
+                &t_id,
+                "starting".to_string(),
+                checkpoint_context,
+            );
+
+            let result = exec
+                .spawn_agent_once(
+                    &agent_id,
+                    &message,
+                    &session_id,
+                    Some(&source_id),
+                    false,
+                    None,
+                    metadata.as_ref(),
+                )
+                .await;
+
+            match result {
+                Ok(spawn_result) => {
+                    let summary = spawn_result.assistant_reply.as_ref().map(|s| {
+                        const MAX: usize = 512;
+                        if s.len() <= MAX {
+                            s.clone()
+                        } else {
+                            format!("{}…", &s[..MAX])
+                        }
+                    });
+                    if let Err(e) = workflow_store::update_task_run_status(
+                        &cfg,
+                        &wf_id,
+                        &t_id,
+                        autonoetic_types::workflow::TaskRunStatus::Succeeded,
+                        summary,
+                    ) {
+                        tracing::warn!(
+                            target: "workflow",
+                            error = %e,
+                            "Failed to persist async task completion"
+                        );
+                    }
+                    tracing::info!(
+                        target: "workflow",
+                        task_id = %t_id,
+                        "Async task completed successfully"
+                    );
+                    // Task checkpoint: completed
+                    let _ = workflow_store::checkpoint_task(
+                        &cfg,
+                        &wf_id,
+                        &t_id,
+                        "completed".to_string(),
+                        serde_json::json!({
+                            "status": "succeeded",
+                            "result_summary": spawn_result.assistant_reply.as_ref().map(|s| &s[..s.len().min(200)]),
+                        }),
+                    );
+                }
+                Err(e) => {
+                    if let Err(inner) = workflow_store::update_task_run_status(
+                        &cfg,
+                        &wf_id,
+                        &t_id,
+                        autonoetic_types::workflow::TaskRunStatus::Failed,
+                        Some(e.to_string()),
+                    ) {
+                        tracing::warn!(
+                            target: "workflow",
+                            error = %inner,
+                            "Failed to persist async task failure"
+                        );
+                    }
+                    tracing::warn!(
+                        target: "workflow",
+                        task_id = %t_id,
+                        error = %e,
+                        "Async task failed"
+                    );
+                    // Task checkpoint: failed
+                    let _ = workflow_store::checkpoint_task(
+                        &cfg,
+                        &wf_id,
+                        &t_id,
+                        "failed".to_string(),
+                        serde_json::json!({
+                            "status": "failed",
+                            "error": e.to_string(),
+                        }),
+                    );
+                }
+            }
+        });
+    }
+
     Ok(())
 }
 

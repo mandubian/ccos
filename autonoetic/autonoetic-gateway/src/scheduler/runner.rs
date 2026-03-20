@@ -136,6 +136,19 @@ pub async fn handle_due_wake(
                         .pending_scheduled_action
                         .as_ref()
                         .and_then(|a| a.evidence_ref()),
+                    // Try to bind to workflow + task
+                    workflow_id: {
+                        let root = crate::runtime::content_store::root_session_id(session_id);
+                        crate::scheduler::resolve_workflow_id_for_root_session(config.as_ref(), &root).ok().flatten()
+                    },
+                    task_id: {
+                        let root = crate::runtime::content_store::root_session_id(session_id);
+                        let wf_id = crate::scheduler::resolve_workflow_id_for_root_session(config.as_ref(), &root).ok().flatten();
+                        match wf_id {
+                            Some(wf) => crate::scheduler::resolve_task_id_for_session(config.as_ref(), &wf, session_id).ok().flatten(),
+                            None => None,
+                        }
+                    },
                 };
                 super::store::write_json_file(
                     &super::approval::pending_approvals_dir(config.as_ref())

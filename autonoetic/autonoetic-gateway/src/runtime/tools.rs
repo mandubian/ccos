@@ -884,6 +884,12 @@ impl NativeTool for SandboxExecTool {
                     requires_approval: true,
                     evidence_ref: None,
                 };
+                // Resolve workflow_id from session
+                let approval_workflow_id = {
+                    let sid = session_id.unwrap_or("");
+                    let root = crate::runtime::content_store::root_session_id(sid);
+                    crate::scheduler::resolve_workflow_id_for_root_session(cfg, &root).ok().flatten()
+                };
                 let request = autonoetic_types::background::ApprovalRequest {
                     request_id: request_id.clone(),
                     agent_id: manifest.agent.id.clone(),
@@ -895,6 +901,14 @@ impl NativeTool for SandboxExecTool {
                         remote_analysis.summary
                     )),
                     evidence_ref: None,
+                    // Bind to workflow + task if available
+                    workflow_id: approval_workflow_id.as_ref().map(|w| w.clone()),
+                    task_id: match (&approval_workflow_id, session_id) {
+                        (Some(wf_id), Some(sid)) => {
+                            crate::scheduler::resolve_task_id_for_session(cfg, wf_id, sid).ok().flatten()
+                        }
+                        _ => None,
+                    },
                 };
                 let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
                     .join(format!("{request_id}.json"));
@@ -3387,6 +3401,14 @@ struct SpawnAgentArgs {
     metadata: Option<serde_json::Value>,
     #[serde(default)]
     session_id: Option<String>,
+    /// When true, enqueue the task for async execution and return immediately with task_id.
+    /// The scheduler will execute the child agent in the background.
+    /// Use workflow.wait to check task status.
+    #[serde(default)]
+    r#async: bool,
+    /// Join group name. Tasks in the same join group are awaited together by the planner.
+    #[serde(default)]
+    join_group: Option<String>,
 }
 
 pub struct AgentSpawnTool;
@@ -3406,14 +3428,16 @@ impl NativeTool for AgentSpawnTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Delegate the current task to an existing specialist agent and receive its reply in-session.".to_string(),
+            description: "Delegate a task to a specialist agent. With async=false (default), blocks until the child completes and returns its reply. With async=true, returns immediately with a task_id — use workflow.wait to check status. Spawn multiple children in parallel with async=true, then wait for all of them.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "agent_id": { "type": "string" },
                     "message": { "type": "string" },
                     "metadata": { "type": "object" },
-                    "session_id": { "type": "string" }
+                    "session_id": { "type": "string" },
+                    "async": { "type": "boolean", "description": "If true, enqueue for background execution and return immediately with task_id. Default: false (synchronous)." },
+                    "join_group": { "type": "string", "description": "Optional group name for join semantics. Tasks in the same group are awaited together before planner resumes." }
                 },
                 "required": ["agent_id", "message"],
                 "additionalProperties": false
@@ -3508,22 +3532,25 @@ impl NativeTool for AgentSpawnTool {
         };
         let gw_config = config.unwrap_or(&fallback_gateway_config);
 
-        // Role-agnostic: block delegation while any approval for this *root* session is still
-        // pending (sandbox.exec, agent.install, …). No knowledge of planner vs specialist — only
-        // session roots and on-disk pending state.
-        let root = crate::runtime::content_store::root_session_id(&resolved_session_id);
-        let pending = crate::scheduler::approval::pending_approval_requests_for_root(
-            gw_config,
-            root,
-        )?;
-        if !pending.is_empty() {
-            let ids: Vec<String> = pending.iter().map(|r| r.request_id.clone()).collect();
-            return Err(anyhow::anyhow!(
-                "Cannot delegate (agent.spawn) while approval(s) are pending for this session. Pending request id(s): {}. Approve or reject with `autonoetic gateway approvals approve|reject <id> --config <path>`, then continue.",
-                ids.join(", ")
-            ));
+        // Role-agnostic: block synchronous delegation while any approval for this *root*
+        // session is still pending. Async spawn (args.async) is NOT blocked — it queues
+        // independently and the scheduler picks it up regardless of approval state.
+        if !args.r#async {
+            let root_for_approval_check = crate::runtime::content_store::root_session_id(&resolved_session_id);
+            let pending = crate::scheduler::approval::pending_approval_requests_for_root(
+                gw_config,
+                root_for_approval_check,
+            )?;
+            if !pending.is_empty() {
+                let ids: Vec<String> = pending.iter().map(|r| r.request_id.clone()).collect();
+                return Err(anyhow::anyhow!(
+                    "Cannot delegate (agent.spawn) while approval(s) are pending for this session. Pending request id(s): {}. Approve or reject with `autonoetic gateway approvals approve|reject <id> --config <path>`, then continue.",
+                    ids.join(", ")
+                ));
+            }
         }
 
+        let root = crate::runtime::content_store::root_session_id(&resolved_session_id);
         let source_agent_id = manifest.agent.id.clone();
         let workflow = crate::scheduler::ensure_workflow_for_root_session(
             gw_config,
@@ -3567,6 +3594,7 @@ impl NativeTool for AgentSpawnTool {
             updated_at: ts,
             source_agent_id: Some(source_agent_id.clone()),
             result_summary: None,
+            join_group: None,
         };
         crate::scheduler::save_task_run(gw_config, &task)?;
         crate::scheduler::append_workflow_event(
@@ -3618,6 +3646,46 @@ impl NativeTool for AgentSpawnTool {
             }
         }
 
+        // --- Async branch: enqueue and return immediately ---
+        if args.r#async {
+            let queued = autonoetic_types::workflow::QueuedTaskRun {
+                task_id: task_id.clone(),
+                workflow_id: workflow_id.clone(),
+                agent_id: target_agent_id.clone(),
+                message: kickoff_message,
+                child_session_id: child_delegation_path.clone(),
+                parent_session_id: resolved_session_id.clone(),
+                source_agent_id: source_agent_id.clone(),
+                metadata: args.metadata.clone(),
+                join_group: args.join_group,
+                blocks_planner: true,
+                enqueued_at: Utc::now().to_rfc3339(),
+            };
+            crate::scheduler::enqueue_task(gw_config, &queued)?;
+
+            // Update task status from Running → Pending (it's queued, not yet executing)
+            let _ = crate::scheduler::update_task_run_status(
+                gw_config,
+                &workflow_id,
+                &task_id,
+                TaskRunStatus::Pending,
+                Some("queued".to_string()),
+            );
+
+            return serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "accepted": true,
+                "status": "queued",
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "agent_id": target_agent_id,
+                "session_id": child_delegation_path,
+                "message": "Task queued for async execution. Use workflow.wait with task_ids to check completion status."
+            }))
+            .map_err(Into::into);
+        }
+
+        // --- Synchronous branch (existing behavior) ---
         let spawn_future = async move {
             execution
                 .spawn_agent_once(
@@ -3698,6 +3766,280 @@ impl NativeTool for AgentSpawnTool {
                 Err(e)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Wait Tool
+// ---------------------------------------------------------------------------
+
+/// Checks the status of async tasks spawned with `agent.spawn(async: true)`.
+/// Supports blocking mode: polls until all tasks complete or timeout expires.
+pub struct WorkflowWaitTool;
+
+fn check_task_statuses(
+    config: &autonoetic_types::config::GatewayConfig,
+    workflow_id: &str,
+    task_ids: &[String],
+) -> (Vec<serde_json::Value>, bool, bool) {
+    let mut tasks_status = Vec::new();
+    let mut all_done = true;
+    let mut any_failed = false;
+
+    for task_id in task_ids {
+        let task = crate::scheduler::load_task_run(config, workflow_id, task_id).ok().flatten();
+        match task {
+            Some(t) => {
+                let is_terminal = matches!(
+                    t.status,
+                    autonoetic_types::workflow::TaskRunStatus::Succeeded
+                        | autonoetic_types::workflow::TaskRunStatus::Failed
+                        | autonoetic_types::workflow::TaskRunStatus::Cancelled
+                );
+                if !is_terminal {
+                    all_done = false;
+                }
+                if t.status == autonoetic_types::workflow::TaskRunStatus::Failed {
+                    any_failed = true;
+                }
+                let mut entry = serde_json::json!({
+                    "task_id": t.task_id,
+                    "agent_id": t.agent_id,
+                    "session_id": t.session_id,
+                    "status": format!("{:?}", t.status),
+                    "result_summary": t.result_summary,
+                });
+                // Consume task checkpoint: include last step/state
+                if let Ok(Some(cp)) = crate::scheduler::load_task_checkpoint(config, workflow_id, &t.task_id) {
+                    entry["checkpoint_step"] = serde_json::Value::String(cp.step);
+                    entry["checkpoint_version"] = serde_json::json!(cp.version);
+                    if cp.state != serde_json::Value::Null {
+                        entry["checkpoint_state"] = cp.state;
+                    }
+                }
+                tasks_status.push(entry);
+            }
+            None => {
+                let queued = crate::scheduler::load_queued_tasks(config, workflow_id)
+                    .unwrap_or_default();
+                let is_queued = queued.iter().any(|q| q.task_id == *task_id);
+                if is_queued {
+                    all_done = false;
+                    tasks_status.push(serde_json::json!({
+                        "task_id": task_id,
+                        "status": "queued",
+                    }));
+                } else {
+                    tasks_status.push(serde_json::json!({
+                        "task_id": task_id,
+                        "status": "not_found",
+                    }));
+                }
+            }
+        }
+    }
+    (tasks_status, all_done, any_failed)
+}
+
+impl NativeTool for WorkflowWaitTool {
+    fn name(&self) -> &'static str {
+        "workflow.wait"
+    }
+
+    fn is_available(&self, manifest: &AgentManifest) -> bool {
+        manifest
+            .capabilities
+            .iter()
+            .any(|cap| matches!(cap, Capability::AgentSpawn { .. }))
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().to_string(),
+            description: "Wait for async tasks to complete. Pass task_ids from agent.spawn(async=true). With timeout_secs=0 (default), returns current status immediately. With timeout_secs>0, polls until all tasks finish or timeout expires — use this to block until children complete before proceeding.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of task IDs to wait for (from agent.spawn responses with async=true)."
+                    },
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Optional workflow ID. If omitted, resolved from the current session's root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 300,
+                        "description": "Max seconds to wait. 0 = check once and return (default). >0 = poll until all tasks finish or timeout."
+                    },
+                    "poll_interval_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30,
+                        "description": "Seconds between status polls when blocking. Default: 2."
+                    }
+                },
+                "required": ["task_ids"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        manifest: &AgentManifest,
+        _policy: &PolicyEngine,
+        agent_dir: &Path,
+        _gateway_dir: Option<&Path>,
+        arguments_json: &str,
+        session_id: Option<&str>,
+        _turn_id: Option<&str>,
+        config: Option<&autonoetic_types::config::GatewayConfig>,
+    ) -> anyhow::Result<String> {
+        #[derive(Deserialize)]
+        struct Args {
+            task_ids: Vec<String>,
+            #[serde(default)]
+            workflow_id: Option<String>,
+            #[serde(default)]
+            timeout_secs: Option<u64>,
+            #[serde(default)]
+            poll_interval_secs: Option<u64>,
+        }
+        let args: Args = serde_json::from_str(arguments_json)
+            .map_err(|e| anyhow::anyhow!("Invalid JSON arguments for '{}': {}", self.name(), e))?;
+
+        anyhow::ensure!(!args.task_ids.is_empty(), "task_ids must not be empty");
+
+        let agents_dir = agent_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
+
+        let fallback_config = GatewayConfig {
+            agents_dir: agents_dir.to_path_buf(),
+            ..GatewayConfig::default()
+        };
+        let gw_config = config.unwrap_or(&fallback_config);
+
+        // Resolve workflow_id from session if not provided
+        let workflow_id = match args.workflow_id {
+            Some(id) => id,
+            None => {
+                let sid = session_id.unwrap_or(&manifest.agent.id);
+                let root = crate::runtime::content_store::root_session_id(sid);
+                crate::scheduler::resolve_workflow_id_for_root_session(gw_config, &root)?
+                    .unwrap_or_else(|| "unknown".to_string())
+            }
+        };
+
+        let timeout_secs = args.timeout_secs.unwrap_or(0).min(300);
+        let poll_interval_secs = args.poll_interval_secs.unwrap_or(2).clamp(1, 30);
+
+        // Non-blocking mode: check once and return
+        if timeout_secs == 0 {
+            let (tasks_status, all_done, any_failed) =
+                check_task_statuses(gw_config, &workflow_id, &args.task_ids);
+            return serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "workflow_id": workflow_id,
+                "tasks": tasks_status,
+                "join_satisfied": all_done,
+                "any_failed": any_failed,
+                "waited_secs": 0,
+                "message": if all_done {
+                    if any_failed {
+                        "All tasks completed (some failed). Review task results and proceed."
+                    } else {
+                        "All tasks completed successfully. You may proceed with the results."
+                    }
+                } else {
+                    "Some tasks are still running. Call workflow.wait with timeout_secs > 0 to block until they finish, or continue with other work."
+                }
+            }))
+            .map_err(Into::into);
+        }
+
+        // Blocking mode: poll until join satisfied or timeout
+        let task_ids = args.task_ids.clone();
+        let wf_id = workflow_id.clone();
+        let gw_config_arc = std::sync::Arc::new(gw_config.clone());
+
+        let (tasks_status, all_done, any_failed, waited_secs) = if let Ok(handle) =
+            tokio::runtime::Handle::try_current()
+        {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    poll_until_join(
+                        gw_config_arc.as_ref(),
+                        &wf_id,
+                        &task_ids,
+                        timeout_secs,
+                        poll_interval_secs,
+                    )
+                    .await
+                })
+            })
+        } else {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                poll_until_join(
+                    gw_config_arc.as_ref(),
+                    &wf_id,
+                    &task_ids,
+                    timeout_secs,
+                    poll_interval_secs,
+                )
+                .await
+            })
+        };
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "workflow_id": workflow_id,
+            "tasks": tasks_status,
+            "join_satisfied": all_done,
+            "any_failed": any_failed,
+            "waited_secs": waited_secs,
+            "message": if all_done {
+                if any_failed {
+                    format!("All tasks completed after {}s (some failed). Review task results and proceed.", waited_secs)
+                } else {
+                    format!("All tasks completed successfully after {}s. You may proceed with the results.", waited_secs)
+                }
+            } else {
+                format!("Timed out after {}s. Some tasks are still running. Call workflow.wait again or proceed with partial results.", waited_secs)
+            }
+        }))
+        .map_err(Into::into)
+    }
+}
+
+async fn poll_until_join(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    task_ids: &[String],
+    timeout_secs: u64,
+    poll_interval_secs: u64,
+) -> (Vec<serde_json::Value>, bool, bool, u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut waited_secs = 0u64;
+
+    loop {
+        let (tasks_status, all_done, any_failed) = check_task_statuses(config, workflow_id, task_ids);
+        if all_done {
+            return (tasks_status, true, any_failed, waited_secs);
+        }
+
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return (tasks_status, false, any_failed, waited_secs);
+        }
+
+        let remaining = (deadline - now).as_secs().min(poll_interval_secs).max(1);
+        waited_secs += remaining;
+        tokio::time::sleep(std::time::Duration::from_secs(remaining)).await;
     }
 }
 
@@ -4071,6 +4413,12 @@ impl NativeTool for AgentInstallTool {
                         let bundle = store.inspect(&args.artifact_id).ok()?;
                         Some(bundle.digest)
                     });
+                    // Resolve workflow_id from session
+                    let approval_workflow_id = {
+                        let sid = session_id.unwrap_or("");
+                        let root = crate::runtime::content_store::root_session_id(sid);
+                        crate::scheduler::resolve_workflow_id_for_root_session(cfg, &root).ok().flatten()
+                    };
                     let request = ApprovalRequest {
                         request_id: request_id.clone(),
                         agent_id: manifest.agent.id.clone(),
@@ -4084,6 +4432,14 @@ impl NativeTool for AgentInstallTool {
                         created_at: Utc::now().to_rfc3339(),
                         reason: Some("agent.install requires human approval".to_string()),
                         evidence_ref: None,
+                        // Bind to workflow + task if available
+                        workflow_id: approval_workflow_id.as_ref().map(|w| w.clone()),
+                        task_id: match (&approval_workflow_id, session_id) {
+                            (Some(wf_id), Some(sid)) => {
+                                crate::scheduler::resolve_task_id_for_session(cfg, wf_id, sid).ok().flatten()
+                            }
+                            _ => None,
+                        },
                     };
                     let pending_path = crate::scheduler::store::pending_approvals_dir(cfg)
                         .join(format!("{request_id}.json"));
@@ -5014,6 +5370,8 @@ pub fn default_registry() -> NativeToolRegistry {
     registry.register(Box::new(AgentInstallTool));
     registry.register(Box::new(AgentExistsTool));
     registry.register(Box::new(AgentDiscoverTool));
+    // Workflow tools
+    registry.register(Box::new(WorkflowWaitTool));
     // Promotion tools
     registry.register(Box::new(crate::runtime::tools_promotion::PromotionRecordTool));
     registry.register(Box::new(crate::runtime::tools_promotion::PromotionQueryTool));
@@ -5215,8 +5573,8 @@ mod tests {
 
         let manifest_spawn = test_manifest(vec![Capability::AgentSpawn { max_children: 4 }]);
         let defs_spawn = registry.available_definitions(&manifest_spawn);
-        // agent.spawn, agent.exists, agent.discover = 3 (agent.install is evolution-role only)
-        assert_eq!(defs_spawn.len(), 3);
+        // agent.spawn, agent.exists, agent.discover, workflow.wait = 4 (agent.install is evolution-role only)
+        assert_eq!(defs_spawn.len(), 4);
         assert!(defs_spawn.iter().any(|d| d.name == "agent.spawn"));
         assert!(
             !defs_spawn.iter().any(|d| d.name == "agent.install"),
@@ -5224,6 +5582,7 @@ mod tests {
         );
         assert!(defs_spawn.iter().any(|d| d.name == "agent.exists"));
         assert!(defs_spawn.iter().any(|d| d.name == "agent.discover"));
+        assert!(defs_spawn.iter().any(|d| d.name == "workflow.wait"));
 
         // agent.install should be available to evolution roles
         let manifest_evolution =

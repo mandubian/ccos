@@ -5,12 +5,14 @@
 //! executes the approved install using the stored payload.
 
 use crate::execution::{gateway_actor_id, gateway_root_dir, init_gateway_causal_logger};
-use crate::runtime::tools::{AgentInstallTool, NativeTool};
 use crate::policy::PolicyEngine;
+use crate::runtime::tools::{AgentInstallTool, NativeTool};
 use crate::tracing::{EventScope, SessionId, TraceSession};
-use autonoetic_types::background::{ApprovalDecision, ApprovalRequest, ApprovalStatus, ScheduledAction};
-use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::agent::AgentManifest;
+use autonoetic_types::background::{
+    ApprovalDecision, ApprovalRequest, ApprovalStatus, ScheduledAction,
+};
+use autonoetic_types::config::GatewayConfig;
 use std::sync::Arc;
 
 pub use super::store::{
@@ -94,7 +96,7 @@ pub fn approve_request(
     // Directly execute the approved action (install or write).
     // This ensures the action completes even if the caller session has ended.
     let install_result = execute_approved_action(config, &decision);
-    
+
     // ALWAYS notify the waiting session so the LLM knows the agent is available
     // and can use it. This enables the LLM to automatically use the new agent.
     if let Err(e) = &install_result {
@@ -105,7 +107,7 @@ pub fn approve_request(
             "Failed to execute approved action directly; agent may need manual retry"
         );
     }
-    
+
     // Always resume session to notify LLM - either with success or error info
     if let Err(e) = resume_session_after_approval(config, &decision, install_result.is_ok()) {
         tracing::warn!(
@@ -115,6 +117,9 @@ pub fn approve_request(
             "Failed to send session resume notification"
         );
     }
+
+    // Unblock the task in the workflow (if bound to one)
+    unblock_task_on_approval(config, &decision);
 
     Ok(decision)
 }
@@ -132,10 +137,13 @@ pub fn reject_request(
         reason,
         ApprovalStatus::Rejected,
     )?;
-    
+
     // Resume the caller's session so they can handle the rejection
     resume_session_after_approval(config, &decision, false)?;
-    
+
+    // Unblock the task in the workflow (marks as Failed)
+    unblock_task_on_approval(config, &decision);
+
     Ok(decision)
 }
 
@@ -154,10 +162,10 @@ fn resume_session_after_approval(
     // Resume for agent_install and sandbox_exec actions - both have a caller waiting
     let is_supported_action = matches!(
         &decision.action,
-        autonoetic_types::background::ScheduledAction::AgentInstall { .. } |
-        autonoetic_types::background::ScheduledAction::SandboxExec { .. }
+        autonoetic_types::background::ScheduledAction::AgentInstall { .. }
+            | autonoetic_types::background::ScheduledAction::SandboxExec { .. }
     );
-    
+
     if !is_supported_action {
         tracing::warn!(
             target: "approval",
@@ -167,12 +175,12 @@ fn resume_session_after_approval(
         );
         return Ok(());
     }
-    
+
     let session_id = &decision.session_id;
     if session_id.is_empty() {
         return Ok(());
     }
-    
+
     tracing::info!(
         target: "approval",
         request_id = %decision.request_id,
@@ -180,13 +188,13 @@ fn resume_session_after_approval(
         status = ?decision.status,
         "Resuming session after approval resolution"
     );
-    
+
     // Build a synthetic message that the gateway will route to the waiting agent
     let status_str = match decision.status {
         ApprovalStatus::Approved => "approved",
         ApprovalStatus::Rejected => "rejected",
     };
-    
+
     // Extract agent_id and build status message based on action type
     let (agent_id, status_message) = match &decision.action {
         autonoetic_types::background::ScheduledAction::AgentInstall { agent_id, .. } => {
@@ -219,9 +227,15 @@ fn resume_session_after_approval(
             // nested session names.
             (decision.agent_id.clone(), msg)
         }
-        _ => ("unknown".to_string(), format!("Approval {} for request {}", status_str, decision.request_id)),
+        _ => (
+            "unknown".to_string(),
+            format!(
+                "Approval {} for request {}",
+                status_str, decision.request_id
+            ),
+        ),
     };
-    
+
     // Write signal file for CLI to detect (enables auto-resume)
     let signal = super::signal::Signal::ApprovalResolved {
         request_id: decision.request_id.clone(),
@@ -231,9 +245,14 @@ fn resume_session_after_approval(
         message: status_message.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
-    
+
     // Write signal to the child session (the original waiting runtime).
-    if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), session_id, &decision.request_id, &signal) {
+    if let Err(e) = super::signal::write_signal(
+        &config.agents_dir.join(".gateway"),
+        session_id,
+        &decision.request_id,
+        &signal,
+    ) {
         tracing::warn!(
             target: "approval",
             request_id = %decision.request_id,
@@ -241,7 +260,7 @@ fn resume_session_after_approval(
             "Failed to write signal file"
         );
     }
-    
+
     // Session ID format: "parent_session/child_agent-uuid"
     let parent_session_id = session_id.split('/').next().unwrap_or(session_id);
 
@@ -256,7 +275,7 @@ fn resume_session_after_approval(
             parent_session = %parent_session_id,
             "Also notifying parent session of approval resolution"
         );
-        
+
         // Write signal to parent session too
         let parent_signal = super::signal::Signal::ApprovalResolved {
             request_id: decision.request_id.clone(),
@@ -266,8 +285,13 @@ fn resume_session_after_approval(
             message: status_message.clone(),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
-        
-        if let Err(e) = super::signal::write_signal(&config.agents_dir.join(".gateway"), parent_session_id, &decision.request_id, &parent_signal) {
+
+        if let Err(e) = super::signal::write_signal(
+            &config.agents_dir.join(".gateway"),
+            parent_session_id,
+            &decision.request_id,
+            &parent_signal,
+        ) {
             tracing::warn!(
                 target: "approval",
                 request_id = %decision.request_id,
@@ -277,7 +301,7 @@ fn resume_session_after_approval(
             );
         }
     }
-    
+
     // Delivery ownership is gateway-side and durable:
     // this function only persists signals. Gateway pollers and channel-specific
     // consumers (such as the chat TUI on its own socket) perform delivery + ack.
@@ -292,12 +316,52 @@ fn resume_session_after_approval(
         target_session = %target_session,
         "Approval notification queued for gateway-owned delivery"
     );
-    
+
     Ok(())
 }
 
 fn should_notify_parent_session(action: &ScheduledAction, session_id: &str) -> bool {
     matches!(action, ScheduledAction::AgentInstall { .. }) && session_id.contains('/')
+}
+
+/// On approval resolution, update the blocked task's status and emit workflow events.
+fn unblock_task_on_approval(config: &GatewayConfig, decision: &ApprovalDecision) {
+    let (Some(wf_id), Some(t_id)) = (&decision.workflow_id, &decision.task_id) else {
+        return;
+    };
+    let new_status = match decision.status {
+        ApprovalStatus::Approved => autonoetic_types::workflow::TaskRunStatus::Runnable,
+        ApprovalStatus::Rejected => autonoetic_types::workflow::TaskRunStatus::Failed,
+    };
+    if let Err(e) = super::workflow_store::update_task_run_status(
+        config,
+        wf_id,
+        t_id,
+        new_status,
+        Some(format!(
+            "approval_{}",
+            match decision.status {
+                ApprovalStatus::Approved => "approved",
+                ApprovalStatus::Rejected => "rejected",
+            }
+        )),
+    ) {
+        tracing::warn!(
+            target: "approval",
+            workflow_id = %wf_id,
+            task_id = %t_id,
+            error = %e,
+            "Failed to unblock task on approval resolution"
+        );
+    } else {
+        tracing::info!(
+            target: "approval",
+            workflow_id = %wf_id,
+            task_id = %t_id,
+            status = ?decision.status,
+            "Task unblocked after approval resolution"
+        );
+    }
 }
 
 /// Execute the approved action (agent.install or file write).
@@ -333,16 +397,25 @@ fn execute_approved_write(
     };
 
     // Load the stored payload (created when the write was requested)
-    let payload_path = pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
-    
+    let payload_path =
+        pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
+
     let (write_path, write_content) = if payload_path.exists() {
         // Use stored payload
         let payload_json = std::fs::read_to_string(&payload_path)?;
         let payload: serde_json::Value = serde_json::from_str(&payload_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse stored payload: {}", e))?;
-        
-        let p = payload.get("path").and_then(|v| v.as_str()).unwrap_or(path).to_string();
-        let c = payload.get("content").and_then(|v| v.as_str()).unwrap_or(content).to_string();
+
+        let p = payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(path)
+            .to_string();
+        let c = payload
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or(content)
+            .to_string();
         (p, c)
     } else {
         (path.clone(), content.clone())
@@ -350,7 +423,7 @@ fn execute_approved_write(
 
     // Find the agent directory from the request
     let agent_dir = config.agents_dir.join(&decision.agent_id);
-    
+
     tracing::info!(
         target: "approval",
         request_id = %decision.request_id,
@@ -403,16 +476,17 @@ fn execute_approved_install(
     config: &GatewayConfig,
     decision: &ApprovalDecision,
 ) -> anyhow::Result<()> {
+    use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
     use autonoetic_types::background::ScheduledAction;
-    use autonoetic_types::agent::{RuntimeDeclaration, AgentIdentity};
-    
+
     // Only handle agent_install actions
     let ScheduledAction::AgentInstall { agent_id, .. } = &decision.action else {
         return Ok(());
     };
-    
+
     // Load the stored install payload (created when approval was first requested)
-    let payload_path = pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
+    let payload_path =
+        pending_approvals_dir(config).join(format!("{}_payload.json", decision.request_id));
     if !payload_path.exists() {
         return Err(anyhow::anyhow!(
             "No stored payload found at {} for request {}; cannot auto-complete install",
@@ -420,41 +494,46 @@ fn execute_approved_install(
             decision.request_id
         ));
     }
-    
+
     // Use the requested agent's directory as the parent (e.g., specialized_builder.default)
     let parent_agent_id = &decision.agent_id;
     let parent_dir = config.agents_dir.join(parent_agent_id);
-    
+
     // Modify the stored payload to include install_approval_ref
     let payload_json = std::fs::read_to_string(&payload_path)?;
     let mut args_value: serde_json::Value = serde_json::from_str(&payload_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse stored install payload: {}", e))?;
-    
+
     // Add promotion_gate with install_approval_ref if not present
     if let Some(obj) = args_value.as_object_mut() {
         if !obj.contains_key("promotion_gate") {
-            obj.insert("promotion_gate".to_string(), serde_json::json!({
-                "evaluator_pass": true,
-                "auditor_pass": true,
-                "install_approval_ref": decision.request_id
-            }));
+            obj.insert(
+                "promotion_gate".to_string(),
+                serde_json::json!({
+                    "evaluator_pass": true,
+                    "auditor_pass": true,
+                    "install_approval_ref": decision.request_id
+                }),
+            );
         } else if let Some(gate) = obj.get_mut("promotion_gate") {
             if let Some(gate_obj) = gate.as_object_mut() {
-                gate_obj.insert("install_approval_ref".to_string(), 
-                    serde_json::Value::String(decision.request_id.clone()));
+                gate_obj.insert(
+                    "install_approval_ref".to_string(),
+                    serde_json::Value::String(decision.request_id.clone()),
+                );
             }
         }
     }
-    
+
     let arguments_json = args_value.to_string();
-    
+
     tracing::info!(
         target: "approval",
         request_id = %decision.request_id,
         agent_id = %agent_id,
         "Executing approved install directly via AgentInstallTool"
     );
-    
+
     // Build minimal parent manifest for the tool
     let parent_manifest = AgentManifest {
         version: "1.0".to_string(),
@@ -483,7 +562,7 @@ fn execute_approved_install(
         gateway_url: None,
         gateway_token: None,
     };
-    
+
     // Execute the install using the existing tool
     let tool = AgentInstallTool;
     let agent_dir = &parent_dir;
@@ -491,7 +570,7 @@ fn execute_approved_install(
     // `agents_dir/.gateway/`, not `agents_dir.parent()`.
     let gateway_path = gateway_root_dir(config);
     let policy = PolicyEngine::new(parent_manifest.clone());
-    
+
     match tool.execute(
         &parent_manifest,
         &policy,
@@ -510,7 +589,7 @@ fn execute_approved_install(
                 result = %result,
                 "Successfully auto-completed approved agent.install"
             );
-            
+
             // Log completion to causal chain
             let causal_logger = init_gateway_causal_logger(config)?;
             let mut trace_session = TraceSession::create_with_session_id(
@@ -528,10 +607,10 @@ fn execute_approved_install(
                     "executed_by": "gateway_auto_complete",
                 })),
             );
-            
+
             // Cleanup payload on success
             let _ = std::fs::remove_file(&payload_path);
-            
+
             Ok(())
         }
         Err(e) => Err(anyhow::anyhow!("Failed to execute approved install: {}", e)),
@@ -556,6 +635,8 @@ fn decide_request(
         decided_at: chrono::Utc::now().to_rfc3339(),
         decided_by: decided_by.to_string(),
         reason,
+        workflow_id: request.workflow_id.clone(),
+        task_id: request.task_id.clone(),
     };
     let target_dir = match status {
         ApprovalStatus::Approved => approved_approvals_dir(config),
@@ -657,6 +738,8 @@ mod tests {
             created_at: "2020-01-01T00:00:00Z".to_string(),
             reason: None,
             evidence_ref: None,
+            workflow_id: None,
+            task_id: None,
         };
         std::fs::write(
             pending.join("apr-test1234.json"),
@@ -699,6 +782,8 @@ mod tests {
             created_at: "2020-01-01T00:00:00Z".to_string(),
             reason: None,
             evidence_ref: None,
+            workflow_id: None,
+            task_id: None,
         };
         std::fs::write(
             pending.join("apr-a.json"),
@@ -741,6 +826,8 @@ mod tests {
             created_at: created.to_string(),
             reason: None,
             evidence_ref: None,
+            workflow_id: None,
+            task_id: None,
         };
         std::fs::write(
             pending.join("apr-second.json"),
@@ -766,6 +853,8 @@ mod tests {
             created_at: "2019-01-01T00:00:00Z".to_string(),
             reason: None,
             evidence_ref: None,
+            workflow_id: None,
+            task_id: None,
         };
         std::fs::write(
             pending.join("apr-install.json"),
@@ -773,8 +862,8 @@ mod tests {
         )
         .unwrap();
 
-        let list = super::pending_sandbox_exec_requests_for_session(&cfg, "sess/evaluator-1")
-            .unwrap();
+        let list =
+            super::pending_sandbox_exec_requests_for_session(&cfg, "sess/evaluator-1").unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].request_id, "apr-first");
         assert_eq!(list[1].request_id, "apr-second");

@@ -1041,6 +1041,37 @@ async fn check_signals(
                     );
                 }
             }
+            autonoetic_gateway::scheduler::signal::Signal::WorkflowJoinSatisfied {
+                workflow_id,
+                join_task_ids,
+                message,
+                ..
+            } => {
+                let icon = "✅";
+                app.add_message(
+                    MessageRole::Signal,
+                    format!(
+                        "{} Workflow join satisfied: {} ({} tasks completed)",
+                        icon,
+                        workflow_id,
+                        join_task_ids.len()
+                    ),
+                );
+
+                let payload = serde_json::json!({
+                    "type": "workflow_join_satisfied",
+                    "workflow_id": workflow_id,
+                    "join_task_ids": join_task_ids,
+                    "message": message,
+                })
+                .to_string();
+
+                let internal_id = app.next_id();
+                app.add_pending(internal_id);
+                if tx.send((internal_id, payload)).is_err() {
+                    app.remove_pending(internal_id);
+                }
+            }
         }
     }
     true

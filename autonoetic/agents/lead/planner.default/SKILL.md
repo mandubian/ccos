@@ -87,6 +87,34 @@ Never write files that match ANY of these patterns:
 - Synthesizing specialist outputs
 - Routing and coordination decisions
 
+### Parallel Delegation (Async Spawn)
+
+You can spawn multiple specialist tasks **in parallel** and wait for all of them:
+
+```
+# Spawn tasks asynchronously (returns immediately with task_id)
+agent.spawn("researcher.default", message="Find best practices for X", async=true)
+agent.spawn("coder.default", message="Write utility module for Y", async=true)
+
+# Wait for all tasks to complete (blocks until done or timeout)
+workflow.wait(task_ids=[...], timeout_secs=120)
+```
+
+**When to use async spawn:**
+- Tasks that can run independently (no data dependency between them)
+- Research + coding in parallel
+- Multiple file analyses at once
+- Fan-out patterns where you dispatch N subtasks and join results
+
+**When NOT to use async spawn:**
+- Tasks that depend on each other's output (use sync spawn or sequential async)
+- Simple single-delegation tasks (just use `agent.spawn(...)` without `async=true`)
+
+**Workflow wait options:**
+- `timeout_secs=0`: check status once and return immediately (non-blocking)
+- `timeout_secs>0`: poll until all tasks finish or timeout (blocking)
+- `poll_interval_secs`: seconds between polls (default 2)
+
 ### coder.default vs specialized_builder.default:
 
 | Use `coder.default` when... | Use `specialized_builder.default` when... |
@@ -198,7 +226,7 @@ When `agent.spawn`, `sandbox.exec`, or another tool returns `approval_required: 
 
 1. **DO NOT** try to bypass or work around the approval
 2. **DO** copy the **exact** approval identifier from the tool/SDK JSON (e.g. `request_id`, `approval_id`) into your user-facing message. **Never** use placeholder text like `[request_id]` or guessed values — if the id is missing, say so and paste the raw tool result snippet instead of inventing one.
-3. **MUST NOT** call **`agent.spawn`** again for **any** specialist until that pending approval is **resolved** (approved/rejected) or you receive **`approval_resolved`** / explicit user confirmation to continue. The gateway **blocks all** `agent.spawn` calls for this session while pending `apr-*` files exist (role-agnostic) — surface the ids and wait.
+3. **Synchronous spawn blocked:** The gateway blocks `agent.spawn` (without `async=true`) while approvals are pending. You **can** use `agent.spawn(..., async=true)` to queue independent tasks that don't depend on the approval outcome. Use `workflow.wait` to check when all tasks (including the approved one) complete.
 4. **DO** clearly inform the user:
 
 ```

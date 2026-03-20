@@ -561,6 +561,54 @@ impl AgentExecutor {
                     }
                     tracer.log_hibernate(&format!("{:?}", response.stop_reason));
 
+                    // Inject compact workflow summary if any tasks are tracked
+                    if let Some(cfg) = self.config.as_ref() {
+                        if let Ok(Some(summary)) = crate::scheduler::compact_workflow_summary(cfg, &session_id) {
+                            history.push(Message::system(format!(
+                                "[workflow status] {}",
+                                summary
+                            )));
+                            tracing::info!(
+                                target: "workflow",
+                                session_id = %session_id,
+                                summary = %summary,
+                                "Injected workflow summary at turn end"
+                            );
+                        }
+
+                        // Durable planner checkpoint at turn end
+                        let root = crate::runtime::content_store::root_session_id(&session_id);
+                        if let Ok(Some(wf_id)) = crate::scheduler::resolve_workflow_id_for_root_session(cfg, &root) {
+                            let planner_intent = response.text.trim();
+                            let context = serde_json::json!({
+                                "turn_id": turn_id,
+                                "session_id": session_id,
+                                "assistant_message_len": planner_intent.len(),
+                            });
+                            if let Err(e) = crate::scheduler::checkpoint_planner(
+                                cfg,
+                                &wf_id,
+                                if planner_intent.is_empty() {
+                                    format!("Turn {} ended", &turn_id[..turn_id.len().min(8)])
+                                } else {
+                                    let truncated = if planner_intent.len() > 200 {
+                                        format!("{}…", &planner_intent[..200])
+                                    } else {
+                                        planner_intent.to_string()
+                                    };
+                                    truncated
+                                },
+                                context,
+                            ) {
+                                tracing::debug!(
+                                    target: "workflow",
+                                    error = %e,
+                                    "Planner checkpoint skipped (no workflow or save failed)"
+                                );
+                            }
+                        }
+                    }
+
                     // Persist history to content store at hibernate points
                     if let Some(gateway_dir) = self.gateway_dir.as_ref() {
                         if let Err(e) = persist_history_to_content_store(
