@@ -189,11 +189,11 @@ pub struct GatewayConfig {
 /// Configuration for pluggable code analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeAnalysisConfig {
-    /// Provider for capability analysis: "pattern", "llm", "composite", "none"
+    /// Provider for capability analysis: "pattern", "python_ast", "llm", "composite", "none"
     #[serde(default = "default_capability_provider")]
     pub capability_provider: String,
 
-    /// Provider for security analysis: "pattern", "llm", "composite", "none"
+    /// Provider for security analysis: "pattern", "python_ast", "llm", "composite", "none"
     #[serde(default = "default_security_provider")]
     pub security_provider: String,
 

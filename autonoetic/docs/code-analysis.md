@@ -13,6 +13,24 @@ Autonoetic uses a **pluggable analysis architecture** for code security and capa
 
 ---
 
+## Gateway security goal (defense in depth)
+
+The gateway does **not** try to prove that code is harmless (that is impossible in general). Its job is to ensure that **sensitive behavior is not silent**: code must either **declare** the right capabilities, **pass** analysis, hit **policy** gates, or obtain **human approval** before high-risk operations proceed.
+
+| Layer | Mechanism | When it runs |
+|-------|-----------|----------------|
+| **1. Install — bundle analysis** | `AnalysisProvider` (default [`PatternAnalyzer`](../autonoetic-gateway/src/runtime/analysis/pattern.rs)) over **artifact files + SKILL.md** | Every `agent.install` |
+| **2. Install — capability contract** | Inferred vs declared capabilities; optional hard reject (`require_capabilities`) | `agent.install` |
+| **3. Install — human approval** | Risk-based policy (e.g. `NetworkAccess`, broad `WriteAccess`, background, scheduled actions) | When install is classified high-risk |
+| **4. Sandbox exec — scan + policy** | [`RemoteAccessAnalyzer`](../autonoetic-gateway/src/runtime/remote_access.rs) on resolved command/script text; `CodeExecution` shell policy; optional **approval** for remote-like patterns | Each `sandbox.exec` |
+| **5. Tool & sandbox boundary** | Capability-gated tools (`web.*`, `content.*`, …); bubblewrap sandbox | Runtime |
+
+**Why pluggable:** `AnalysisProvider` is the stable seam. Today: fast **pattern** (and optional **composite** / **LLM**). Tomorrow: the same trait can back a provider that invokes **Bandit**, **Semgrep**, or a **tree-sitter** AST walk—without rewriting `agent.install`.
+
+**Honest limits:** Dynamic imports, C extensions, reflection, and deliberately evasive code can bypass static checks. The architecture assumes **layered controls + stronger providers over time**, not a single perfect pass.
+
+---
+
 ## Architecture
 
 ```
@@ -63,6 +81,19 @@ Fast, deterministic analysis using pattern matching.
 - May have false positives/negatives
 - Limited to known patterns
 
+### PythonAstAnalyzer (`python_ast`)
+
+Runs a bundled **Python 3** script (`minimal_python_scan.py`) using only the **stdlib `ast`** module: walks imports and call sites for network-related modules, `open(..., write mode)`, file deletion helpers, `subprocess.*`, `os.system`, `eval`/`exec`.
+
+**Pros:**
+- No pip/Bandit/Semgrep install; only `python3` on `PATH`
+- More structure-aware than substring search for Python
+- If `python3` is missing or the script errors, **falls back to `PatternAnalyzer`**
+
+**Cons:**
+- Only `*.py` files in the install bundle are analyzed (SKILL.md body is not parsed as Python)
+- Runs a subprocess per analysis call (capability + security each invoke the script once when both providers are `python_ast`)
+
 **Detection Patterns:**
 
 | Pattern | Capability/Threat |
@@ -112,10 +143,10 @@ Combines multiple providers with escalation logic.
 ```yaml
 # Code analysis configuration for agent.install
 code_analysis:
-  # Provider for capability detection: "pattern", "llm", "composite", "none"
+  # Provider for capability detection: "pattern", "python_ast", "llm", "composite", "none"
   capability_provider: "pattern"
 
-  # Provider for security analysis: "pattern", "llm", "composite", "none"
+  # Provider for security analysis: "pattern", "python_ast", "llm", "composite", "none"
   security_provider: "pattern"
 
   # Require capabilities to be declared (reject install if missing)
@@ -138,7 +169,7 @@ code_analysis:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `capability_provider` | string | `"pattern"` | Provider for capability analysis |
+| `capability_provider` | string | `"pattern"` | Provider for capability analysis (`python_ast` = stdlib ast scan for `.py`) |
 | `security_provider` | string | `"pattern"` | Provider for security analysis |
 | `require_capabilities` | bool | `true` | Reject if code requires undeclared capabilities |
 | `require_approval_for` | list | `["NetworkAccess", "CodeExecution"]` | Capabilities requiring human approval |
@@ -323,11 +354,12 @@ When capability mismatch is detected, the install is rejected:
 - Gateway controls which provider is used
 - LLM analysis uses gateway's configured LLM, not agent's LLM
 
-### Analysis Results are Advisory
+### Analysis results vs enforcement
 
-- Capability mismatch → hard reject (unless `require_capabilities: false`)
-- Security threats → may trigger human approval based on severity
-- Remote access → logged but not automatically blocked
+- **Capability mismatch** → hard reject (unless `require_capabilities: false`)
+- **Security threats** (install-time) → can fail install or drive policy; severity informs composite/LLM escalation
+- **Remote access (install-time)** → recorded in `SecurityAnalysis.remote_access_detected`; must align with promotion-gate evidence when used
+- **Remote access (`sandbox.exec`)** → if `RemoteAccessAnalyzer` finds patterns and there is no valid `approval_ref`, the tool returns **`approval_required`** (execution blocked until an operator approves and the agent retries with the ref)
 
 ### Trust Model
 
@@ -371,12 +403,21 @@ Return JSON:
 }
 ```
 
-### AST-based Analysis
+### AST-based Analysis (Python)
 
-Future versions may add AST parsing for:
-- Python (using `tree-sitter-python`)
-- JavaScript/TypeScript (using `tree-sitter-javascript`)
-- More accurate detection without false positives
+The built-in **`python_ast`** provider uses CPython’s `ast` module (see `autonoetic-gateway/src/runtime/analysis/minimal_python_scan.py`). Deeper or multi-language AST analysis (e.g. tree-sitter) can be added as another `AnalysisProvider` later.
+
+### External analyzers (optional integrations)
+
+The same **`AnalysisProvider`** trait can wrap subprocess-based tools for **stronger** install-time signals (at the cost of latency and dependencies):
+
+| Tool | Role |
+|------|------|
+| [Bandit](https://github.com/PyCQA/bandit) | Python-focused security findings (subprocess, unsafe patterns, …) |
+| [Semgrep](https://semgrep.dev/) | Rule packs for network, file IO, secrets |
+| Custom `ast` / tree-sitter | Deterministic import and call-site walks |
+
+Implementation sketch: new `AnalysisProviderType` + provider that maps tool JSON/SARIF output into `CapabilityAnalysis` / `SecurityAnalysis`. Start with **artifact bundle only** (same inputs as today).
 
 ---
 

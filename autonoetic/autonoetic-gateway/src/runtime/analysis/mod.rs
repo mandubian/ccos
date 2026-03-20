@@ -22,10 +22,12 @@ pub mod composite;
 pub mod llm;
 pub mod pattern;
 pub mod provider;
+pub mod python_ast;
 
 pub use composite::CompositeAnalyzer;
 pub use llm::LlmAnalyzer;
 pub use pattern::PatternAnalyzer;
+pub use python_ast::PythonAstAnalyzer;
 pub use provider::{
     AnalysisProvider, AnalysisProviderType, CapabilityAnalysis, FileToAnalyze, SecurityAnalysis,
     SecurityThreatType,
@@ -45,6 +47,7 @@ impl AnalysisProviderFactory {
             AnalysisProviderType::Pattern => Box::new(PatternAnalyzer::new()),
             AnalysisProviderType::Llm => Box::new(LlmAnalyzer::new()),
             AnalysisProviderType::Composite => Box::new(CompositeAnalyzer::new_capability()),
+            AnalysisProviderType::PythonAst => Box::new(PythonAstAnalyzer::new()),
             AnalysisProviderType::None => Box::new(NoOpAnalyzer),
         }
     }
@@ -57,6 +60,7 @@ impl AnalysisProviderFactory {
             AnalysisProviderType::Pattern => Box::new(PatternAnalyzer::new()),
             AnalysisProviderType::Llm => Box::new(LlmAnalyzer::new()),
             AnalysisProviderType::Composite => Box::new(CompositeAnalyzer::new_security()),
+            AnalysisProviderType::PythonAst => Box::new(PythonAstAnalyzer::new()),
             AnalysisProviderType::None => Box::new(NoOpAnalyzer),
         }
     }
