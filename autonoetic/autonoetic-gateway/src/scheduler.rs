@@ -181,20 +181,17 @@ pub async fn process_queued_workflow_tasks(
     );
 
     for queued_task in queued {
-        // Crash-safe: check if task is already being processed (Running TaskRun exists).
-        // If so, skip — it will be dequeued on completion. This prevents duplicate
-        // processing while keeping the queue file as a durable crash-recovery record.
+        // Crash-safe recovery: check existing TaskRun status
         if let Ok(Some(existing)) = workflow_store::load_task_run(
             &config,
             &queued_task.workflow_id,
             &queued_task.task_id,
         ) {
             match existing.status {
-                autonoetic_types::workflow::TaskRunStatus::Running
-                | autonoetic_types::workflow::TaskRunStatus::Succeeded
+                // Terminal: task is done, just clean up queue file
+                autonoetic_types::workflow::TaskRunStatus::Succeeded
                 | autonoetic_types::workflow::TaskRunStatus::Failed
                 | autonoetic_types::workflow::TaskRunStatus::Cancelled => {
-                    // Already processed or in-flight — skip. Dequeue to clean up.
                     let _ = workflow_store::dequeue_task(
                         &config,
                         &queued_task.workflow_id,
@@ -202,7 +199,40 @@ pub async fn process_queued_workflow_tasks(
                     );
                     continue;
                 }
+                // Running: CRASH RECOVERY — the tokio task died with the process.
+                // Re-spawn execution. Don't dequeue yet — it will be dequeued on
+                // completion. This ensures durability across crash windows.
+                autonoetic_types::workflow::TaskRunStatus::Running => {
+                    tracing::info!(
+                        target: "workflow",
+                        task_id = %queued_task.task_id,
+                        "Crash recovery: re-spawning Running task"
+                    );
+                    // Fall through to spawn logic below (skip TaskRun creation)
+                }
+                // Pending or other: process normally (create as Running + spawn)
                 _ => {}
+            }
+
+            // If task is already Running, skip to spawn logic (TaskRun already exists)
+            if existing.status == autonoetic_types::workflow::TaskRunStatus::Running {
+                let exec = execution.clone();
+                let agent_id = queued_task.agent_id.clone();
+                let message = queued_task.message.clone();
+                let session_id = queued_task.child_session_id.clone();
+                let source_id = queued_task.source_agent_id.clone();
+                let metadata = queued_task.metadata.clone();
+                let wf_id = queued_task.workflow_id.clone();
+                let t_id = queued_task.task_id.clone();
+                let cfg = config.clone();
+
+                tokio::spawn(async move {
+                    spawn_task_execution(
+                        exec, cfg, wf_id, t_id, agent_id, message, session_id, source_id, metadata,
+                    )
+                    .await;
+                });
+                continue;
             }
         }
 
@@ -259,137 +289,122 @@ pub async fn process_queued_workflow_tasks(
         let cfg = config.clone();
 
         tokio::spawn(async move {
-            tracing::info!(
-                target: "workflow",
-                task_id = %t_id,
-                agent_id = %agent_id,
-                "Starting async task execution"
-            );
-
-            // Load previous task checkpoint (if any) and checkpoint: starting execution
-            let prev_checkpoint = workflow_store::load_task_checkpoint(&cfg, &wf_id, &t_id).ok().flatten();
-            let checkpoint_context = if let Some(ref prev) = prev_checkpoint {
-                tracing::info!(
-                    target: "workflow",
-                    task_id = %t_id,
-                    prev_step = %prev.step,
-                    prev_version = prev.version,
-                    "Resuming task from checkpoint"
-                );
-                serde_json::json!({
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "message_preview": &message[..message.len().min(120)],
-                    "resuming_from": { "step": prev.step, "version": prev.version, "state": prev.state },
-                })
-            } else {
-                serde_json::json!({
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "message_preview": &message[..message.len().min(120)],
-                })
-            };
-            let _ = workflow_store::checkpoint_task(
-                &cfg,
-                &wf_id,
-                &t_id,
-                "starting".to_string(),
-                checkpoint_context,
-            );
-
-            let result = exec
-                .spawn_agent_once(
-                    &agent_id,
-                    &message,
-                    &session_id,
-                    Some(&source_id),
-                    false,
-                    None,
-                    metadata.as_ref(),
-                )
-                .await;
-
-            match result {
-                Ok(spawn_result) => {
-                    let summary = spawn_result.assistant_reply.as_ref().map(|s| {
-                        const MAX: usize = 512;
-                        if s.len() <= MAX {
-                            s.clone()
-                        } else {
-                            format!("{}…", &s[..MAX])
-                        }
-                    });
-                    if let Err(e) = workflow_store::update_task_run_status(
-                        &cfg,
-                        &wf_id,
-                        &t_id,
-                        autonoetic_types::workflow::TaskRunStatus::Succeeded,
-                        summary,
-                    ) {
-                        tracing::warn!(
-                            target: "workflow",
-                            error = %e,
-                            "Failed to persist async task completion"
-                        );
-                    }
-                    tracing::info!(
-                        target: "workflow",
-                        task_id = %t_id,
-                        "Async task completed successfully"
-                    );
-                    // Task checkpoint: completed
-                    let _ = workflow_store::checkpoint_task(
-                        &cfg,
-                        &wf_id,
-                        &t_id,
-                        "completed".to_string(),
-                        serde_json::json!({
-                            "status": "succeeded",
-                            "result_summary": spawn_result.assistant_reply.as_ref().map(|s| &s[..s.len().min(200)]),
-                        }),
-                    );
-                    // Dequeue: task is durably terminal, safe to remove from queue
-                    let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
-                }
-                Err(e) => {
-                    if let Err(inner) = workflow_store::update_task_run_status(
-                        &cfg,
-                        &wf_id,
-                        &t_id,
-                        autonoetic_types::workflow::TaskRunStatus::Failed,
-                        Some(e.to_string()),
-                    ) {
-                        tracing::warn!(
-                            target: "workflow",
-                            error = %inner,
-                            "Failed to persist async task failure"
-                        );
-                    }
-                    tracing::warn!(
-                        target: "workflow",
-                        task_id = %t_id,
-                        error = %e,
-                        "Async task failed"
-                    );
-                    // Task checkpoint: failed
-                    let _ = workflow_store::checkpoint_task(
-                        &cfg,
-                        &wf_id,
-                        &t_id,
-                        "failed".to_string(),
-                        serde_json::json!({
-                            "status": "failed",
-                            "error": e.to_string(),
-                        }),
-                    );
-                    // Dequeue: task is durably terminal, safe to remove from queue
-                    let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
-                }
-            }
+            spawn_task_execution(
+                exec, cfg, wf_id, t_id, agent_id, message, session_id, source_id, metadata,
+            )
+            .await;
         });
     }
 
     Ok(())
+}
+
+/// Execute a task: spawn agent, update status, checkpoint, dequeue on completion.
+/// Shared by normal execution, crash recovery, and approval-resume paths.
+async fn spawn_task_execution(
+    exec: Arc<crate::execution::GatewayExecutionService>,
+    cfg: Arc<autonoetic_types::config::GatewayConfig>,
+    wf_id: String,
+    t_id: String,
+    agent_id: String,
+    message: String,
+    session_id: String,
+    source_id: String,
+    metadata: Option<serde_json::Value>,
+) {
+    tracing::info!(
+        target: "workflow",
+        task_id = %t_id,
+        agent_id = %agent_id,
+        "Starting async task execution"
+    );
+
+    // Load previous task checkpoint (if any) for resume context
+    let prev_checkpoint = workflow_store::load_task_checkpoint(&cfg, &wf_id, &t_id).ok().flatten();
+    let checkpoint_context = if let Some(ref prev) = prev_checkpoint {
+        tracing::info!(
+            target: "workflow",
+            task_id = %t_id,
+            prev_step = %prev.step,
+            prev_version = prev.version,
+            "Resuming task from checkpoint"
+        );
+        serde_json::json!({
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "message_preview": &message[..message.len().min(120)],
+            "resuming_from": { "step": prev.step, "version": prev.version, "state": prev.state },
+        })
+    } else {
+        serde_json::json!({
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "message_preview": &message[..message.len().min(120)],
+        })
+    };
+    let _ = workflow_store::checkpoint_task(
+        &cfg,
+        &wf_id,
+        &t_id,
+        "starting".to_string(),
+        checkpoint_context,
+    );
+
+    let result = exec
+        .spawn_agent_once(
+            &agent_id,
+            &message,
+            &session_id,
+            Some(&source_id),
+            false,
+            None,
+            metadata.as_ref(),
+        )
+        .await;
+
+    match result {
+        Ok(spawn_result) => {
+            let summary = spawn_result.assistant_reply.as_ref().map(|s| {
+                const MAX: usize = 512;
+                if s.len() <= MAX { s.clone() } else { format!("{}…", &s[..MAX]) }
+            });
+            if let Err(e) = workflow_store::update_task_run_status(
+                &cfg,
+                &wf_id,
+                &t_id,
+                autonoetic_types::workflow::TaskRunStatus::Succeeded,
+                summary,
+            ) {
+                tracing::warn!(target: "workflow", error = %e, "Failed to persist async task completion");
+            }
+            tracing::info!(target: "workflow", task_id = %t_id, "Async task completed successfully");
+            let _ = workflow_store::checkpoint_task(
+                &cfg, &wf_id, &t_id, "completed".to_string(),
+                serde_json::json!({
+                    "status": "succeeded",
+                    "result_summary": spawn_result.assistant_reply.as_ref().map(|s| &s[..s.len().min(200)]),
+                }),
+            );
+            let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
+        }
+        Err(e) => {
+            if let Err(inner) = workflow_store::update_task_run_status(
+                &cfg,
+                &wf_id,
+                &t_id,
+                autonoetic_types::workflow::TaskRunStatus::Failed,
+                Some(e.to_string()),
+            ) {
+                tracing::warn!(target: "workflow", error = %inner, "Failed to persist async task failure");
+            }
+            tracing::warn!(target: "workflow", task_id = %t_id, error = %e, "Async task failed");
+            let _ = workflow_store::checkpoint_task(
+                &cfg, &wf_id, &t_id, "failed".to_string(),
+                serde_json::json!({ "status": "failed", "error": e.to_string() }),
+            );
+            let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
+        }
+    }
 }
 
 /// Scan all workflows for Runnable tasks (approval-unblocked) and execute them.
@@ -444,49 +459,25 @@ pub async fn process_runnable_workflow_tasks(
                 continue;
             }
 
-            // Spawn execution
+            // Spawn execution using the shared helper
             let exec = execution.clone();
-            let wf_id_clone = wf_id.clone();
+            let wf_clone = wf_id.clone();
             let task_clone = task.clone();
             let cfg = config.clone();
 
             tokio::spawn(async move {
-                let result = exec
-                    .spawn_agent_once(
-                        &task_clone.agent_id,
-                        &format!("Resume after approval: {}", task_clone.session_id),
-                        &task_clone.session_id,
-                        task_clone.source_agent_id.as_deref(),
-                        false,
-                        None,
-                        None,
-                    )
-                    .await;
-
-                match result {
-                    Ok(spawn_result) => {
-                        let summary = spawn_result.assistant_reply.as_ref().map(|s| {
-                            const MAX: usize = 512;
-                            if s.len() <= MAX { s.clone() } else { format!("{}…", &s[..MAX]) }
-                        });
-                        let _ = workflow_store::update_task_run_status(
-                            &cfg,
-                            &wf_id_clone,
-                            &task_clone.task_id,
-                            autonoetic_types::workflow::TaskRunStatus::Succeeded,
-                            summary,
-                        );
-                    }
-                    Err(e) => {
-                        let _ = workflow_store::update_task_run_status(
-                            &cfg,
-                            &wf_id_clone,
-                            &task_clone.task_id,
-                            autonoetic_types::workflow::TaskRunStatus::Failed,
-                            Some(e.to_string()),
-                        );
-                    }
-                }
+                spawn_task_execution(
+                    exec,
+                    cfg,
+                    wf_clone,
+                    task_clone.task_id,
+                    task_clone.agent_id,
+                    format!("Resume after approval: {}", task_clone.session_id),
+                    task_clone.session_id,
+                    task_clone.source_agent_id.unwrap_or_default(),
+                    None,
+                )
+                .await;
             });
         }
     }

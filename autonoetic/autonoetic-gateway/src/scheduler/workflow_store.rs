@@ -694,8 +694,10 @@ pub fn load_all_queued_tasks(config: &GatewayConfig) -> anyhow::Result<Vec<Queue
 
 /// Check if a workflow's join condition is satisfied.
 /// Respects `join_group`: tasks in the same group are awaited together.
-/// Returns true when ALL groups have all their tasks in terminal status.
-/// Tasks without a join_group are treated as belonging to a default group.
+/// Returns true when ANY group has all its tasks in terminal status.
+/// This means different groups are independent — whichever finishes first
+/// triggers the planner resume. Tasks without a join_group are treated as
+/// belonging to a default group.
 pub fn check_join_condition(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<bool> {
     let run = match load_workflow_run(config, workflow_id)? {
         Some(r) => r,
@@ -716,21 +718,31 @@ pub fn check_join_condition(config: &GatewayConfig, workflow_id: &str) -> anyhow
         groups.entry(group).or_default().push(task_id.clone());
     }
 
-    // Check each group: ALL tasks in a group must be terminal
+    // Check each group: if ALL tasks in ANY group are terminal, join is satisfied
     for (_group, task_ids) in &groups {
+        let mut all_terminal = true;
         for task_id in task_ids {
             match load_task_run(config, workflow_id, task_id)? {
                 Some(task) => match task.status {
                     TaskRunStatus::Succeeded | TaskRunStatus::Failed | TaskRunStatus::Cancelled => {
                         continue;
                     }
-                    _ => return Ok(false),
+                    _ => {
+                        all_terminal = false;
+                        break;
+                    }
                 },
-                None => return Ok(false),
+                None => {
+                    all_terminal = false;
+                    break;
+                }
             }
         }
+        if all_terminal {
+            return Ok(true);
+        }
     }
-    Ok(true)
+    Ok(false)
 }
 
 /// Generate a compact, single-line summary of a workflow's current state.
@@ -1598,6 +1610,98 @@ mod tests {
         // Events should contain task.updated (Runnable maps to task.updated event)
         let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
         assert!(events.iter().any(|e| e.event_type == "task.updated"));
+    }
+
+    #[test]
+    fn join_group_any_satisfies() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "jg-root", None).unwrap();
+
+        // Two tasks in DIFFERENT groups
+        for (tid, grp) in [("t-r1", "research"), ("t-c1", "coding")] {
+            let task = TaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: "a".to_string(),
+                session_id: format!("jg-root/{}-x", tid),
+                parent_session_id: "jg-root".to_string(),
+                status: TaskRunStatus::Running,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                source_agent_id: None,
+                result_summary: None,
+                join_group: Some(grp.to_string()),
+            };
+            save_task_run(&cfg, &task).unwrap();
+        }
+
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["t-r1".to_string(), "t-c1".to_string()];
+        save_workflow_run(&cfg, &run).unwrap();
+
+        // Neither group satisfied yet
+        assert!(!check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Complete research group task — join satisfied (ANY group)
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "t-r1",
+            TaskRunStatus::Succeeded,
+            None,
+        )
+        .unwrap();
+        assert!(check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Coding task still running — that's fine, research group is done
+        let coding = load_task_run(&cfg, &wf.workflow_id, "t-c1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(coding.status, TaskRunStatus::Running);
+    }
+
+    #[test]
+    fn join_group_same_group_needs_all() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "jgs-root", None).unwrap();
+
+        // Two tasks in the SAME group
+        for tid in ["t-a", "t-b"] {
+            let task = TaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: "a".to_string(),
+                session_id: format!("jgs-root/{}-x", tid),
+                parent_session_id: "jgs-root".to_string(),
+                status: TaskRunStatus::Running,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                source_agent_id: None,
+                result_summary: None,
+                join_group: Some("group1".to_string()),
+            };
+            save_task_run(&cfg, &task).unwrap();
+        }
+
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["t-a".to_string(), "t-b".to_string()];
+        save_workflow_run(&cfg, &run).unwrap();
+
+        // Complete only one — NOT satisfied (same group needs all)
+        update_task_run_status(&cfg, &wf.workflow_id, "t-a", TaskRunStatus::Succeeded, None)
+            .unwrap();
+        assert!(!check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Complete second — now satisfied
+        update_task_run_status(&cfg, &wf.workflow_id, "t-b", TaskRunStatus::Succeeded, None)
+            .unwrap();
+        assert!(check_join_condition(&cfg, &wf.workflow_id).unwrap());
     }
 
     #[test]
