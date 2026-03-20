@@ -534,6 +534,7 @@ The new workflow layer should sit above them:
 | **P1.4** | [x] | Emit `task.spawned` / `task.completed` (and related) from the spawn path _(sync spawn: success → `task.completed`; error → `task.failed` via store)_ |
 | **P1.5** | [x] | Mirror key workflow/task transitions into the gateway **causal chain** (`workflow_causal` + `log_gateway_causal_event`) per § Relationship To Causal Chain |
 | **P6.1** | [x] | Read-only CLI: `autonoetic trace workflow <id> [--root] [--follow] [--json]` reads `events.jsonl`; gateway `resolve_workflow_id_for_root_session`, `load_workflow_events` (`workflow_store`) |
+| **P7.1** | [x] | `autonoetic trace graph` (root session or `wf-…`) `[--follow] [--json]` — text tree from `workflow.json` + `tasks/*.json` + tail of `events.jsonl`; `list_task_runs_for_workflow` |
 
 ### Phase 1: Durable workflow store
 
@@ -574,7 +575,7 @@ The new workflow layer should sit above them:
 
 ### Phase 7: CLI graph
 
-- add `autonoetic trace graph <session_id> --follow`
+- add `autonoetic trace graph <session_id> --follow` _(done: root session or `wf-…`, `--follow` clears+redraws / JSON line per tick)_
 - render planner, children, approvals, and state transitions live
 - embed the same graph/event rail into `autonoetic chat`
 

@@ -4,7 +4,10 @@ use std::path::Path;
 use super::common::AgentTrace;
 use autonoetic_gateway::llm::Message;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
-use autonoetic_types::workflow::{WorkflowEventRecord, WorkflowRun};
+use autonoetic_types::workflow::{
+    TaskRun, TaskRunStatus, WorkflowEventRecord, WorkflowRun, WorkflowRunStatus,
+};
+use serde::Serialize;
 
 /// ANSI color helpers for terminal output.
 mod color {
@@ -1160,6 +1163,295 @@ async fn trace_workflow_follow(
             if seen.insert(ev.event_id.clone()) {
                 print_workflow_event_row(&ev, json_output)?;
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// trace graph (workflow store projection, Phase 7)
+// ---------------------------------------------------------------------------
+
+fn workflow_status_snake(s: WorkflowRunStatus) -> &'static str {
+    match s {
+        WorkflowRunStatus::Active => "active",
+        WorkflowRunStatus::WaitingChildren => "waiting_children",
+        WorkflowRunStatus::BlockedApproval => "blocked_approval",
+        WorkflowRunStatus::Resumable => "resumable",
+        WorkflowRunStatus::Completed => "completed",
+        WorkflowRunStatus::Failed => "failed",
+        WorkflowRunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn task_status_snake(s: TaskRunStatus) -> &'static str {
+    match s {
+        TaskRunStatus::Pending => "pending",
+        TaskRunStatus::Runnable => "runnable",
+        TaskRunStatus::Running => "running",
+        TaskRunStatus::AwaitingApproval => "awaiting_approval",
+        TaskRunStatus::Paused => "paused",
+        TaskRunStatus::Succeeded => "succeeded",
+        TaskRunStatus::Failed => "failed",
+        TaskRunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn resolve_workflow_id_for_graph(
+    config: &autonoetic_gateway::GatewayConfig,
+    session_or_wf: &str,
+) -> anyhow::Result<String> {
+    let s = session_or_wf.trim();
+    if s.starts_with("wf-") {
+        if autonoetic_gateway::scheduler::load_workflow_run(config, s)?.is_none() {
+            anyhow::bail!("No workflow run '{}' in gateway scheduler store.", s);
+        }
+        return Ok(s.to_string());
+    }
+    match autonoetic_gateway::scheduler::resolve_workflow_id_for_root_session(config, s)? {
+        Some(w) => Ok(w),
+        None => anyhow::bail!(
+            "No workflow for root session '{}'. Pass the root session used with `agent.spawn`, or a `wf-…` id from `trace workflow`.",
+            s
+        ),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowGraphTaskView {
+    task_id: String,
+    agent_id: String,
+    session_id: String,
+    parent_session_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_summary: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowGraphEventView {
+    event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    occurred_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowGraphView {
+    workflow_id: String,
+    root_session_id: String,
+    workflow_status: String,
+    lead_agent_id: String,
+    active_task_ids: Vec<String>,
+    blocked_task_ids: Vec<String>,
+    pending_approval_ids: Vec<String>,
+    tasks: Vec<WorkflowGraphTaskView>,
+    recent_events: Vec<WorkflowGraphEventView>,
+}
+
+fn build_workflow_graph_view(
+    config: &autonoetic_gateway::GatewayConfig,
+    run: &WorkflowRun,
+) -> anyhow::Result<WorkflowGraphView> {
+    let tasks = autonoetic_gateway::scheduler::list_task_runs_for_workflow(
+        config,
+        &run.workflow_id,
+    )?;
+    let events = autonoetic_gateway::scheduler::load_workflow_events(config, &run.workflow_id)?;
+    let start = events.len().saturating_sub(12);
+    let recent_slice = &events[start..];
+
+    let task_views: Vec<WorkflowGraphTaskView> = tasks
+        .into_iter()
+        .map(|t: TaskRun| WorkflowGraphTaskView {
+            task_id: t.task_id,
+            agent_id: t.agent_id,
+            session_id: t.session_id,
+            parent_session_id: t.parent_session_id,
+            status: task_status_snake(t.status).to_string(),
+            result_summary: t.result_summary,
+        })
+        .collect();
+
+    let event_views: Vec<WorkflowGraphEventView> = recent_slice
+        .iter()
+        .map(|e| WorkflowGraphEventView {
+            event_type: e.event_type.clone(),
+            task_id: e.task_id.clone(),
+            occurred_at: e.occurred_at.clone(),
+        })
+        .collect();
+
+    Ok(WorkflowGraphView {
+        workflow_id: run.workflow_id.clone(),
+        root_session_id: run.root_session_id.clone(),
+        workflow_status: workflow_status_snake(run.status).to_string(),
+        lead_agent_id: run.lead_agent_id.clone(),
+        active_task_ids: run.active_task_ids.clone(),
+        blocked_task_ids: run.blocked_task_ids.clone(),
+        pending_approval_ids: run.pending_approval_ids.clone(),
+        tasks: task_views,
+        recent_events: event_views,
+    })
+}
+
+fn print_workflow_graph_text(view: &WorkflowGraphView) {
+    println!(
+        "{}workflow{} {}  {}wf={}{}  [{}]",
+        color::BOLD,
+        color::RESET,
+        view.root_session_id,
+        color::DIM,
+        view.workflow_id,
+        color::RESET,
+        color::status_label(&view.workflow_status)
+    );
+    let lead = if view.lead_agent_id.is_empty() {
+        format!("{}(unknown){}", color::DIM, color::RESET)
+    } else {
+        color::agent(&view.lead_agent_id)
+    };
+    println!(
+        "planner {}  [{}]",
+        lead,
+        color::status_label(&view.workflow_status)
+    );
+
+    if view.tasks.is_empty() {
+        println!("{}  (no delegated tasks yet){}", color::DIM, color::RESET);
+    } else {
+        for t in &view.tasks {
+            println!(
+                "|- {}{}#{}  [{}]",
+                color::agent(&t.agent_id),
+                color::RESET,
+                t.task_id,
+                color::status_label(&t.status)
+            );
+            println!(
+                "   {}session:{} {}",
+                color::DIM,
+                color::RESET,
+                t.session_id
+            );
+        }
+    }
+
+    if !view.pending_approval_ids.is_empty() {
+        println!(
+            "{}pending_approvals:{} {}",
+            color::YELLOW,
+            color::RESET,
+            view.pending_approval_ids.join(", ")
+        );
+    }
+    if !view.active_task_ids.is_empty() {
+        println!(
+            "{}active_task_ids:{} {}",
+            color::DIM,
+            color::RESET,
+            view.active_task_ids.join(", ")
+        );
+    }
+    if !view.blocked_task_ids.is_empty() {
+        println!(
+            "{}blocked_task_ids:{} {}",
+            color::DIM,
+            color::RESET,
+            view.blocked_task_ids.join(", ")
+        );
+    }
+
+    if !view.recent_events.is_empty() {
+        println!();
+        println!("{}recent workflow events:{}", color::BOLD, color::RESET);
+        for e in &view.recent_events {
+            let tid = e
+                .task_id
+                .as_deref()
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!(
+                "  {}{} {}{} {}",
+                color::DIM,
+                &e.occurred_at.chars().take(19).collect::<String>(),
+                color::RESET,
+                e.event_type,
+                tid
+            );
+        }
+    }
+}
+
+fn print_workflow_graph(view: &WorkflowGraphView, json_output: bool) -> anyhow::Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(view)?);
+    } else {
+        print_workflow_graph_text(view);
+    }
+    Ok(())
+}
+
+/// Text tree + recent events from the durable workflow store (`trace graph`).
+pub async fn handle_trace_graph(
+    config_path: &Path,
+    session_or_wf: &str,
+    json_output: bool,
+    follow: bool,
+) -> anyhow::Result<()> {
+    use std::io::{stdout, Write};
+    use tokio::time::{interval, Duration};
+
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let workflow_id = resolve_workflow_id_for_graph(&config, session_or_wf)?;
+
+    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)?
+        .ok_or_else(|| anyhow::anyhow!("workflow run '{}' disappeared", workflow_id))?;
+
+    if !follow {
+        let view = build_workflow_graph_view(&config, &run)?;
+        return print_workflow_graph(&view, json_output);
+    }
+
+    if !json_output {
+        println!(
+            "{}Following workflow graph ({}).{} Press Ctrl+C to stop.",
+            color::BOLD,
+            workflow_id,
+            color::RESET
+        );
+        println!();
+    }
+
+    let mut poll_interval = interval(Duration::from_secs(1));
+    loop {
+        poll_interval.tick().await;
+        let run = match autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)? {
+            Some(r) => r,
+            None => {
+                tracing::warn!("workflow run removed while following");
+                continue;
+            }
+        };
+        let view = match build_workflow_graph_view(&config, &run) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "rebuild workflow graph view failed");
+                continue;
+            }
+        };
+        if json_output {
+            println!("{}", serde_json::to_string(&view)?);
+        } else {
+            print!("\x1b[2J\x1b[H");
+            let _ = stdout().flush();
+            print_workflow_graph_text(&view);
+            println!();
+            println!(
+                "{}— refreshed — {}Ctrl+C to stop{}",
+                color::DIM,
+                color::DIM,
+                color::RESET
+            );
         }
     }
 }
