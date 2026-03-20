@@ -17,12 +17,14 @@ pub mod store;
 pub mod approval;
 pub mod runner;
 pub mod signal;
+pub mod workflow_store;
 
 pub use decision::*;
 pub use store::*;
 pub use approval::*;
 pub use runner::*;
 pub use signal::*;
+pub use workflow_store::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxEvent {
