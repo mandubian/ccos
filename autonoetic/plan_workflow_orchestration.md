@@ -468,8 +468,8 @@ The new workflow layer should sit above them:
 |----|------|-------------|
 | **P1.1** | [x] | Shared types: `WorkflowRun`, `TaskRun`, `WorkflowEventRecord`, status enums (`autonoetic-types::workflow`) |
 | **P1.2** | [x] | Durable store under `.gateway/scheduler/workflows/` (root index → `workflow_id`, `runs/<id>/workflow.json`, `tasks/`, `events.jsonl`) |
-| **P1.3** | [ ] | Wire `agent.spawn` to ensure workflow per root session and return `workflow_id` + `task_id` |
-| **P1.4** | [ ] | Emit `task.spawned` / `task.completed` (and related) from the spawn path consistently |
+| **P1.3** | [x] | Wire `agent.spawn` to ensure workflow per root session and return `workflow_id` + `task_id` |
+| **P1.4** | [x] | Emit `task.spawned` / `task.completed` (and related) from the spawn path _(sync spawn: success → `task.completed`; error → `task.failed` via store)_ |
 
 ### Phase 1: Durable workflow store
 
@@ -564,7 +564,7 @@ Reproduce the exact `demo-session-1` scenario:
 
 The smallest meaningful vertical slice is:
 
-1. add `workflow_id` and `task_id` _(types + store: **done**; spawn JSON wiring: **P1.3**)_
+1. add `workflow_id` and `task_id` _(done for synchronous `agent.spawn` JSON + on-disk tasks; **async spawn** still Phase 2)_
 2. make `agent.spawn` asynchronous
 3. add workflow/task checkpoints
 4. checkpoint planner into `WaitingChildren`

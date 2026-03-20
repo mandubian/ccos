@@ -17,6 +17,7 @@ use autonoetic_types::runtime_lock::{
 };
 use autonoetic_types::schema_enforcement::{default_enforcer, EnforcementResult, SchemaEnforcer};
 use autonoetic_types::tool_error::tagged;
+use autonoetic_types::workflow::{TaskRun, TaskRunStatus, WorkflowEventRecord};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -659,7 +660,7 @@ impl NativeTool for SandboxExecTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Execute an approved shell command in the configured sandbox driver. If remote access is detected, an approval request is created - retry with approval_ref after approval.".to_string(),
+            description: "Run any shell command in a secure sandbox. Execute python3 scripts, node.js, bash commands, install packages (pip install, npm install), run tests, compile code, use git, grep, awk, sed, curl (internal network), and more. The sandbox isolates your execution with a read-only host filesystem — only your agent directory is writable. Network access (outbound HTTP, sockets) triggers operator approval; retry with approval_ref after approval. Dangerous commands (sudo, rm -rf, dd, mkfs) are blocked by security policy.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -3522,13 +3523,21 @@ impl NativeTool for AgentSpawnTool {
             ));
         }
 
+        let source_agent_id = manifest.agent.id.clone();
+        let workflow = crate::scheduler::ensure_workflow_for_root_session(
+            gw_config,
+            root,
+            Some(source_agent_id.as_str()),
+        )?;
+        let workflow_id = workflow.workflow_id.clone();
+        let task_id = crate::scheduler::new_task_id();
+
         let execution_config = GatewayConfig {
             agents_dir: agents_dir.to_path_buf(),
             ..GatewayConfig::default()
         };
         let execution = crate::execution::GatewayExecutionService::new(execution_config);
 
-        let source_agent_id = manifest.agent.id.clone();
         let target_agent_id = args.agent_id.clone();
         let kickoff_message = match &args.metadata {
             Some(value) => format!("{}\n\nDelegation metadata: {}", args.message, value),
@@ -3545,6 +3554,36 @@ impl NativeTool for AgentSpawnTool {
             &uuid::Uuid::new_v4().to_string()[..8]
         );
 
+        let ts = Utc::now().to_rfc3339();
+        let task = TaskRun {
+            task_id: task_id.clone(),
+            workflow_id: workflow_id.clone(),
+            agent_id: target_agent_id.clone(),
+            session_id: child_delegation_path.clone(),
+            parent_session_id: resolved_session_id.clone(),
+            status: TaskRunStatus::Running,
+            created_at: ts.clone(),
+            updated_at: ts,
+            source_agent_id: Some(source_agent_id.clone()),
+            result_summary: None,
+        };
+        crate::scheduler::save_task_run(gw_config, &task)?;
+        crate::scheduler::append_workflow_event(
+            gw_config,
+            &WorkflowEventRecord {
+                event_id: format!("wevt-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+                workflow_id: workflow_id.clone(),
+                task_id: Some(task_id.clone()),
+                event_type: "task.spawned".to_string(),
+                payload: serde_json::json!({
+                    "target_agent_id": target_agent_id,
+                    "child_session_id": child_delegation_path,
+                    "parent_session_id": resolved_session_id,
+                }),
+                occurred_at: Utc::now().to_rfc3339(),
+            },
+        )?;
+
         if let Ok(agents_dir) = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory missing parent"))
@@ -3553,7 +3592,6 @@ impl NativeTool for AgentSpawnTool {
                 crate::runtime::content_store::ContentStore::new(&agents_dir.join(".gateway"))
             {
                 // Set root session relationship so child's session-visible content is visible to parent
-                let root = crate::runtime::content_store::root_session_id(&resolved_session_id);
                 let _ = store.set_root_session(&child_delegation_path, root);
                 tracing::info!(
                     target: "content_store",
@@ -3578,25 +3616,72 @@ impl NativeTool for AgentSpawnTool {
                 .await
         };
 
-        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(spawn_future))?
+        let spawn_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(spawn_future))
         } else {
-            tokio::runtime::Runtime::new()?.block_on(spawn_future)?
+            tokio::runtime::Runtime::new()?.block_on(spawn_future)
         };
 
-        Ok(serde_json::json!({
-            "ok": true,
-            "status": "agent_spawned",
-            "agent_id": result.agent_id,
-            "session_id": result.session_id,
-            "assistant_reply": result.assistant_reply,
-            "artifacts": result.artifacts,
-            // All named content written by the child — use name/handle/alias with content.read
-            "files": result.files,
-            "shared_knowledge": result.shared_knowledge,
-            "llm_usage": result.llm_usage,
-        })
-        .to_string())
+        match spawn_result {
+            Ok(result) => {
+                let summary = result.assistant_reply.as_ref().map(|s| {
+                    const MAX: usize = 512;
+                    if s.len() <= MAX {
+                        s.clone()
+                    } else {
+                        format!("{}…", &s[..MAX])
+                    }
+                });
+                if let Err(e) = crate::scheduler::update_task_run_status(
+                    gw_config,
+                    &workflow_id,
+                    &task_id,
+                    TaskRunStatus::Succeeded,
+                    summary,
+                ) {
+                    tracing::warn!(
+                        target: "workflow",
+                        error = %e,
+                        workflow_id = %workflow_id,
+                        task_id = %task_id,
+                        "Failed to persist task completion status"
+                    );
+                }
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "status": "agent_spawned",
+                    "workflow_id": workflow_id,
+                    "task_id": task_id,
+                    "agent_id": result.agent_id,
+                    "session_id": result.session_id,
+                    "assistant_reply": result.assistant_reply,
+                    "artifacts": result.artifacts,
+                    // All named content written by the child — use name/handle/alias with content.read
+                    "files": result.files,
+                    "shared_knowledge": result.shared_knowledge,
+                    "llm_usage": result.llm_usage,
+                })
+                .to_string())
+            }
+            Err(e) => {
+                if let Err(inner) = crate::scheduler::update_task_run_status(
+                    gw_config,
+                    &workflow_id,
+                    &task_id,
+                    TaskRunStatus::Failed,
+                    Some(e.to_string()),
+                ) {
+                    tracing::warn!(
+                        target: "workflow",
+                        error = %inner,
+                        workflow_id = %workflow_id,
+                        task_id = %task_id,
+                        "Failed to persist task failure status"
+                    );
+                }
+                Err(e)
+            }
+        }
     }
 }
 
