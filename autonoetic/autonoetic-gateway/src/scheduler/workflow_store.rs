@@ -693,7 +693,9 @@ pub fn load_all_queued_tasks(config: &GatewayConfig) -> anyhow::Result<Vec<Queue
 }
 
 /// Check if a workflow's join condition is satisfied.
-/// Returns true if all tasks in `join_task_ids` have reached a terminal status.
+/// Respects `join_group`: tasks in the same group are awaited together.
+/// Returns true when ALL groups have all their tasks in terminal status.
+/// Tasks without a join_group are treated as belonging to a default group.
 pub fn check_join_condition(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<bool> {
     let run = match load_workflow_run(config, workflow_id)? {
         Some(r) => r,
@@ -702,15 +704,30 @@ pub fn check_join_condition(config: &GatewayConfig, workflow_id: &str) -> anyhow
     if run.join_task_ids.is_empty() {
         return Ok(true);
     }
+
+    // Group join tasks by their join_group field
+    let mut groups: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for task_id in &run.join_task_ids {
-        match load_task_run(config, workflow_id, task_id)? {
-            Some(task) => match task.status {
-                TaskRunStatus::Succeeded | TaskRunStatus::Failed | TaskRunStatus::Cancelled => {
-                    continue;
-                }
-                _ => return Ok(false),
-            },
+        let group = match load_task_run(config, workflow_id, task_id)? {
+            Some(task) => task.join_group.unwrap_or_default(),
             None => return Ok(false),
+        };
+        groups.entry(group).or_default().push(task_id.clone());
+    }
+
+    // Check each group: ALL tasks in a group must be terminal
+    for (_group, task_ids) in &groups {
+        for task_id in task_ids {
+            match load_task_run(config, workflow_id, task_id)? {
+                Some(task) => match task.status {
+                    TaskRunStatus::Succeeded | TaskRunStatus::Failed | TaskRunStatus::Cancelled => {
+                        continue;
+                    }
+                    _ => return Ok(false),
+                },
+                None => return Ok(false),
+            }
         }
     }
     Ok(true)

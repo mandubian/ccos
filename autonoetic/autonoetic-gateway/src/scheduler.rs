@@ -148,8 +148,13 @@ async fn run_scheduler_tick_at(
     }
 
     // Process queued async workflow tasks (Phase 2)
-    if let Err(e) = process_queued_workflow_tasks(execution).await {
+    if let Err(e) = process_queued_workflow_tasks(execution.clone()).await {
         tracing::warn!(error = %e, "Failed to process queued workflow tasks");
+    }
+
+    // Process Runnable tasks (approval-unblocked tasks that need execution)
+    if let Err(e) = process_runnable_workflow_tasks(execution).await {
+        tracing::warn!(error = %e, "Failed to process runnable workflow tasks");
     }
 
     Ok(())
@@ -176,22 +181,32 @@ pub async fn process_queued_workflow_tasks(
     );
 
     for queued_task in queued {
-        // Dequeue first so the scheduler doesn't pick it up again
-        if let Err(e) = workflow_store::dequeue_task(
+        // Crash-safe: check if task is already being processed (Running TaskRun exists).
+        // If so, skip — it will be dequeued on completion. This prevents duplicate
+        // processing while keeping the queue file as a durable crash-recovery record.
+        if let Ok(Some(existing)) = workflow_store::load_task_run(
             &config,
             &queued_task.workflow_id,
             &queued_task.task_id,
         ) {
-            tracing::warn!(
-                target: "workflow",
-                task_id = %queued_task.task_id,
-                error = %e,
-                "Failed to dequeue task"
-            );
-            continue;
+            match existing.status {
+                autonoetic_types::workflow::TaskRunStatus::Running
+                | autonoetic_types::workflow::TaskRunStatus::Succeeded
+                | autonoetic_types::workflow::TaskRunStatus::Failed
+                | autonoetic_types::workflow::TaskRunStatus::Cancelled => {
+                    // Already processed or in-flight — skip. Dequeue to clean up.
+                    let _ = workflow_store::dequeue_task(
+                        &config,
+                        &queued_task.workflow_id,
+                        &queued_task.task_id,
+                    );
+                    continue;
+                }
+                _ => {}
+            }
         }
 
-        // Create or update the TaskRun to Running
+        // Create TaskRun as Running (durably persisted BEFORE dequeue)
         let ts = chrono::Utc::now().to_rfc3339();
         let task_run = autonoetic_types::workflow::TaskRun {
             task_id: queued_task.task_id.clone(),
@@ -333,6 +348,8 @@ pub async fn process_queued_workflow_tasks(
                             "result_summary": spawn_result.assistant_reply.as_ref().map(|s| &s[..s.len().min(200)]),
                         }),
                     );
+                    // Dequeue: task is durably terminal, safe to remove from queue
+                    let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
                 }
                 Err(e) => {
                     if let Err(inner) = workflow_store::update_task_run_status(
@@ -365,9 +382,113 @@ pub async fn process_queued_workflow_tasks(
                             "error": e.to_string(),
                         }),
                     );
+                    // Dequeue: task is durably terminal, safe to remove from queue
+                    let _ = workflow_store::dequeue_task(&cfg, &wf_id, &t_id);
                 }
             }
         });
+    }
+
+    Ok(())
+}
+
+/// Scan all workflows for Runnable tasks (approval-unblocked) and execute them.
+///
+/// When a task is unblocked by approval resolution (AwaitingApproval → Runnable),
+/// it has no queue file to drive execution. This function picks up such tasks,
+/// marks them Running, and spawns their execution.
+pub async fn process_runnable_workflow_tasks(
+    execution: Arc<crate::execution::GatewayExecutionService>,
+) -> anyhow::Result<()> {
+    let config = execution.config();
+    let workflows_root = workflow_store::workflows_root(&config).join("runs");
+    if !workflows_root.is_dir() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&workflows_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let wf_id = entry.file_name().to_string_lossy().to_string();
+        let tasks = workflow_store::list_task_runs_for_workflow(&config, &wf_id)?;
+
+        for task in tasks {
+            if task.status != autonoetic_types::workflow::TaskRunStatus::Runnable {
+                continue;
+            }
+
+            tracing::info!(
+                target: "workflow",
+                workflow_id = %wf_id,
+                task_id = %task.task_id,
+                agent_id = %task.agent_id,
+                "Executing approval-unblocked Runnable task"
+            );
+
+            // Mark as Running
+            if let Err(e) = workflow_store::update_task_run_status(
+                &config,
+                &wf_id,
+                &task.task_id,
+                autonoetic_types::workflow::TaskRunStatus::Running,
+                Some("resumed_after_approval".to_string()),
+            ) {
+                tracing::warn!(
+                    target: "workflow",
+                    task_id = %task.task_id,
+                    error = %e,
+                    "Failed to mark Runnable task as Running"
+                );
+                continue;
+            }
+
+            // Spawn execution
+            let exec = execution.clone();
+            let wf_id_clone = wf_id.clone();
+            let task_clone = task.clone();
+            let cfg = config.clone();
+
+            tokio::spawn(async move {
+                let result = exec
+                    .spawn_agent_once(
+                        &task_clone.agent_id,
+                        &format!("Resume after approval: {}", task_clone.session_id),
+                        &task_clone.session_id,
+                        task_clone.source_agent_id.as_deref(),
+                        false,
+                        None,
+                        None,
+                    )
+                    .await;
+
+                match result {
+                    Ok(spawn_result) => {
+                        let summary = spawn_result.assistant_reply.as_ref().map(|s| {
+                            const MAX: usize = 512;
+                            if s.len() <= MAX { s.clone() } else { format!("{}…", &s[..MAX]) }
+                        });
+                        let _ = workflow_store::update_task_run_status(
+                            &cfg,
+                            &wf_id_clone,
+                            &task_clone.task_id,
+                            autonoetic_types::workflow::TaskRunStatus::Succeeded,
+                            summary,
+                        );
+                    }
+                    Err(e) => {
+                        let _ = workflow_store::update_task_run_status(
+                            &cfg,
+                            &wf_id_clone,
+                            &task_clone.task_id,
+                            autonoetic_types::workflow::TaskRunStatus::Failed,
+                            Some(e.to_string()),
+                        );
+                    }
+                }
+            });
+        }
     }
 
     Ok(())
