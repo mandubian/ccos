@@ -116,6 +116,14 @@ When using `sandbox.exec`:
 - Capture both stdout and stderr for the evaluation report
 - For promotable/reviewed executable artifacts, prefer `sandbox.exec` with `artifact_id` so validation runs against the closed artifact boundary
 
+### Remote access / operator approval (CRITICAL)
+
+If `sandbox.exec` returns `approval_required: true` (often `Remote access detected` in stderr):
+
+1. **DO NOT** keep calling `sandbox.exec` with **different** commands to bypass the check — the gateway only allows **one** pending sandbox approval per session; further calls return `approval_already_pending` with the **same** `request_id`.
+2. **DO** stop and treat evaluation as **blocked on operator approval**: report `evaluator_pass: false` with a finding that execution needs approval, paste the exact `request_id` (`apr-*`), and do **not** loop on alternate commands.
+3. After the operator approves, **retry with the exact same command** that was submitted for that `request_id`, plus `approval_ref` set to that id (see tool JSON `message` field).
+
 ## Artifact-First Review Protocol
 
 When the task is about candidate executable artifacts for promotion or installation:

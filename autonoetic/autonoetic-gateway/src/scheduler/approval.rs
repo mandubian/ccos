@@ -4,7 +4,7 @@
 //! When an agent.install approval is resolved, the gateway automatically
 //! executes the approved install using the stored payload.
 
-use crate::execution::{gateway_actor_id, init_gateway_causal_logger};
+use crate::execution::{gateway_actor_id, gateway_root_dir, init_gateway_causal_logger};
 use crate::runtime::tools::{AgentInstallTool, NativeTool};
 use crate::policy::PolicyEngine;
 use crate::tracing::{EventScope, SessionId, TraceSession};
@@ -14,12 +14,67 @@ use autonoetic_types::agent::AgentManifest;
 use std::sync::Arc;
 
 pub use super::store::{
-    approved_approvals_dir, load_json_dir, pending_approvals_dir, read_json_file,
-    rejected_approvals_dir, write_json_file,
+    approved_approvals_dir, pending_approvals_dir, read_json_file, rejected_approvals_dir,
+    write_json_file,
 };
 
+/// Load approval request JSON files from the pending directory.
+///
+/// Skips `*_payload.json` companion files (install payload blobs) so listing does not fail
+/// deserialization.
 pub fn load_approval_requests(config: &GatewayConfig) -> anyhow::Result<Vec<ApprovalRequest>> {
-    load_json_dir::<ApprovalRequest>(&pending_approvals_dir(config))
+    let dir = pending_approvals_dir(config);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with("_payload.json") {
+            continue;
+        }
+        out.push(read_json_file::<ApprovalRequest>(&entry.path())?);
+    }
+    Ok(out)
+}
+
+/// Pending approvals whose [`ApprovalRequest::session_id`] shares the same root session as
+/// `root_session_id` (see [`crate::runtime::content_store::root_session_id`]).
+pub fn pending_approval_requests_for_root(
+    config: &GatewayConfig,
+    root_session_id: &str,
+) -> anyhow::Result<Vec<ApprovalRequest>> {
+    let all = load_approval_requests(config)?;
+    Ok(all
+        .into_iter()
+        .filter(|r| {
+            crate::runtime::content_store::root_session_id(&r.session_id) == root_session_id
+        })
+        .collect())
+}
+
+/// Pending [`ScheduledAction::SandboxExec`] approvals for an exact `session_id` (e.g. child
+/// delegation path), oldest first. Used to stop repeated `sandbox.exec` calls from minting many
+/// `apr-*` rows while an approval is still open.
+pub fn pending_sandbox_exec_requests_for_session(
+    config: &GatewayConfig,
+    session_id: &str,
+) -> anyhow::Result<Vec<ApprovalRequest>> {
+    if session_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut v: Vec<ApprovalRequest> = load_approval_requests(config)?
+        .into_iter()
+        .filter(|r| r.session_id == session_id)
+        .filter(|r| matches!(r.action, ScheduledAction::SandboxExec { .. }))
+        .collect();
+    v.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(v)
 }
 
 pub fn approve_request(
@@ -432,14 +487,16 @@ fn execute_approved_install(
     // Execute the install using the existing tool
     let tool = AgentInstallTool;
     let agent_dir = &parent_dir;
-    let gateway_dir = config.agents_dir.parent();
+    // Must match `ExecutionContext` / `ToolRegistry`: artifacts and content live under
+    // `agents_dir/.gateway/`, not `agents_dir.parent()`.
+    let gateway_path = gateway_root_dir(config);
     let policy = PolicyEngine::new(parent_manifest.clone());
     
     match tool.execute(
         &parent_manifest,
         &policy,
         agent_dir,
-        gateway_dir,
+        Some(gateway_path.as_path()),
         &arguments_json,
         Some(&decision.session_id),
         None,
@@ -570,7 +627,158 @@ fn decide_request(
 #[cfg(test)]
 mod tests {
     use super::should_notify_parent_session;
-    use autonoetic_types::background::ScheduledAction;
+    use crate::scheduler::pending_approvals_dir;
+    use autonoetic_types::background::{ApprovalRequest, ScheduledAction};
+    use autonoetic_types::config::GatewayConfig;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_approval_requests_skips_payload_companion_files() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let cfg = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..Default::default()
+        };
+        let pending = pending_approvals_dir(&cfg);
+        std::fs::create_dir_all(&pending).unwrap();
+
+        let req = ApprovalRequest {
+            request_id: "apr-test1234".to_string(),
+            agent_id: "coder.default".to_string(),
+            session_id: "root-session/coder-abc".to_string(),
+            action: ScheduledAction::SandboxExec {
+                command: "python3 x".to_string(),
+                dependencies: None,
+                requires_approval: true,
+                evidence_ref: None,
+            },
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            reason: None,
+            evidence_ref: None,
+        };
+        std::fs::write(
+            pending.join("apr-test1234.json"),
+            serde_json::to_string(&req).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            pending.join("apr-test1234_payload.json"),
+            r#"{"not":"approval_request"}"#,
+        )
+        .unwrap();
+
+        let loaded = super::load_approval_requests(&cfg).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].request_id, "apr-test1234");
+    }
+
+    #[test]
+    fn pending_approval_requests_for_root_filters_by_session() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let cfg = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..Default::default()
+        };
+        let pending = pending_approvals_dir(&cfg);
+        std::fs::create_dir_all(&pending).unwrap();
+
+        let req = |id: &str, sess: &str| ApprovalRequest {
+            request_id: id.to_string(),
+            agent_id: "a".to_string(),
+            session_id: sess.to_string(),
+            action: ScheduledAction::SandboxExec {
+                command: "c".to_string(),
+                dependencies: None,
+                requires_approval: true,
+                evidence_ref: None,
+            },
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            reason: None,
+            evidence_ref: None,
+        };
+        std::fs::write(
+            pending.join("apr-a.json"),
+            serde_json::to_string(&req("apr-a", "root-a/coder-1")).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            pending.join("apr-b.json"),
+            serde_json::to_string(&req("apr-b", "root-b/coder-1")).unwrap(),
+        )
+        .unwrap();
+
+        let for_a = super::pending_approval_requests_for_root(&cfg, "root-a").unwrap();
+        assert_eq!(for_a.len(), 1);
+        assert_eq!(for_a[0].request_id, "apr-a");
+    }
+
+    #[test]
+    fn pending_sandbox_exec_requests_for_session_filters_and_sorts() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let cfg = GatewayConfig {
+            agents_dir: agents_dir.clone(),
+            ..Default::default()
+        };
+        let pending = pending_approvals_dir(&cfg);
+        std::fs::create_dir_all(&pending).unwrap();
+
+        let req = |id: &str, created: &str| ApprovalRequest {
+            request_id: id.to_string(),
+            agent_id: "evaluator.default".to_string(),
+            session_id: "sess/evaluator-1".to_string(),
+            action: ScheduledAction::SandboxExec {
+                command: "python3 x".to_string(),
+                dependencies: None,
+                requires_approval: true,
+                evidence_ref: None,
+            },
+            created_at: created.to_string(),
+            reason: None,
+            evidence_ref: None,
+        };
+        std::fs::write(
+            pending.join("apr-second.json"),
+            serde_json::to_string(&req("apr-second", "2020-01-02T00:00:00Z")).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            pending.join("apr-first.json"),
+            serde_json::to_string(&req("apr-first", "2020-01-01T00:00:00Z")).unwrap(),
+        )
+        .unwrap();
+        // Install-style request same session — must not appear in sandbox-only list
+        let install = ApprovalRequest {
+            request_id: "apr-install".to_string(),
+            agent_id: "b".to_string(),
+            session_id: "sess/evaluator-1".to_string(),
+            action: ScheduledAction::AgentInstall {
+                agent_id: "x".to_string(),
+                summary: "s".to_string(),
+                requested_by_agent_id: "y".to_string(),
+                install_fingerprint: "fp".to_string(),
+            },
+            created_at: "2019-01-01T00:00:00Z".to_string(),
+            reason: None,
+            evidence_ref: None,
+        };
+        std::fs::write(
+            pending.join("apr-install.json"),
+            serde_json::to_string(&install).unwrap(),
+        )
+        .unwrap();
+
+        let list = super::pending_sandbox_exec_requests_for_session(&cfg, "sess/evaluator-1")
+            .unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].request_id, "apr-first");
+        assert_eq!(list[1].request_id, "apr-second");
+    }
 
     #[test]
     fn test_should_notify_parent_session_for_agent_install_nested_session() {

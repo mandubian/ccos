@@ -773,12 +773,96 @@ impl NativeTool for SandboxExecTool {
             extract_code_for_analysis(&args.command, agent_dir, gateway_dir, session_id);
         let remote_analysis =
             crate::runtime::remote_access::RemoteAccessAnalyzer::analyze_code(&code_to_analyze);
+        // Always log so operators can see why a run proceeds vs blocks (static analysis only;
+        // unrelated to agent.install `AnalysisProvider` — see docs/agent-install-approval-retry.md).
+        tracing::info!(
+            target: "sandbox.exec",
+            agent_id = %manifest.agent.id,
+            session_id = %session_id.unwrap_or(""),
+            approval_ref_validated = approval_validated_for_command,
+            will_require_approval = remote_analysis.requires_approval && !approval_validated_for_command,
+            pattern_count = remote_analysis.detected_patterns.len(),
+            summary = %remote_analysis.summary,
+            "Remote access scan for sandbox.exec (imports, URL literals, IPs). If will_require_approval=true, execution stops until operator approves and caller retries with approval_ref."
+        );
         if remote_analysis.requires_approval && !approval_validated_for_command {
             tracing::warn!(
                 target: "sandbox",
                 patterns = ?remote_analysis.detected_patterns,
                 "Code requires remote access - operator approval required"
             );
+
+            // Do not mint a new apr-* if this session already has a pending sandbox approval (stops
+            // LLM retry loops from flooding pending/).
+            if let Some(cfg) = config {
+                let sid = session_id.unwrap_or("");
+                let existing =
+                    crate::scheduler::approval::pending_sandbox_exec_requests_for_session(
+                        cfg, sid,
+                    )?;
+                if !existing.is_empty() {
+                    let primary = &existing[0];
+                    let ids: Vec<String> = existing.iter().map(|r| r.request_id.clone()).collect();
+                    let (cmd, cmd_deps) = match &primary.action {
+                        ScheduledAction::SandboxExec {
+                            command,
+                            dependencies,
+                            ..
+                        } => (command.clone(), dependencies),
+                        _ => {
+                            anyhow::bail!("internal: pending sandbox approval has wrong action type")
+                        }
+                    };
+                    let summary = format!(
+                        "Sandbox exec: {}",
+                        &cmd[..cmd.len().min(60)]
+                    );
+                    let approval = build_approval_details(
+                        primary,
+                        "sandbox_exec",
+                        summary.clone(),
+                        "approval_ref",
+                        serde_json::json!({
+                            "command": cmd,
+                            "dependencies": cmd_deps.as_ref().map(|d| serde_json::json!({
+                                "runtime": d.runtime,
+                                "packages": d.packages,
+                            })),
+                            "approval_already_pending": true,
+                            "note": "A sandbox approval is already pending for this session. After operator approval, retry sandbox.exec with the SAME command as the pending request and approval_ref.",
+                        }),
+                    );
+                    let dup_note = if existing.len() > 1 {
+                        format!(
+                            " ({} pending sandbox requests for this session; resolve or reject them.)",
+                            existing.len()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    return serde_json::to_string(&serde_json::json!({
+                        "ok": false,
+                        "exit_code": null,
+                        "stdout": "",
+                        "stderr": format!(
+                            "Sandbox approval already pending for this session (request_id(s): {}). Do not call sandbox.exec with new commands until approved or rejected. After approval, retry with the original pending command and approval_ref = '{}'.{}",
+                            ids.join(", "),
+                            primary.request_id,
+                            dup_note
+                        ),
+                        "approval_required": true,
+                        "approval_already_pending": true,
+                        "request_id": primary.request_id,
+                        "pending_request_ids": ids,
+                        "message": format!(
+                            "Use approval_ref='{}' after approval with the SAME command that was submitted for that request.",
+                            primary.request_id
+                        ),
+                        "approval": approval,
+                    }))
+                    .map_err(Into::into);
+                }
+            }
 
             // Create an actual approval request so operator can approve
             if let Some(cfg) = config {
@@ -1959,12 +2043,12 @@ impl NativeTool for ContentWriteTool {
 
     fn execute(
         &self,
-        manifest: &AgentManifest,
+        _manifest: &AgentManifest,
         _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
-        session_id: Option<&str>,
+        _session_id: Option<&str>,
         _turn_id: Option<&str>,
         _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
@@ -1999,7 +2083,7 @@ impl NativeTool for ContentWriteTool {
             anyhow::bail!("Content store requires gateway directory to be configured");
         };
 
-        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let sid = _session_id.unwrap_or(&_manifest.agent.id);
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
         let handle = store.write(args.content.as_bytes())?;
@@ -2076,12 +2160,12 @@ impl NativeTool for ContentReadTool {
 
     fn execute(
         &self,
-        manifest: &AgentManifest,
+        _manifest: &AgentManifest,
         _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
-        session_id: Option<&str>,
+        _session_id: Option<&str>,
         _turn_id: Option<&str>,
         _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
@@ -2101,7 +2185,7 @@ impl NativeTool for ContentReadTool {
             anyhow::bail!("Content store requires gateway directory to be configured");
         };
 
-        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let sid = _session_id.unwrap_or(&_manifest.agent.id);
         let store = crate::runtime::content_store::ContentStore::new(gw_dir)?;
 
         // Use root-based lookup so parent can read child's content
@@ -2175,12 +2259,12 @@ impl NativeTool for ArtifactBuildTool {
 
     fn execute(
         &self,
-        manifest: &AgentManifest,
+        _manifest: &AgentManifest,
         _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
-        session_id: Option<&str>,
+        _session_id: Option<&str>,
         _turn_id: Option<&str>,
         _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
@@ -2196,7 +2280,7 @@ impl NativeTool for ArtifactBuildTool {
             anyhow::bail!("Artifact store requires gateway directory to be configured");
         };
 
-        let sid = session_id.unwrap_or(&manifest.agent.id);
+        let sid = _session_id.unwrap_or(&_manifest.agent.id);
         let store = crate::artifact_store::ArtifactStore::new(gw_dir)?;
 
         let bundle = store.build(
@@ -2273,12 +2357,12 @@ impl NativeTool for ArtifactInspectTool {
 
     fn execute(
         &self,
-        manifest: &AgentManifest,
+        _manifest: &AgentManifest,
         _policy: &PolicyEngine,
         _agent_dir: &Path,
         gateway_dir: Option<&Path>,
         arguments_json: &str,
-        session_id: Option<&str>,
+        _session_id: Option<&str>,
         _turn_id: Option<&str>,
         _config: Option<&autonoetic_types::config::GatewayConfig>,
     ) -> anyhow::Result<String> {
@@ -3415,11 +3499,34 @@ impl NativeTool for AgentSpawnTool {
         let agents_dir = agent_dir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Agent directory is missing its agents root parent"))?;
-        let config = GatewayConfig {
+
+        let fallback_gateway_config = GatewayConfig {
             agents_dir: agents_dir.to_path_buf(),
             ..GatewayConfig::default()
         };
-        let execution = crate::execution::GatewayExecutionService::new(config);
+        let gw_config = config.unwrap_or(&fallback_gateway_config);
+
+        // Role-agnostic: block delegation while any approval for this *root* session is still
+        // pending (sandbox.exec, agent.install, …). No knowledge of planner vs specialist — only
+        // session roots and on-disk pending state.
+        let root = crate::runtime::content_store::root_session_id(&resolved_session_id);
+        let pending = crate::scheduler::approval::pending_approval_requests_for_root(
+            gw_config,
+            root,
+        )?;
+        if !pending.is_empty() {
+            let ids: Vec<String> = pending.iter().map(|r| r.request_id.clone()).collect();
+            return Err(anyhow::anyhow!(
+                "Cannot delegate (agent.spawn) while approval(s) are pending for this session. Pending request id(s): {}. Approve or reject with `autonoetic gateway approvals approve|reject <id> --config <path>`, then continue.",
+                ids.join(", ")
+            ));
+        }
+
+        let execution_config = GatewayConfig {
+            agents_dir: agents_dir.to_path_buf(),
+            ..GatewayConfig::default()
+        };
+        let execution = crate::execution::GatewayExecutionService::new(execution_config);
 
         let source_agent_id = manifest.agent.id.clone();
         let target_agent_id = args.agent_id.clone();
@@ -3987,7 +4094,7 @@ impl NativeTool for AgentInstallTool {
         }
 
         // Code analysis
-        use crate::runtime::analysis::{AnalysisProvider, AnalysisProviderFactory, FileToAnalyze};
+        use crate::runtime::analysis::{AnalysisProviderFactory, FileToAnalyze};
 
         let mut files_for_analysis: Vec<FileToAnalyze> = resolved_files
             .iter()
@@ -4013,6 +4120,7 @@ impl NativeTool for AgentInstallTool {
             .map(|c| match c.capability_provider.as_str() {
                 "llm" => crate::runtime::analysis::AnalysisProviderType::Llm,
                 "composite" => crate::runtime::analysis::AnalysisProviderType::Composite,
+                "python_ast" => crate::runtime::analysis::AnalysisProviderType::PythonAst,
                 "none" => crate::runtime::analysis::AnalysisProviderType::None,
                 _ => crate::runtime::analysis::AnalysisProviderType::Pattern,
             })
@@ -4089,6 +4197,7 @@ impl NativeTool for AgentInstallTool {
                 .map(|c| match c.code_analysis.security_provider.as_str() {
                     "llm" => crate::runtime::analysis::AnalysisProviderType::Llm,
                     "composite" => crate::runtime::analysis::AnalysisProviderType::Composite,
+                    "python_ast" => crate::runtime::analysis::AnalysisProviderType::PythonAst,
                     "none" => crate::runtime::analysis::AnalysisProviderType::None,
                     _ => crate::runtime::analysis::AnalysisProviderType::Pattern,
                 })
