@@ -8,6 +8,7 @@
 
 use crate::execution::gateway_root_dir;
 use crate::scheduler::store::{append_jsonl_record, read_json_file, write_json_file};
+use autonoetic_types::causal_chain::EntryStatus;
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::workflow::{
     TaskRun, TaskRunStatus, WorkflowEventRecord, WorkflowRun, WorkflowRunStatus,
@@ -175,6 +176,18 @@ pub fn ensure_workflow_for_root_session(
         },
     )?;
 
+    crate::scheduler::workflow_causal::mirror_orchestration_event(
+        config,
+        root_session_id,
+        "workflow.started",
+        EntryStatus::Success,
+        serde_json::json!({
+            "workflow_id": workflow_id,
+            "root_session_id": root_session_id,
+            "lead_agent_id": run.lead_agent_id,
+        }),
+    );
+
     Ok(run)
 }
 
@@ -246,6 +259,33 @@ pub fn update_task_run_status(
             occurred_at: now_rfc3339(),
         },
     )?;
+
+    if let Some(wf) = load_workflow_run(config, workflow_id)? {
+        let (causal_action, causal_status) = match status {
+            TaskRunStatus::Succeeded => ("workflow.task.completed", EntryStatus::Success),
+            TaskRunStatus::Failed | TaskRunStatus::Cancelled => {
+                ("workflow.task.failed", EntryStatus::Error)
+            }
+            TaskRunStatus::AwaitingApproval => {
+                ("workflow.task.awaiting_approval", EntryStatus::Success)
+            }
+            _ => ("workflow.task.updated", EntryStatus::Success),
+        };
+        crate::scheduler::workflow_causal::mirror_orchestration_event(
+            config,
+            &wf.root_session_id,
+            causal_action,
+            causal_status,
+            serde_json::json!({
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "workflow_event_type": event_type,
+                "target_agent_id": task.agent_id,
+                "child_session_id": task.session_id,
+                "parent_session_id": task.parent_session_id,
+            }),
+        );
+    }
     Ok(())
 }
 
