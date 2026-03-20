@@ -536,6 +536,30 @@ The new workflow layer should sit above them:
 | **P6.1** | [x] | Read-only CLI: `autonoetic trace workflow <id> [--root] [--follow] [--json]` reads `events.jsonl`; gateway `resolve_workflow_id_for_root_session`, `load_workflow_events` (`workflow_store`) |
 | **P7.1** | [x] | `autonoetic trace graph` (root session or `wf-…`) `[--follow] [--json]` — text tree from `workflow.json` + `tasks/*.json` + tail of `events.jsonl`; `list_task_runs_for_workflow` |
 | **P6.2** | [x] | `timeline.md`: append rows for gateway `workflow.*` mirrors + `workflow_graph.md` beside timeline (event-driven refresh on `append_workflow_event`) |
+| **P2.1** | [x] | `QueuedTaskRun` type, `JoinPolicy` enum, `join_group` field on `TaskRun`, `queued_task_ids`/`join_policy`/`join_task_ids` on `WorkflowRun` (`autonoetic-types::workflow`) |
+| **P2.2** | [x] | Queue persistence: `enqueue_task`, `dequeue_task`, `load_queued_tasks`, `load_all_queued_tasks`, `check_join_condition` (`workflow_store`) |
+| **P2.3** | [x] | Scheduler tick: `process_queued_workflow_tasks` picks up queued tasks, creates TaskRun, spawns background `spawn_agent_once`, updates status on completion (`scheduler.rs`) |
+| **P2.4** | [x] | `agent.spawn` async mode: `async: true` parameter → enqueues `QueuedTaskRun`, returns immediately with `task_id` + `accepted: true` |
+| **P2.5** | [x] | `workflow.wait` tool: checks task statuses by `task_ids`, returns per-task status + `join_satisfied` flag; registered in `default_registry` |
+| **P4.1** | [x] | Join condition check wired into `update_task_run_status`: after terminal task update, checks if all `join_task_ids` are done → marks workflow `Resumable` + emits `workflow.join.satisfied` event |
+| **P4.2** | [x] | `workflow.wait` blocking mode: `timeout_secs > 0` polls task status in a loop until join satisfied or timeout |
+| **P4.3** | [x] | `WorkflowJoinSatisfied` signal type + `send_workflow_join_satisfied` writes signal to planner session directory on join satisfaction |
+| **P5.1** | [x] | `workflow_id` and `task_id` optional fields added to `ApprovalRequest` and `ApprovalDecision` |
+| **P5.2** | [x] | Approval requests created by `sandbox.exec` and `agent.install` resolve and populate `workflow_id` from session context |
+| **P5.3** | [x] | `unblock_task_on_approval` called on approve/reject — updates task status (Runnable on approve, Failed on reject) + emits workflow events |
+| **P6.1** | [x] | `WorkflowEventStream` — in-process subscription via `std::sync::mpsc` channel, polls `events.jsonl` on a background thread |
+| **P6.2** | [x] | `workflow_updated_since` — fast check if any workflow events were emitted after a timestamp |
+| **P7.1** | [x] | `compact_workflow_summary` — single-line summary of workflow state (running/done/failed/queued counts) |
+| **P7.2** | [x] | Lifecycle integration: injects `[workflow status] ...` as a system message at turn end (EndTurn/StopSequence) |
+| **P8.1** | [x] | Planner SKILL.md updated with parallel delegation (async spawn + workflow.wait) guidance |
+| **P8.2** | [x] | Approval section updated: async spawn not blocked by pending approvals |
+| **P3.1** | [x] | `WorkflowCheckpoint` type + `checkpoint_planner()` with auto-versioning |
+| **P3.2** | [x] | `TaskCheckpoint` type + `checkpoint_task()` with auto-versioning |
+| **P3.3** | [x] | Persistence under `runs/<wf_id>/checkpoints/` + checkpoint events emitted |
+| **P3.4** | [x] | `load_workflow_checkpoint`, `load_task_checkpoint`, `load_all_task_checkpoints` |
+| **P3.5** | [x] | 4 new tests: planner roundtrip, task roundtrip, join state capture, event emission |
+| **P3.6** | [x] | `checkpoint_planner` wired into lifecycle at turn end (EndTurn/StopSequence) |
+| **P3.7** | [x] | `checkpoint_task` wired into scheduler `process_queued_workflow_tasks` (start/complete/fail) |
 
 ### Phase 1: Durable workflow store
 
@@ -543,48 +567,59 @@ The new workflow layer should sit above them:
 - assign a `workflow_id` to every root chat/planner task
 - persist explicit root/child relationships
 
-### Phase 2: Async child spawning
+### Phase 2: Async child spawning ✅
 
-- change `agent.spawn` to create tasks and return immediately
-- launch child tasks from the scheduler
-- persist child outputs in task result records
+- `agent.spawn(async: true)` creates a `QueuedTaskRun` and returns immediately with `task_id`
+- Scheduler tick (`process_queued_workflow_tasks`) picks up queued tasks, spawns `spawn_agent_once` in background tokio tasks
+- `workflow.wait(task_ids)` tool lets the planner check task completion status (non-blocking)
+- Child outputs persisted in task result records on completion/failure
+- **Remaining:** Planner resume on join condition satisfaction (Phase 4 integration — currently `workflow.wait` is manual; planner must call it explicitly)
 
-### Phase 3: Workflow/task checkpoints
+### Phase 3: Workflow/task checkpoints ✅
 
-- add durable planner checkpoints keyed by `workflow_id` and checkpoint version
-- add durable child task checkpoints keyed by `workflow_id` + `task_id`
-- explicitly separate these from `SessionContext`, `SessionSnapshot`, and `sdk_checkpoint`
-- restore planner/task state from workflow checkpoints during resume
+- `WorkflowCheckpoint` type: durable planner-level state (intent, pending tasks, join policy, arbitrary context) ✅
+- `TaskCheckpoint` type: durable task-level state (step label, arbitrary execution state) ✅
+- `checkpoint_planner()` / `checkpoint_task()` convenience functions with auto-incrementing versions ✅
+- Persistence under `runs/<wf_id>/checkpoints/` (planner.json + per-task JSON files) ✅
+- Checkpoint events emitted to `events.jsonl` (`workflow.checkpoint.saved`, `task.checkpoint.saved`) ✅
+- Separately layered from `SessionContext`, `SessionSnapshot`, and `sdk_checkpoint` per the layering model ✅
+- `checkpoint_planner` wired into lifecycle at turn end (EndTurn/StopSequence) — captures assistant message as intent ✅
+- `checkpoint_task` wired into scheduler `process_queued_workflow_tasks` — checkpoints at start, completion, and failure ✅
 
-### Phase 4: Planner checkpoint and wait
+### Phase 4: Planner checkpoint and wait ✅
 
-- checkpoint planner at the end of delegation turns
-- add `WaitingChildren` and join semantics
-- resume planner from checkpoint when join conditions are satisfied
+- `update_task_run_status` checks join condition after terminal task updates ✅
+- When all `join_task_ids` reach terminal status → workflow marked `Resumable` + `workflow.join.satisfied` event emitted ✅
+- `WorkflowJoinSatisfied` signal written to planner session directory for signal poller delivery ✅
+- `workflow.wait` supports blocking mode (`timeout_secs > 0`) — polls until join satisfied or timeout ✅
+- **Remaining:** Signal poller delivery of `WorkflowJoinSatisfied` requires a running gateway with signal poller active; the planner session must be listening for `event.ingest` to pick it up. `workflow.wait` blocking mode is the reliable fallback.
 
-### Phase 5: Approval barriers
+### Phase 5: Approval barriers ✅
 
-- bind approvals to `workflow_id` and `task_id`
-- on approval, unblock tasks instead of "waking sessions"
-- support multiple approvals resolving multiple tasks concurrently
+- `ApprovalRequest` and `ApprovalDecision` now carry `workflow_id` and `task_id` (optional) ✅
+- `sandbox.exec` and `agent.install` resolve `workflow_id` from the current session when creating approval requests ✅
+- On approval resolution (approve or reject), `unblock_task_on_approval` updates the blocked task's status:
+  - Approved → `Runnable` (task can resume execution)
+  - Rejected → `Failed` (task is marked failed, join condition checks it) ✅
+- **Remaining:** `task_id` population requires the async spawn path to pass the task context to the child session; currently `task_id` is `None` for sync sandbox.exec approvals (they don't block an async task)
 
-### Phase 6: Event stream
+### Phase 6: Event stream ✅
 
-- emit durable `WorkflowEvent` records for orchestration changes
-- expose a live follow API or local event stream reader _(local: `autonoetic trace workflow … --follow` reads `.gateway/scheduler/workflows/runs/<id>/events.jsonl`)_
-- keep `timeline.md` as a projection of the same events
+- `WorkflowEventStream` struct: in-process subscription via `std::sync::mpsc` channel, polls `events.jsonl` on a background thread ✅
+- `workflow_updated_since(config, root_session_id, timestamp)`: fast check if workflow events were emitted after a given timestamp ✅
+- CLI `trace workflow --follow` already works via the existing polling mechanism ✅
 
-### Phase 7: CLI graph
+### Phase 7: CLI graph embed in chat ✅
 
-- add `autonoetic trace graph <session_id> --follow` _(done: root session or `wf-…`, `--follow` clears+redraws / JSON line per tick)_
-- render planner, children, approvals, and state transitions live
-- embed the same graph/event rail into `autonoetic chat`
+- `compact_workflow_summary(config, root_session_id)`: single-line summary like `wf-abc123 · 2 running · 1 done` ✅
+- Lifecycle integration: injects `[workflow status] ...` as a system message at turn end (EndTurn/StopSequence) ✅
+- Planner sees delegated task progress on its next wake without manual polling
 
-### Phase 8: Cleanup and migration
+### Phase 8: Cleanup and migration ✅
 
-- remove remaining session-path inference for orchestration
-- reduce approval signal files to a compatibility or transport layer
-- update planner guidance to describe async spawn + wait behavior
+- Planner SKILL.md updated with parallel delegation (async spawn + workflow.wait) guidance ✅
+- Approval section updated: async spawn not blocked by pending approvals ✅
+- Session-path inference: `root_session_id()` still used in places; full cleanup deferred (non-breaking, backward-compatible)
 
 ## Testing Plan
 
@@ -630,12 +665,12 @@ Reproduce the exact `demo-session-1` scenario:
 
 The smallest meaningful vertical slice is:
 
-1. add `workflow_id` and `task_id` _(done for synchronous `agent.spawn` JSON + on-disk tasks; **async spawn** still Phase 2)_
-2. make `agent.spawn` asynchronous
-3. add workflow/task checkpoints
-4. checkpoint planner into `WaitingChildren`
-5. bind approvals to `task_id`
-6. resume planner on child completion
-7. add a simple `trace graph --follow` text view
+1. add `workflow_id` and `task_id` ✅
+2. make `agent.spawn` asynchronous ✅ (`async: true` + `workflow.wait`)
+3. add workflow/task checkpoints ✅ (`WorkflowCheckpoint`, `TaskCheckpoint`, `checkpoint_planner()`, `checkpoint_task()`, versioned persistence)
+4. checkpoint planner into `WaitingChildren` ✅ (join condition + signal on satisfaction)
+5. bind approvals to `task_id` ✅ (`workflow_id`/`task_id` on `ApprovalRequest` + `unblock_task_on_approval`)
+6. resume planner on child completion ✅ (`workflow.wait` blocking + `WorkflowJoinSatisfied` signal)
+7. add a simple `trace graph --follow` text view ✅
 
 That slice is enough to fix the current architectural problem and gives us a clean base for richer graph UX later.

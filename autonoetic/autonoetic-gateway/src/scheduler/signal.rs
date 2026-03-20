@@ -27,6 +27,14 @@ pub enum Signal {
         message: String,
         timestamp: String,
     },
+    /// All tasks in a workflow join group have completed.
+    /// Sent to the planner session so it can resume.
+    WorkflowJoinSatisfied {
+        workflow_id: String,
+        join_task_ids: Vec<String>,
+        message: String,
+        timestamp: String,
+    },
 }
 
 static POLLER_STARTED: Once = Once::new();
@@ -350,6 +358,23 @@ fn build_delivery_request(pending: &PendingSignal, session_id: &str) -> crate::r
             agent_id.clone(),
             status.clone(),
         ),
+        Signal::WorkflowJoinSatisfied {
+            workflow_id,
+            join_task_ids,
+            message,
+            ..
+        } => (
+            serde_json::json!({
+                "type": "workflow_join_satisfied",
+                "workflow_id": workflow_id,
+                "join_task_ids": join_task_ids,
+                "message": message,
+            })
+            .to_string(),
+            // Target the root session (session_id is passed separately)
+            String::new(),
+            "completed".to_string(),
+        ),
     };
 
     crate::router::JsonRpcRequest {
@@ -532,7 +557,42 @@ fn should_defer_to_client_consumer(signal: &Signal) -> bool {
             let age = chrono::Utc::now().signed_duration_since(created_at.with_timezone(&chrono::Utc));
             age.num_seconds() < CLIENT_RESUME_GRACE_SECS
         }
+        Signal::WorkflowJoinSatisfied { timestamp, .. } => {
+            let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
+                return false;
+            };
+            let age = chrono::Utc::now().signed_duration_since(created_at.with_timezone(&chrono::Utc));
+            age.num_seconds() < CLIENT_RESUME_GRACE_SECS
+        }
     }
+}
+
+/// Write a WorkflowJoinSatisfied signal to a planner session's signal directory.
+pub fn send_workflow_join_satisfied(
+    config: &autonoetic_types::config::GatewayConfig,
+    root_session_id: &str,
+    workflow_id: &str,
+    join_task_ids: Vec<String>,
+) -> anyhow::Result<()> {
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let signal_id = format!("wf-join-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let signal = Signal::WorkflowJoinSatisfied {
+        workflow_id: workflow_id.to_string(),
+        join_task_ids: join_task_ids.clone(),
+        message: format!(
+            "Workflow join satisfied: all {} tasks completed. You may resume planning.",
+            join_task_ids.len()
+        ),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    write_signal(&gateway_dir, root_session_id, &signal_id, &signal)?;
+    tracing::info!(
+        target: "signal",
+        workflow_id = %workflow_id,
+        root_session_id = %root_session_id,
+        "Wrote WorkflowJoinSatisfied signal"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

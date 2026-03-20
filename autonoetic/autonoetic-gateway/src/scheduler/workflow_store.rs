@@ -12,7 +12,8 @@ use crate::scheduler::store::{append_jsonl_record, read_json_file, write_json_fi
 use autonoetic_types::causal_chain::EntryStatus;
 use autonoetic_types::config::GatewayConfig;
 use autonoetic_types::workflow::{
-    TaskRun, TaskRunStatus, WorkflowEventRecord, WorkflowRun, WorkflowRunStatus,
+    JoinPolicy, QueuedTaskRun, TaskCheckpoint, TaskRun, TaskRunStatus, WorkflowCheckpoint,
+    WorkflowEventRecord, WorkflowRun, WorkflowRunStatus,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -28,9 +29,7 @@ struct RootWorkflowIndex {
 }
 
 pub fn workflows_root(config: &GatewayConfig) -> PathBuf {
-    gateway_root_dir(config)
-        .join("scheduler")
-        .join("workflows")
+    gateway_root_dir(config).join("scheduler").join("workflows")
 }
 
 fn index_dir(config: &GatewayConfig) -> PathBuf {
@@ -83,7 +82,10 @@ fn new_event_id() -> String {
 }
 
 /// Load a workflow run by id, if present.
-pub fn load_workflow_run(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<Option<WorkflowRun>> {
+pub fn load_workflow_run(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Option<WorkflowRun>> {
     let p = workflow_run_path(config, workflow_id);
     if !p.exists() {
         return Ok(None);
@@ -150,6 +152,9 @@ pub fn ensure_workflow_for_root_session(
                     active_task_ids: vec![],
                     blocked_task_ids: vec![],
                     pending_approval_ids: vec![],
+                    queued_task_ids: vec![],
+                    join_policy: Default::default(),
+                    join_task_ids: vec![],
                 }
             }
         };
@@ -175,6 +180,9 @@ pub fn ensure_workflow_for_root_session(
         active_task_ids: vec![],
         blocked_task_ids: vec![],
         pending_approval_ids: vec![],
+        queued_task_ids: vec![],
+        join_policy: Default::default(),
+        join_task_ids: vec![],
     };
 
     save_workflow_run(config, &run)?;
@@ -250,7 +258,10 @@ fn task_run_status_snake(s: TaskRunStatus) -> &'static str {
 /// Rewrite `.gateway/sessions/{root}/workflow_graph.md` from current workflow + task + event state.
 ///
 /// Called after each append to `events.jsonl` so operators can open it beside `timeline.md`.
-pub fn refresh_workflow_graph_markdown(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<()> {
+pub fn refresh_workflow_graph_markdown(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<()> {
     let run = match load_workflow_run(config, workflow_id)? {
         Some(r) => r,
         None => return Ok(()),
@@ -339,7 +350,10 @@ pub fn refresh_workflow_graph_markdown(config: &GatewayConfig, workflow_id: &str
 }
 
 /// Append one event to the workflow's `events.jsonl`.
-pub fn append_workflow_event(config: &GatewayConfig, event: &WorkflowEventRecord) -> anyhow::Result<()> {
+pub fn append_workflow_event(
+    config: &GatewayConfig,
+    event: &WorkflowEventRecord,
+) -> anyhow::Result<()> {
     let path = workflow_events_path(config, &event.workflow_id);
     append_jsonl_record(&path, event)?;
     if let Err(e) = refresh_workflow_graph_markdown(config, &event.workflow_id) {
@@ -472,8 +486,613 @@ pub fn update_task_run_status(
                 "parent_session_id": task.parent_session_id,
             }),
         );
+
+        // Set workflow to BlockedApproval when a task enters AwaitingApproval
+        if status == TaskRunStatus::AwaitingApproval
+            && wf.status != WorkflowRunStatus::BlockedApproval
+        {
+            let mut wf_update = wf.clone();
+            wf_update.status = WorkflowRunStatus::BlockedApproval;
+            wf_update.updated_at = now_rfc3339();
+            if let Err(e) = save_workflow_run(config, &wf_update) {
+                tracing::warn!(target: "workflow", error = %e, "Failed to set BlockedApproval");
+            }
+        }
+
+        // Check join condition after terminal task updates
+        let is_terminal = matches!(
+            status,
+            TaskRunStatus::Succeeded | TaskRunStatus::Failed | TaskRunStatus::Cancelled
+        );
+        if is_terminal && !wf.join_task_ids.is_empty() {
+            if let Ok(true) = check_join_condition(config, workflow_id) {
+                let mut wf_mut = wf;
+                wf_mut.status = WorkflowRunStatus::Resumable;
+                wf_mut.updated_at = now_rfc3339();
+                if let Err(e) = save_workflow_run(config, &wf_mut) {
+                    tracing::warn!(
+                        target: "workflow",
+                        error = %e,
+                        "Failed to mark workflow as Resumable"
+                    );
+                }
+                append_workflow_event(
+                    config,
+                    &WorkflowEventRecord {
+                        event_id: new_event_id(),
+                        workflow_id: workflow_id.to_string(),
+                        task_id: None,
+                        event_type: "workflow.join.satisfied".to_string(),
+                        payload: serde_json::json!({
+                            "join_task_ids": wf_mut.join_task_ids,
+                        }),
+                        occurred_at: now_rfc3339(),
+                    },
+                )?;
+                tracing::info!(
+                    target: "workflow",
+                    workflow_id = %workflow_id,
+                    "Join condition satisfied — workflow marked Resumable"
+                );
+
+                // Send a signal to the planner session to resume
+                if let Err(e) = crate::scheduler::signal::send_workflow_join_satisfied(
+                    config,
+                    &wf_mut.root_session_id,
+                    workflow_id,
+                    wf_mut.join_task_ids.clone(),
+                ) {
+                    tracing::warn!(
+                        target: "signal",
+                        error = %e,
+                        "Failed to send workflow join satisfied signal"
+                    );
+                }
+            }
+        }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Async task queue
+// ---------------------------------------------------------------------------
+
+fn queue_dir(config: &GatewayConfig, workflow_id: &str) -> PathBuf {
+    workflow_run_dir(config, workflow_id).join("queue")
+}
+
+fn queued_task_path(config: &GatewayConfig, workflow_id: &str, task_id: &str) -> PathBuf {
+    queue_dir(config, workflow_id).join(format!("{task_id}.json"))
+}
+
+/// Enqueue a task for async execution by the scheduler.
+/// Also updates the workflow's `queued_task_ids` and `join_task_ids`.
+pub fn enqueue_task(config: &GatewayConfig, queued: &QueuedTaskRun) -> anyhow::Result<()> {
+    let dir = queue_dir(config, &queued.workflow_id);
+    fs::create_dir_all(&dir)?;
+    let path = queued_task_path(config, &queued.workflow_id, &queued.task_id);
+    write_json_file(&path, queued)?;
+
+    let mut run = load_workflow_run(config, &queued.workflow_id)?
+        .ok_or_else(|| anyhow::anyhow!("workflow '{}' not found", queued.workflow_id))?;
+    if !run.queued_task_ids.contains(&queued.task_id) {
+        run.queued_task_ids.push(queued.task_id.clone());
+    }
+    if queued.blocks_planner && !run.join_task_ids.contains(&queued.task_id) {
+        run.join_task_ids.push(queued.task_id.clone());
+    }
+    // Set workflow to WaitingChildren when blocking tasks are enqueued
+    if queued.blocks_planner && run.status == WorkflowRunStatus::Active {
+        run.status = WorkflowRunStatus::WaitingChildren;
+    }
+    run.updated_at = now_rfc3339();
+    save_workflow_run(config, &run)?;
+
+    append_workflow_event(
+        config,
+        &WorkflowEventRecord {
+            event_id: new_event_id(),
+            workflow_id: queued.workflow_id.clone(),
+            task_id: Some(queued.task_id.clone()),
+            event_type: "task.queued".to_string(),
+            payload: serde_json::json!({
+                "agent_id": queued.agent_id,
+                "child_session_id": queued.child_session_id,
+                "parent_session_id": queued.parent_session_id,
+                "blocks_planner": queued.blocks_planner,
+            }),
+            occurred_at: now_rfc3339(),
+        },
+    )?;
+
+    tracing::info!(
+        target: "workflow",
+        workflow_id = %queued.workflow_id,
+        task_id = %queued.task_id,
+        agent_id = %queued.agent_id,
+        "Task enqueued for async execution"
+    );
+    Ok(())
+}
+
+/// Dequeue (remove from queue) after task execution completes.
+pub fn dequeue_task(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    task_id: &str,
+) -> anyhow::Result<()> {
+    let path = queued_task_path(config, workflow_id, task_id);
+    if path.exists() {
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!(
+                target: "workflow",
+                path = %path.display(),
+                error = %e,
+                "Failed to remove queued task file"
+            );
+        }
+    }
+
+    let mut run = match load_workflow_run(config, workflow_id)? {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    run.queued_task_ids.retain(|id| id != task_id);
+    run.updated_at = now_rfc3339();
+    save_workflow_run(config, &run)?;
+    Ok(())
+}
+
+/// Load all queued tasks for a workflow.
+pub fn load_queued_tasks(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Vec<QueuedTaskRun>> {
+    let dir = queue_dir(config, workflow_id);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        match read_json_file::<QueuedTaskRun>(&path) {
+            Ok(q) => out.push(q),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skip invalid queued task json");
+            }
+        }
+    }
+    out.sort_by(|a, b| a.enqueued_at.cmp(&b.enqueued_at));
+    Ok(out)
+}
+
+/// Load ALL queued tasks across all workflows (for the scheduler tick).
+/// Scans the runs/ directory for any workflow with a non-empty queue/.
+pub fn load_all_queued_tasks(config: &GatewayConfig) -> anyhow::Result<Vec<QueuedTaskRun>> {
+    let root = workflows_root(config).join("runs");
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let wf_id = entry.file_name().to_string_lossy().to_string();
+        let queued = load_queued_tasks(config, &wf_id)?;
+        out.extend(queued);
+    }
+    out.sort_by(|a, b| a.enqueued_at.cmp(&b.enqueued_at));
+    Ok(out)
+}
+
+/// Check if a workflow's join condition is satisfied.
+/// Returns true if all tasks in `join_task_ids` have reached a terminal status.
+pub fn check_join_condition(config: &GatewayConfig, workflow_id: &str) -> anyhow::Result<bool> {
+    let run = match load_workflow_run(config, workflow_id)? {
+        Some(r) => r,
+        None => return Ok(false),
+    };
+    if run.join_task_ids.is_empty() {
+        return Ok(true);
+    }
+    for task_id in &run.join_task_ids {
+        match load_task_run(config, workflow_id, task_id)? {
+            Some(task) => match task.status {
+                TaskRunStatus::Succeeded | TaskRunStatus::Failed | TaskRunStatus::Cancelled => {
+                    continue;
+                }
+                _ => return Ok(false),
+            },
+            None => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+/// Generate a compact, single-line summary of a workflow's current state.
+/// Returns `None` if no workflow exists for the given root session.
+/// This is intended for injecting into chat at turn boundaries.
+pub fn compact_workflow_summary(
+    config: &GatewayConfig,
+    root_session_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let wf_id = match resolve_workflow_id_for_root_session(config, root_session_id)? {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    let run = match load_workflow_run(config, &wf_id)? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let tasks = list_task_runs_for_workflow(config, &wf_id)?;
+    let queued = load_queued_tasks(config, &wf_id)?;
+
+    let mut running = 0usize;
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut other = 0usize;
+    for t in &tasks {
+        match t.status {
+            TaskRunStatus::Running | TaskRunStatus::Runnable => running += 1,
+            TaskRunStatus::Succeeded => succeeded += 1,
+            TaskRunStatus::Failed | TaskRunStatus::Cancelled => failed += 1,
+            _ => other += 1,
+        }
+    }
+
+    let total = tasks.len() + queued.len();
+    if total == 0 {
+        return Ok(None);
+    }
+
+    let mut parts = Vec::new();
+    parts.push(format!("workflow {}", &wf_id));
+    if running > 0 {
+        parts.push(format!("{} running", running));
+    }
+    if !queued.is_empty() {
+        parts.push(format!("{} queued", queued.len()));
+    }
+    if succeeded > 0 {
+        parts.push(format!("{} done", succeeded));
+    }
+    if failed > 0 {
+        parts.push(format!("{} failed", failed));
+    }
+    if other > 0 {
+        parts.push(format!("{} other", other));
+    }
+
+    let status_str = match run.status {
+        WorkflowRunStatus::Resumable => " [RESUMABLE]",
+        WorkflowRunStatus::BlockedApproval => " [BLOCKED]",
+        WorkflowRunStatus::WaitingChildren => " [WAITING]",
+        _ => "",
+    };
+
+    let mut summary = format!("{}{}", parts.join(" · "), status_str);
+
+    // Consume planner checkpoint on resume: append the last delegation intent
+    if run.status == WorkflowRunStatus::Resumable {
+        if let Ok(Some(cp)) = load_workflow_checkpoint(config, &wf_id) {
+            if !cp.planner_intent.is_empty() {
+                summary.push_str(&format!(
+                    "\n  last intent (v{}): {}",
+                    cp.version, cp.planner_intent
+                ));
+            }
+        }
+    }
+
+    Ok(Some(summary))
+}
+
+// ---------------------------------------------------------------------------
+// In-process workflow event stream (Phase 6)
+// ---------------------------------------------------------------------------
+
+use std::sync::mpsc;
+
+/// Handle for an in-process subscription to workflow events.
+/// Events are delivered via a `std::sync::mpsc` channel.
+pub struct WorkflowEventStream {
+    pub workflow_id: String,
+    pub root_session_id: String,
+    receiver: mpsc::Receiver<WorkflowEventRecord>,
+    _poller: std::thread::JoinHandle<()>,
+}
+
+impl WorkflowEventStream {
+    /// Start streaming events for a workflow. Polls the JSONL file at the given interval.
+    pub fn start(
+        config: GatewayConfig,
+        workflow_id: String,
+        root_session_id: String,
+        poll_secs: u64,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let wf_id = workflow_id.clone();
+        let poller = std::thread::spawn(move || {
+            let mut last_offset = 0usize;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(poll_secs.max(1)));
+                let path = workflow_events_path(&config, &wf_id);
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    for line in &lines[last_offset..] {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        if let Ok(event) = serde_json::from_str::<WorkflowEventRecord>(line) {
+                            if tx.send(event).is_err() {
+                                return; // receiver dropped
+                            }
+                        }
+                    }
+                    last_offset = lines.len();
+                }
+            }
+        });
+        Self {
+            workflow_id,
+            root_session_id,
+            receiver: rx,
+            _poller: poller,
+        }
+    }
+
+    /// Try to receive the next event without blocking.
+    pub fn try_recv(&self) -> Option<WorkflowEventRecord> {
+        self.receiver.try_recv().ok()
+    }
+
+    /// Receive the next event, blocking until one arrives.
+    pub fn recv(&self) -> Result<WorkflowEventRecord, mpsc::RecvError> {
+        self.receiver.recv()
+    }
+}
+
+/// Resolve a task_id from a session_id within a workflow.
+/// Scans all task runs in the workflow for a matching session_id.
+pub fn resolve_task_id_for_session(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    session_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let tasks = list_task_runs_for_workflow(config, workflow_id)?;
+    for task in tasks {
+        if task.session_id == session_id {
+            return Ok(Some(task.task_id));
+        }
+    }
+    // Also check queued tasks
+    let queued = load_queued_tasks(config, workflow_id)?;
+    for q in queued {
+        if q.child_session_id == session_id {
+            return Ok(Some(q.task_id));
+        }
+    }
+    Ok(None)
+}
+
+/// Check if the workflow graph has been updated since the given timestamp.
+/// Returns true if any workflow events were emitted after `since`.
+pub fn workflow_updated_since(config: &GatewayConfig, root_session_id: &str, since: &str) -> bool {
+    let wf_id = match resolve_workflow_id_for_root_session(config, root_session_id) {
+        Ok(Some(id)) => id,
+        _ => return false,
+    };
+    let events = match load_workflow_events(config, &wf_id) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    events.iter().any(|e| e.occurred_at.as_str() > since)
+}
+
+// ---------------------------------------------------------------------------
+// Durable checkpoints (Phase 3)
+// ---------------------------------------------------------------------------
+
+fn checkpoints_dir(config: &GatewayConfig, workflow_id: &str) -> PathBuf {
+    workflow_run_dir(config, workflow_id).join("checkpoints")
+}
+
+fn workflow_checkpoint_path(config: &GatewayConfig, workflow_id: &str) -> PathBuf {
+    checkpoints_dir(config, workflow_id).join("planner.json")
+}
+
+fn task_checkpoint_path(config: &GatewayConfig, workflow_id: &str, task_id: &str) -> PathBuf {
+    checkpoints_dir(config, workflow_id).join(format!("{task_id}.json"))
+}
+
+/// Save a planner-level checkpoint. Increments the version automatically.
+pub fn save_workflow_checkpoint(
+    config: &GatewayConfig,
+    checkpoint: &WorkflowCheckpoint,
+) -> anyhow::Result<()> {
+    let dir = checkpoints_dir(config, &checkpoint.workflow_id);
+    fs::create_dir_all(&dir)?;
+    write_json_file(
+        &workflow_checkpoint_path(config, &checkpoint.workflow_id),
+        checkpoint,
+    )?;
+    tracing::info!(
+        target: "workflow",
+        workflow_id = %checkpoint.workflow_id,
+        version = checkpoint.version,
+        "Saved planner checkpoint"
+    );
+    Ok(())
+}
+
+/// Load the latest planner checkpoint for a workflow.
+pub fn load_workflow_checkpoint(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Option<WorkflowCheckpoint>> {
+    let path = workflow_checkpoint_path(config, workflow_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(&path).map(Some)
+}
+
+/// Save a task-level checkpoint. Increments the version automatically.
+pub fn save_task_checkpoint(
+    config: &GatewayConfig,
+    checkpoint: &TaskCheckpoint,
+) -> anyhow::Result<()> {
+    let dir = checkpoints_dir(config, &checkpoint.workflow_id);
+    fs::create_dir_all(&dir)?;
+    write_json_file(
+        &task_checkpoint_path(config, &checkpoint.workflow_id, &checkpoint.task_id),
+        checkpoint,
+    )?;
+    tracing::info!(
+        target: "workflow",
+        workflow_id = %checkpoint.workflow_id,
+        task_id = %checkpoint.task_id,
+        version = checkpoint.version,
+        step = %checkpoint.step,
+        "Saved task checkpoint"
+    );
+    Ok(())
+}
+
+/// Load a task checkpoint.
+pub fn load_task_checkpoint(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    task_id: &str,
+) -> anyhow::Result<Option<TaskCheckpoint>> {
+    let path = task_checkpoint_path(config, workflow_id, task_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(&path).map(Some)
+}
+
+/// Load all task checkpoints for a workflow.
+pub fn load_all_task_checkpoints(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Vec<TaskCheckpoint>> {
+    let dir = checkpoints_dir(config, workflow_id);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if name == "planner" {
+            continue; // skip planner checkpoint
+        }
+        match read_json_file::<TaskCheckpoint>(&path) {
+            Ok(cp) => out.push(cp),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skip invalid task checkpoint");
+            }
+        }
+    }
+    out.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+    Ok(out)
+}
+
+/// Create a new planner checkpoint from the current workflow state.
+/// Auto-increments the version from the existing checkpoint.
+pub fn checkpoint_planner(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    planner_intent: String,
+    context: serde_json::Value,
+) -> anyhow::Result<WorkflowCheckpoint> {
+    let run = load_workflow_run(config, workflow_id)?
+        .ok_or_else(|| anyhow::anyhow!("workflow '{}' not found", workflow_id))?;
+
+    let prev_version = load_workflow_checkpoint(config, workflow_id)?
+        .map(|cp| cp.version)
+        .unwrap_or(0);
+
+    let checkpoint = WorkflowCheckpoint {
+        workflow_id: workflow_id.to_string(),
+        version: prev_version + 1,
+        planner_intent,
+        pending_task_ids: run.join_task_ids.clone(),
+        join_policy: run.join_policy,
+        context,
+        created_at: now_rfc3339(),
+    };
+    save_workflow_checkpoint(config, &checkpoint)?;
+
+    append_workflow_event(
+        config,
+        &WorkflowEventRecord {
+            event_id: new_event_id(),
+            workflow_id: workflow_id.to_string(),
+            task_id: None,
+            event_type: "workflow.checkpoint.saved".to_string(),
+            payload: serde_json::json!({
+                "version": checkpoint.version,
+                "planner_intent": checkpoint.planner_intent,
+                "pending_task_ids": checkpoint.pending_task_ids,
+            }),
+            occurred_at: now_rfc3339(),
+        },
+    )?;
+
+    Ok(checkpoint)
+}
+
+/// Create a new task checkpoint. Auto-increments the version.
+pub fn checkpoint_task(
+    config: &GatewayConfig,
+    workflow_id: &str,
+    task_id: &str,
+    step: String,
+    state: serde_json::Value,
+) -> anyhow::Result<TaskCheckpoint> {
+    let prev_version = load_task_checkpoint(config, workflow_id, task_id)?
+        .map(|cp| cp.version)
+        .unwrap_or(0);
+
+    let checkpoint = TaskCheckpoint {
+        workflow_id: workflow_id.to_string(),
+        task_id: task_id.to_string(),
+        version: prev_version + 1,
+        step: step.clone(),
+        state,
+        created_at: now_rfc3339(),
+    };
+    save_task_checkpoint(config, &checkpoint)?;
+
+    append_workflow_event(
+        config,
+        &WorkflowEventRecord {
+            event_id: new_event_id(),
+            workflow_id: workflow_id.to_string(),
+            task_id: Some(task_id.to_string()),
+            event_type: "task.checkpoint.saved".to_string(),
+            payload: serde_json::json!({
+                "version": checkpoint.version,
+                "step": step,
+            }),
+            occurred_at: now_rfc3339(),
+        },
+    )?;
+
+    Ok(checkpoint)
 }
 
 #[cfg(test)]
@@ -496,7 +1115,8 @@ mod tests {
         let agents = dir.path().join("agents");
         std::fs::create_dir_all(&agents).unwrap();
         let cfg = test_config(&agents);
-        let a = ensure_workflow_for_root_session(&cfg, "demo-root", Some("planner.default")).unwrap();
+        let a =
+            ensure_workflow_for_root_session(&cfg, "demo-root", Some("planner.default")).unwrap();
         let b = ensure_workflow_for_root_session(&cfg, "demo-root", Some("other")).unwrap();
         assert_eq!(a.workflow_id, b.workflow_id);
         assert_eq!(a.root_session_id, "demo-root");
@@ -523,6 +1143,7 @@ mod tests {
             updated_at: ts,
             source_agent_id: Some("planner.default".to_string()),
             result_summary: None,
+            join_group: None,
         };
         save_task_run(&cfg, &task).unwrap();
         update_task_run_status(
@@ -533,9 +1154,7 @@ mod tests {
             Some("ok".to_string()),
         )
         .unwrap();
-        let loaded = load_task_run(&cfg, &wf.workflow_id, &tid)
-            .unwrap()
-            .unwrap();
+        let loaded = load_task_run(&cfg, &wf.workflow_id, &tid).unwrap().unwrap();
         assert_eq!(loaded.status, TaskRunStatus::Succeeded);
         assert_eq!(loaded.result_summary.as_deref(), Some("ok"));
     }
@@ -551,11 +1170,9 @@ mod tests {
             .unwrap()
             .expect("index");
         assert_eq!(resolved, wf.workflow_id);
-        assert!(
-            resolve_workflow_id_for_root_session(&cfg, "unknown-root")
-                .unwrap()
-                .is_none()
-        );
+        assert!(resolve_workflow_id_for_root_session(&cfg, "unknown-root")
+            .unwrap()
+            .is_none());
         let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
         assert!(!events.is_empty());
         assert_eq!(events[0].event_type, "workflow.started");
@@ -583,6 +1200,7 @@ mod tests {
                 updated_at: ts.clone(),
                 source_agent_id: None,
                 result_summary: None,
+                join_group: None,
             };
             save_task_run(&cfg, &task).unwrap();
         }
@@ -609,5 +1227,603 @@ mod tests {
         assert!(text.contains("graph-root"));
         assert!(text.contains("lead.agent"));
         assert!(text.contains("workflow.started") || text.contains("Recent workflow"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Async workflow tests (Phase 2–7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn queue_dequeue_roundtrip() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "q-root", None).unwrap();
+
+        let queued = QueuedTaskRun {
+            task_id: "task-q1".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "coder.default".to_string(),
+            message: "Write hello world".to_string(),
+            child_session_id: "q-root/coder-q1".to_string(),
+            parent_session_id: "q-root".to_string(),
+            source_agent_id: "planner.default".to_string(),
+            metadata: None,
+            join_group: None,
+            blocks_planner: true,
+            enqueued_at: now_rfc3339(),
+        };
+        enqueue_task(&cfg, &queued).unwrap();
+
+        // Load queued tasks
+        let loaded = load_queued_tasks(&cfg, &wf.workflow_id).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].task_id, "task-q1");
+
+        // Workflow should have queued_task_ids
+        let run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        assert!(run.queued_task_ids.contains(&"task-q1".to_string()));
+
+        // Dequeue
+        dequeue_task(&cfg, &wf.workflow_id, "task-q1").unwrap();
+        let loaded = load_queued_tasks(&cfg, &wf.workflow_id).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn parallel_async_enqueue_and_join_condition() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "parallel-root", None).unwrap();
+
+        // Enqueue two tasks in the same join group
+        for (tid, agent) in [
+            ("task-p1", "coder.default"),
+            ("task-p2", "researcher.default"),
+        ] {
+            let queued = QueuedTaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: agent.to_string(),
+                message: format!("Do {}", tid),
+                child_session_id: format!("parallel-root/{}-x", agent),
+                parent_session_id: "parallel-root".to_string(),
+                source_agent_id: "planner.default".to_string(),
+                metadata: None,
+                join_group: Some("main".to_string()),
+                blocks_planner: true,
+                enqueued_at: now_rfc3339(),
+            };
+            enqueue_task(&cfg, &queued).unwrap();
+        }
+
+        // Both should be in queue
+        let queued = load_queued_tasks(&cfg, &wf.workflow_id).unwrap();
+        assert_eq!(queued.len(), 2);
+
+        // Load all queued tasks across all workflows
+        let all_queued = load_all_queued_tasks(&cfg).unwrap();
+        assert!(all_queued.len() >= 2);
+
+        // Dequeue both and create TaskRuns
+        for tid in ["task-p1", "task-p2"] {
+            dequeue_task(&cfg, &wf.workflow_id, tid).unwrap();
+            let task = TaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: "coder.default".to_string(),
+                session_id: format!("parallel-root/{}-x", tid),
+                parent_session_id: "parallel-root".to_string(),
+                status: TaskRunStatus::Running,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                source_agent_id: Some("planner.default".to_string()),
+                result_summary: None,
+                join_group: Some("main".to_string()),
+            };
+            save_task_run(&cfg, &task).unwrap();
+        }
+
+        // Check join: both still Running → not satisfied
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["task-p1".to_string(), "task-p2".to_string()];
+        save_workflow_run(&cfg, &run).unwrap();
+        assert!(!check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Complete first task
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-p1",
+            TaskRunStatus::Succeeded,
+            Some("done p1".to_string()),
+        )
+        .unwrap();
+
+        // Join still not satisfied (task-p2 still running)
+        assert!(!check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Complete second task
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-p2",
+            TaskRunStatus::Succeeded,
+            Some("done p2".to_string()),
+        )
+        .unwrap();
+
+        // Now join should be satisfied
+        assert!(check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Workflow should be Resumable
+        let run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        assert_eq!(run.status, WorkflowRunStatus::Resumable);
+    }
+
+    #[test]
+    fn join_satisfied_emits_event() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "join-ev-root", None).unwrap();
+
+        // Create task and set join condition
+        let task = TaskRun {
+            task_id: "task-je1".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "a".to_string(),
+            session_id: "join-ev-root/a-x".to_string(),
+            parent_session_id: "join-ev-root".to_string(),
+            status: TaskRunStatus::Running,
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            source_agent_id: None,
+            result_summary: None,
+            join_group: None,
+        };
+        save_task_run(&cfg, &task).unwrap();
+
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["task-je1".to_string()];
+        save_workflow_run(&cfg, &run).unwrap();
+
+        // Complete the task → should emit workflow.join.satisfied
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-je1",
+            TaskRunStatus::Succeeded,
+            None,
+        )
+        .unwrap();
+
+        let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event_type == "workflow.join.satisfied"),
+            "Expected workflow.join.satisfied event, got: {:?}",
+            events.iter().map(|e| &e.event_type).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn failed_task_still_satisfies_join() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "fail-join-root", None).unwrap();
+
+        for tid in ["task-f1", "task-f2"] {
+            let task = TaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: "a".to_string(),
+                session_id: format!("fail-join-root/{}-x", tid),
+                parent_session_id: "fail-join-root".to_string(),
+                status: TaskRunStatus::Running,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                source_agent_id: None,
+                result_summary: None,
+                join_group: None,
+            };
+            save_task_run(&cfg, &task).unwrap();
+        }
+
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["task-f1".to_string(), "task-f2".to_string()];
+        save_workflow_run(&cfg, &run).unwrap();
+
+        // Task 1 fails
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-f1",
+            TaskRunStatus::Failed,
+            Some("error".to_string()),
+        )
+        .unwrap();
+        assert!(!check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        // Task 2 succeeds → join satisfied even though one failed
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-f2",
+            TaskRunStatus::Succeeded,
+            None,
+        )
+        .unwrap();
+        assert!(check_join_condition(&cfg, &wf.workflow_id).unwrap());
+
+        let run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        assert_eq!(run.status, WorkflowRunStatus::Resumable);
+    }
+
+    #[test]
+    fn compact_workflow_summary_none_when_no_tasks() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let _wf = ensure_workflow_for_root_session(&cfg, "summary-root", None).unwrap();
+
+        let summary = compact_workflow_summary(&cfg, "summary-root").unwrap();
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn compact_workflow_summary_counts_tasks() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "sum-root", None).unwrap();
+
+        // 1 running, 1 succeeded, 1 queued
+        let running = TaskRun {
+            task_id: "t-run".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "a".to_string(),
+            session_id: "sum-root/a-x".to_string(),
+            parent_session_id: "sum-root".to_string(),
+            status: TaskRunStatus::Running,
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            source_agent_id: None,
+            result_summary: None,
+            join_group: None,
+        };
+        save_task_run(&cfg, &running).unwrap();
+
+        let done = TaskRun {
+            task_id: "t-done".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "b".to_string(),
+            session_id: "sum-root/b-x".to_string(),
+            parent_session_id: "sum-root".to_string(),
+            status: TaskRunStatus::Succeeded,
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            source_agent_id: None,
+            result_summary: Some("ok".to_string()),
+            join_group: None,
+        };
+        save_task_run(&cfg, &done).unwrap();
+
+        let queued = QueuedTaskRun {
+            task_id: "t-queued".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "c".to_string(),
+            message: "todo".to_string(),
+            child_session_id: "sum-root/c-x".to_string(),
+            parent_session_id: "sum-root".to_string(),
+            source_agent_id: "planner".to_string(),
+            metadata: None,
+            join_group: None,
+            blocks_planner: true,
+            enqueued_at: now_rfc3339(),
+        };
+        enqueue_task(&cfg, &queued).unwrap();
+
+        let summary = compact_workflow_summary(&cfg, "sum-root").unwrap().unwrap();
+        assert!(summary.contains("1 running"), "got: {}", summary);
+        assert!(summary.contains("1 queued"), "got: {}", summary);
+        assert!(summary.contains("1 done"), "got: {}", summary);
+    }
+
+    #[test]
+    fn approval_unblocks_task() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "appr-root", None).unwrap();
+
+        let task = TaskRun {
+            task_id: "task-appr".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "coder.default".to_string(),
+            session_id: "appr-root/coder-x".to_string(),
+            parent_session_id: "appr-root".to_string(),
+            status: TaskRunStatus::AwaitingApproval,
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            source_agent_id: Some("planner.default".to_string()),
+            result_summary: None,
+            join_group: None,
+        };
+        save_task_run(&cfg, &task).unwrap();
+
+        // Simulate approval unblock (Runnable on approve)
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-appr",
+            TaskRunStatus::Runnable,
+            Some("approval_approved".to_string()),
+        )
+        .unwrap();
+
+        let loaded = load_task_run(&cfg, &wf.workflow_id, "task-appr")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.status, TaskRunStatus::Runnable);
+        assert_eq!(loaded.result_summary.as_deref(), Some("approval_approved"));
+
+        // Events should contain task.updated (Runnable maps to task.updated event)
+        let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
+        assert!(events.iter().any(|e| e.event_type == "task.updated"));
+    }
+
+    #[test]
+    fn approval_reject_fails_task() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "rej-root", None).unwrap();
+
+        let task = TaskRun {
+            task_id: "task-rej".to_string(),
+            workflow_id: wf.workflow_id.clone(),
+            agent_id: "coder.default".to_string(),
+            session_id: "rej-root/coder-x".to_string(),
+            parent_session_id: "rej-root".to_string(),
+            status: TaskRunStatus::AwaitingApproval,
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            source_agent_id: None,
+            result_summary: None,
+            join_group: None,
+        };
+        save_task_run(&cfg, &task).unwrap();
+
+        // Simulate rejection
+        update_task_run_status(
+            &cfg,
+            &wf.workflow_id,
+            "task-rej",
+            TaskRunStatus::Failed,
+            Some("approval_rejected".to_string()),
+        )
+        .unwrap();
+
+        let loaded = load_task_run(&cfg, &wf.workflow_id, "task-rej")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.status, TaskRunStatus::Failed);
+
+        let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
+        assert!(events.iter().any(|e| e.event_type == "task.failed"));
+    }
+
+    #[test]
+    fn load_all_queued_tasks_across_workflows() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+
+        let wf1 = ensure_workflow_for_root_session(&cfg, "multi-root-1", None).unwrap();
+        let wf2 = ensure_workflow_for_root_session(&cfg, "multi-root-2", None).unwrap();
+
+        for (wf, tid) in [(&wf1, "t-m1"), (&wf2, "t-m2")] {
+            let queued = QueuedTaskRun {
+                task_id: tid.to_string(),
+                workflow_id: wf.workflow_id.clone(),
+                agent_id: "a".to_string(),
+                message: "do".to_string(),
+                child_session_id: "s".to_string(),
+                parent_session_id: "p".to_string(),
+                source_agent_id: "planner".to_string(),
+                metadata: None,
+                join_group: None,
+                blocks_planner: false,
+                enqueued_at: now_rfc3339(),
+            };
+            enqueue_task(&cfg, &queued).unwrap();
+        }
+
+        let all = load_all_queued_tasks(&cfg).unwrap();
+        let ids: Vec<&str> = all.iter().map(|q| q.task_id.as_str()).collect();
+        assert!(ids.contains(&"t-m1"));
+        assert!(ids.contains(&"t-m2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Checkpoint tests (Phase 3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn planner_checkpoint_roundtrip() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "ckpt-root", None).unwrap();
+
+        // No checkpoint initially
+        assert!(load_workflow_checkpoint(&cfg, &wf.workflow_id)
+            .unwrap()
+            .is_none());
+
+        // Create checkpoint
+        let cp = checkpoint_planner(
+            &cfg,
+            &wf.workflow_id,
+            "Waiting for coder and researcher results".to_string(),
+            serde_json::json!({"delegation": "parallel analysis"}),
+        )
+        .unwrap();
+        assert_eq!(cp.version, 1);
+        assert_eq!(
+            cp.planner_intent,
+            "Waiting for coder and researcher results"
+        );
+
+        // Load it back
+        let loaded = load_workflow_checkpoint(&cfg, &wf.workflow_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.workflow_id, wf.workflow_id);
+
+        // Second checkpoint auto-increments version
+        let cp2 = checkpoint_planner(
+            &cfg,
+            &wf.workflow_id,
+            "Processing results".to_string(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cp2.version, 2);
+    }
+
+    #[test]
+    fn task_checkpoint_roundtrip() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "ckpt-task-root", None).unwrap();
+
+        // No checkpoint initially
+        assert!(load_task_checkpoint(&cfg, &wf.workflow_id, "task-ck1")
+            .unwrap()
+            .is_none());
+
+        // Create task checkpoint
+        let cp = checkpoint_task(
+            &cfg,
+            &wf.workflow_id,
+            "task-ck1",
+            "writing_code".to_string(),
+            serde_json::json!({"files_written": ["main.py", "utils.py"]}),
+        )
+        .unwrap();
+        assert_eq!(cp.version, 1);
+        assert_eq!(cp.step, "writing_code");
+
+        // Load it back
+        let loaded = load_task_checkpoint(&cfg, &wf.workflow_id, "task-ck1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.version, 1);
+
+        // Second checkpoint auto-increments
+        let cp2 = checkpoint_task(
+            &cfg,
+            &wf.workflow_id,
+            "task-ck1",
+            "running_tests".to_string(),
+            serde_json::json!({"tests_run": 5}),
+        )
+        .unwrap();
+        assert_eq!(cp2.version, 2);
+
+        // Load all task checkpoints
+        checkpoint_task(
+            &cfg,
+            &wf.workflow_id,
+            "task-ck2",
+            "setup".to_string(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let all = load_all_task_checkpoints(&cfg, &wf.workflow_id).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].task_id, "task-ck1");
+        assert_eq!(all[1].task_id, "task-ck2");
+    }
+
+    #[test]
+    fn checkpoint_planner_captures_join_state() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "ckpt-join-root", None).unwrap();
+
+        // Set up join task IDs
+        let mut run = load_workflow_run(&cfg, &wf.workflow_id).unwrap().unwrap();
+        run.join_task_ids = vec!["task-a".to_string(), "task-b".to_string()];
+        run.join_policy = JoinPolicy::AllOf;
+        save_workflow_run(&cfg, &run).unwrap();
+
+        // Checkpoint should capture the join state
+        let cp = checkpoint_planner(
+            &cfg,
+            &wf.workflow_id,
+            "Delegated research and coding".to_string(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cp.pending_task_ids, vec!["task-a", "task-b"]);
+        assert_eq!(cp.join_policy, JoinPolicy::AllOf);
+    }
+
+    #[test]
+    fn checkpoint_events_emitted() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "ckpt-ev-root", None).unwrap();
+
+        // Clear initial events
+        let initial_count = load_workflow_events(&cfg, &wf.workflow_id).unwrap().len();
+
+        checkpoint_planner(
+            &cfg,
+            &wf.workflow_id,
+            "test".to_string(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        checkpoint_task(
+            &cfg,
+            &wf.workflow_id,
+            "t1",
+            "step1".to_string(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+        let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
+        let new_events = &events[initial_count..];
+        assert!(new_events
+            .iter()
+            .any(|e| e.event_type == "workflow.checkpoint.saved"));
+        assert!(new_events
+            .iter()
+            .any(|e| e.event_type == "task.checkpoint.saved"));
     }
 }
