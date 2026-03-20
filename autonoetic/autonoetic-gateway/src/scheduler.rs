@@ -18,6 +18,7 @@ pub mod approval;
 pub mod runner;
 pub mod signal;
 pub mod workflow_store;
+pub mod workflow_causal;
 
 pub use decision::*;
 pub use store::*;
@@ -25,6 +26,7 @@ pub use approval::*;
 pub use runner::*;
 pub use signal::*;
 pub use workflow_store::*;
+pub use workflow_causal::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxEvent {

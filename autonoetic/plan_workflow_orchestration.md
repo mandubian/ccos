@@ -52,6 +52,68 @@ The core mistake is architectural:
 
 Introduce a durable workflow orchestration layer owned by the gateway.
 
+## Relationship To Causal Chain
+
+This plan must not replace, fork, or compete with the causal chain.
+
+The intended separation is:
+
+- causal chain = immutable audit log of what happened
+- workflow store = mutable operational state of what should happen next
+- session timeline / CLI graph = human-facing projections built from those sources
+
+### Causal chain remains authoritative for audit
+
+The causal chain already provides:
+
+- append-only, hash-linked, tamper-evident records
+- cross-layer trace correlation via `session_id`, `turn_id`, and `event_seq`
+- durable audit for gateway actions, agent actions, approvals, and tool results
+
+Nothing in this plan should weaken or bypass that.
+
+### Workflow store is an orchestration index, not an audit replacement
+
+`WorkflowRun`, `TaskRun`, and `WorkflowEventRecord` should be treated as:
+
+- mutable runtime coordination state
+- resumable execution metadata
+- efficient query surfaces for planner/task orchestration
+
+They should not be treated as the sole historical truth for forensics or compliance.
+
+### Required invariants
+
+- every important workflow transition should still emit causal-chain entries
+- workflow events may mirror orchestration transitions, but they do not replace causal entries
+- CLI graph should prefer workflow events for live state, while preserving links back to causal-chain evidence when available
+- timeline generation may combine workflow state and causal entries, but causal chain remains the immutable ground truth for audit
+
+### Collision to avoid
+
+Do not introduce a second "authoritative event history" with semantics that can drift from the causal chain.
+
+If both exist:
+
+- workflow events should optimize orchestration and UX
+- causal chain should optimize auditability and evidence
+
+That layering is compatible with the current architecture and avoids conceptual collision.
+
+### Implementation note (causal mirror)
+
+Important workflow transitions **also** emit best-effort gateway causal-chain rows (same append-only log as today; category `gateway`) so audit and orchestration stay **correlatable** without making the workflow JSONL authoritative for forensics:
+
+| Causal `action` | When |
+|-----------------|------|
+| `workflow.started` | New `WorkflowRun` created for a root session |
+| `workflow.task.spawned` | `agent.spawn` persisted a `TaskRun` and workflow `task.spawned` event |
+| `workflow.task.completed` / `workflow.task.failed` | Task status updated to terminal (or `workflow.task.awaiting_approval` / `workflow.task.updated` for other updates) |
+
+Payloads include `workflow_id` and `task_id` where applicable. Rows are indexed under the workflow **root** `session_id` so the lead session’s evidence trail shows delegation.
+
+Code: `autonoetic-gateway/src/scheduler/workflow_causal.rs` (calls `log_gateway_causal_event`).
+
 ### 1. WorkflowRun
 
 One root workflow per user-facing task.
@@ -470,6 +532,7 @@ The new workflow layer should sit above them:
 | **P1.2** | [x] | Durable store under `.gateway/scheduler/workflows/` (root index → `workflow_id`, `runs/<id>/workflow.json`, `tasks/`, `events.jsonl`) |
 | **P1.3** | [x] | Wire `agent.spawn` to ensure workflow per root session and return `workflow_id` + `task_id` |
 | **P1.4** | [x] | Emit `task.spawned` / `task.completed` (and related) from the spawn path _(sync spawn: success → `task.completed`; error → `task.failed` via store)_ |
+| **P1.5** | [x] | Mirror key workflow/task transitions into the gateway **causal chain** (`workflow_causal` + `log_gateway_causal_event`) per § Relationship To Causal Chain |
 
 ### Phase 1: Durable workflow store
 

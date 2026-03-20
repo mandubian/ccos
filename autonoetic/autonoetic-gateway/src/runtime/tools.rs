@@ -8,6 +8,7 @@ use autonoetic_types::agent::{AgentIdentity, AgentManifest, ExecutionMode, LlmCo
 use autonoetic_types::background::{
     ApprovalRequest, BackgroundMode, BackgroundPolicy, BackgroundState, ScheduledAction,
 };
+use autonoetic_types::causal_chain::EntryStatus;
 use autonoetic_types::capability::Capability;
 use autonoetic_types::config::{
     AgentInstallApprovalPolicy, GatewayConfig, SchemaEnforcementConfig, SchemaEnforcementMode,
@@ -3583,6 +3584,21 @@ impl NativeTool for AgentSpawnTool {
                 occurred_at: Utc::now().to_rfc3339(),
             },
         )?;
+
+        crate::scheduler::workflow_causal::mirror_orchestration_event(
+            gw_config,
+            root,
+            "workflow.task.spawned",
+            EntryStatus::Success,
+            serde_json::json!({
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "target_agent_id": target_agent_id,
+                "child_session_id": child_delegation_path,
+                "parent_session_id": resolved_session_id,
+                "source_agent_id": source_agent_id,
+            }),
+        );
 
         if let Ok(agents_dir) = agent_dir
             .parent()
