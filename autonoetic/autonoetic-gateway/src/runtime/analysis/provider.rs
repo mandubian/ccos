@@ -23,6 +23,9 @@ pub enum AnalysisProviderType {
     Llm,
     /// Combines multiple providers
     Composite,
+    /// Python 3 stdlib `ast` scan (bundled script, no pip deps); falls back to pattern if `python3` fails
+    #[serde(rename = "python_ast")]
+    PythonAst,
     /// No analysis (disabled)
     None,
 }
