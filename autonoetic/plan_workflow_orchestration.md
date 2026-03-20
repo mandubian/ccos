@@ -313,6 +313,55 @@ The minimal durable stores are:
 
 Agent runtimes become disposable workers that can be restarted from task state.
 
+## Checkpoint Compatibility Review
+
+The current codebase already has three related but distinct continuity mechanisms:
+
+- `SessionContext`: thin same-session prompt continuity for normal re-spawn/wake
+- `SessionSnapshot` + `session.fork`: history capture and branching into a new session
+- `sdk.state.checkpoint`: script-managed local progress checkpoint
+
+These are useful building blocks, but they are not sufficient as the primary workflow pause/resume mechanism.
+
+### What exists today
+
+- Normal same-session continuation rebuilds continuity from `SessionContext`
+- `session.fork` creates a new branched session from a saved snapshot
+- scripts can opt into `sdk.state.checkpoint()` / `sdk.state.get_checkpoint()`
+
+### Why this is not enough
+
+- `SessionContext` is intentionally thin and prompt-oriented, not deterministic execution state
+- `SessionSnapshot` is for branching and replay, not "pause this workflow and resume it later in place"
+- the current SDK checkpoint is too low-level and too local to be the orchestration backbone
+- the current SDK checkpoint is not a workflow/task-scoped checkpoint model
+
+### Required checkpoint task
+
+Add a real workflow/task checkpoint layer on top of the current continuity mechanisms.
+
+Suggested properties:
+
+- checkpoint scope must be `workflow_id` + `task_id` or equivalent durable identifiers
+- planner checkpoints must store enough state to resume waiting/join logic deterministically
+- child task checkpoints must store enough state to retry or resume after approval boundaries
+- workflow resume must not depend on session fork
+- workflow resume must not rely only on prompt reconstruction from `SessionContext`
+
+### Relationship to existing mechanisms
+
+- keep `SessionContext` for lightweight conversational continuity
+- keep `SessionSnapshot` for user-visible branching/forking and debugging
+- keep `sdk.state.checkpoint` for agent-authored script progress
+- add workflow/task checkpoints as the orchestration-grade resume primitive
+
+This gives us a clean layering model:
+
+- prompt continuity: `SessionContext`
+- branch/fork continuity: `SessionSnapshot`
+- local script progress: `sdk.state.checkpoint`
+- orchestration pause/resume: workflow/task checkpoints
+
 ## CLI Real-Time Graph
 
 `timeline.md` is a very good artifact, but it is retrospective and file-based.
@@ -413,6 +462,15 @@ The new workflow layer should sit above them:
 
 ## Implementation Phases
 
+### Progress checklist (update as sub-tasks land)
+
+| ID | Done | Description |
+|----|------|-------------|
+| **P1.1** | [x] | Shared types: `WorkflowRun`, `TaskRun`, `WorkflowEventRecord`, status enums (`autonoetic-types::workflow`) |
+| **P1.2** | [x] | Durable store under `.gateway/scheduler/workflows/` (root index → `workflow_id`, `runs/<id>/workflow.json`, `tasks/`, `events.jsonl`) |
+| **P1.3** | [ ] | Wire `agent.spawn` to ensure workflow per root session and return `workflow_id` + `task_id` |
+| **P1.4** | [ ] | Emit `task.spawned` / `task.completed` (and related) from the spawn path consistently |
+
 ### Phase 1: Durable workflow store
 
 - add `WorkflowRun`, `TaskRun`, and `WorkflowEvent` stores
@@ -425,31 +483,38 @@ The new workflow layer should sit above them:
 - launch child tasks from the scheduler
 - persist child outputs in task result records
 
-### Phase 3: Planner checkpoint and wait
+### Phase 3: Workflow/task checkpoints
+
+- add durable planner checkpoints keyed by `workflow_id` and checkpoint version
+- add durable child task checkpoints keyed by `workflow_id` + `task_id`
+- explicitly separate these from `SessionContext`, `SessionSnapshot`, and `sdk_checkpoint`
+- restore planner/task state from workflow checkpoints during resume
+
+### Phase 4: Planner checkpoint and wait
 
 - checkpoint planner at the end of delegation turns
 - add `WaitingChildren` and join semantics
 - resume planner from checkpoint when join conditions are satisfied
 
-### Phase 4: Approval barriers
+### Phase 5: Approval barriers
 
 - bind approvals to `workflow_id` and `task_id`
 - on approval, unblock tasks instead of "waking sessions"
 - support multiple approvals resolving multiple tasks concurrently
 
-### Phase 5: Event stream
+### Phase 6: Event stream
 
 - emit durable `WorkflowEvent` records for orchestration changes
 - expose a live follow API or local event stream reader
 - keep `timeline.md` as a projection of the same events
 
-### Phase 6: CLI graph
+### Phase 7: CLI graph
 
 - add `autonoetic trace graph <session_id> --follow`
 - render planner, children, approvals, and state transitions live
 - embed the same graph/event rail into `autonoetic chat`
 
-### Phase 7: Cleanup and migration
+### Phase 8: Cleanup and migration
 
 - remove remaining session-path inference for orchestration
 - reduce approval signal files to a compatibility or transport layer
@@ -499,11 +564,12 @@ Reproduce the exact `demo-session-1` scenario:
 
 The smallest meaningful vertical slice is:
 
-1. add `workflow_id` and `task_id`
+1. add `workflow_id` and `task_id` _(types + store: **done**; spawn JSON wiring: **P1.3**)_
 2. make `agent.spawn` asynchronous
-3. checkpoint planner into `WaitingChildren`
-4. bind approvals to `task_id`
-5. resume planner on child completion
-6. add a simple `trace graph --follow` text view
+3. add workflow/task checkpoints
+4. checkpoint planner into `WaitingChildren`
+5. bind approvals to `task_id`
+6. resume planner on child completion
+7. add a simple `trace graph --follow` text view
 
 That slice is enough to fix the current architectural problem and gives us a clean base for richer graph UX later.
