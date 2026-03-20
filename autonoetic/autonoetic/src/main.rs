@@ -162,6 +162,21 @@ async fn main() -> anyhow::Result<()> {
                     *json,
                 )?;
             }
+            cli::common::TraceCommands::Workflow {
+                workflow_or_root,
+                root,
+                json,
+                follow,
+            } => {
+                cli::trace::handle_trace_workflow(
+                    &config_path,
+                    workflow_or_root,
+                    *root,
+                    *json,
+                    *follow,
+                )
+                .await?;
+            }
         },
 
         Commands::Skill(args) => match &args.command {

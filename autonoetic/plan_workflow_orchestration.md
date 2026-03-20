@@ -533,6 +533,7 @@ The new workflow layer should sit above them:
 | **P1.3** | [x] | Wire `agent.spawn` to ensure workflow per root session and return `workflow_id` + `task_id` |
 | **P1.4** | [x] | Emit `task.spawned` / `task.completed` (and related) from the spawn path _(sync spawn: success → `task.completed`; error → `task.failed` via store)_ |
 | **P1.5** | [x] | Mirror key workflow/task transitions into the gateway **causal chain** (`workflow_causal` + `log_gateway_causal_event`) per § Relationship To Causal Chain |
+| **P6.1** | [x] | Read-only CLI: `autonoetic trace workflow <id> [--root] [--follow] [--json]` reads `events.jsonl`; gateway `resolve_workflow_id_for_root_session`, `load_workflow_events` (`workflow_store`) |
 
 ### Phase 1: Durable workflow store
 
@@ -568,7 +569,7 @@ The new workflow layer should sit above them:
 ### Phase 6: Event stream
 
 - emit durable `WorkflowEvent` records for orchestration changes
-- expose a live follow API or local event stream reader
+- expose a live follow API or local event stream reader _(local: `autonoetic trace workflow … --follow` reads `.gateway/scheduler/workflows/runs/<id>/events.jsonl`)_
 - keep `timeline.md` as a projection of the same events
 
 ### Phase 7: CLI graph
