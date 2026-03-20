@@ -88,6 +88,28 @@ pub fn load_workflow_run(config: &GatewayConfig, workflow_id: &str) -> anyhow::R
     Ok(Some(read_json_file(&p)?))
 }
 
+/// Resolve `wf-*` id from a root session id (`agent.spawn` root), if an index exists.
+pub fn resolve_workflow_id_for_root_session(
+    config: &GatewayConfig,
+    root_session_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let p = root_index_path(config, root_session_id);
+    if !p.exists() {
+        return Ok(None);
+    }
+    let idx: RootWorkflowIndex = read_json_file(&p)?;
+    Ok(Some(idx.workflow_id))
+}
+
+/// Load append-only workflow events from `events.jsonl` (empty if missing).
+pub fn load_workflow_events(
+    config: &GatewayConfig,
+    workflow_id: &str,
+) -> anyhow::Result<Vec<WorkflowEventRecord>> {
+    let path = workflow_events_path(config, workflow_id);
+    crate::scheduler::store::load_jsonl_file(&path)
+}
+
 /// Persist full workflow run (creates parent dirs).
 pub fn save_workflow_run(config: &GatewayConfig, run: &WorkflowRun) -> anyhow::Result<()> {
     let path = workflow_run_path(config, &run.workflow_id);
@@ -351,5 +373,26 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.status, TaskRunStatus::Succeeded);
         assert_eq!(loaded.result_summary.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn resolve_root_and_load_workflow_events() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let cfg = test_config(&agents);
+        let wf = ensure_workflow_for_root_session(&cfg, "root-resolve", None).unwrap();
+        let resolved = resolve_workflow_id_for_root_session(&cfg, "root-resolve")
+            .unwrap()
+            .expect("index");
+        assert_eq!(resolved, wf.workflow_id);
+        assert!(
+            resolve_workflow_id_for_root_session(&cfg, "unknown-root")
+                .unwrap()
+                .is_none()
+        );
+        let events = load_workflow_events(&cfg, &wf.workflow_id).unwrap();
+        assert!(!events.is_empty());
+        assert_eq!(events[0].event_type, "workflow.started");
     }
 }

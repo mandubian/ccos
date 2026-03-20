@@ -306,6 +306,20 @@ pub enum TraceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show durable workflow orchestration events (gateway workflow store)
+    Workflow {
+        /// Workflow id (`wf-…`) or root session id when `--root` is set
+        workflow_or_root: String,
+        /// Treat `workflow_or_root` as root session id and resolve `wf-*` via index
+        #[arg(long)]
+        root: bool,
+        /// Emit machine-readable JSON (pretty document once; with `--follow`, one JSON object per new event line)
+        #[arg(long)]
+        json: bool,
+        /// Poll `events.jsonl` and print new lines (Ctrl+C to stop)
+        #[arg(long)]
+        follow: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

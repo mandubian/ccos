@@ -4,6 +4,7 @@ use std::path::Path;
 use super::common::AgentTrace;
 use autonoetic_gateway::llm::Message;
 use autonoetic_types::causal_chain::{CausalChainEntry, EntryStatus};
+use autonoetic_types::workflow::{WorkflowEventRecord, WorkflowRun};
 
 /// ANSI color helpers for terminal output.
 mod color {
@@ -967,4 +968,198 @@ pub fn handle_trace_history(
     }
 
     Ok(())
+}
+
+fn shorten_json_value(payload: &serde_json::Value, max_chars: usize) -> String {
+    match payload {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Object(o) if o.is_empty() => String::new(),
+        _ => {
+            let s = payload.to_string();
+            let count = s.chars().count();
+            if count <= max_chars {
+                s
+            } else {
+                let take: String = s.chars().take(max_chars).collect();
+                format!("{take}…")
+            }
+        }
+    }
+}
+
+fn print_workflow_event_row(ev: &WorkflowEventRecord, json_output: bool) -> anyhow::Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string(ev)?);
+        return Ok(());
+    }
+    let task = ev.task_id.as_deref().unwrap_or("-");
+    let date_short: String = ev.occurred_at.chars().take(10).collect();
+    println!(
+        "{}{:<10} {:<28} {:<36} {:<18} {}",
+        color::DIM,
+        date_short,
+        ev.event_type,
+        ev.event_id,
+        task,
+        color::RESET
+    );
+    let p = shorten_json_value(&ev.payload, 56);
+    if !p.is_empty() {
+        println!("  {}payload:{} {}", color::DIM, color::RESET, p);
+    }
+    Ok(())
+}
+
+fn print_workflow_events_table(
+    workflow_id: &str,
+    run: Option<&WorkflowRun>,
+    events: &[WorkflowEventRecord],
+    json_output: bool,
+) -> anyhow::Result<()> {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "workflow_id": workflow_id,
+                "workflow": run,
+                "events": events,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}Workflow{} {}  ({} events)",
+        color::BOLD,
+        color::RESET,
+        workflow_id,
+        events.len()
+    );
+    if let Some(r) = run {
+        println!(
+            "{}  root_session: {}  status: {:?}{}",
+            color::DIM,
+            r.root_session_id,
+            r.status,
+            color::RESET
+        );
+    }
+    println!();
+
+    if events.is_empty() {
+        println!("{}No events in events.jsonl.{}", color::DIM, color::RESET);
+        return Ok(());
+    }
+
+    println!(
+        "{}{}{:<10} {:<28} {:<36} {:<18} {}",
+        color::DIM,
+        color::BOLD,
+        "DATE",
+        "TYPE",
+        "EVENT_ID",
+        "TASK",
+        color::RESET
+    );
+    println!("{}", color::separator(120));
+    for ev in events {
+        print_workflow_event_row(ev, false)?;
+    }
+    Ok(())
+}
+
+/// Print durable workflow store events (`events.jsonl`), optionally following new lines.
+pub async fn handle_trace_workflow(
+    config_path: &Path,
+    workflow_or_root: &str,
+    as_root: bool,
+    json_output: bool,
+    follow: bool,
+) -> anyhow::Result<()> {
+    let config = autonoetic_gateway::config::load_config(config_path)?;
+    let workflow_id = if as_root {
+        match autonoetic_gateway::scheduler::resolve_workflow_id_for_root_session(
+            &config,
+            workflow_or_root,
+        )? {
+            Some(w) => w,
+            None => anyhow::bail!(
+                "No workflow index for root session '{}'. (Has `agent.spawn` run for this root?)",
+                workflow_or_root
+            ),
+        }
+    } else {
+        workflow_or_root.to_string()
+    };
+
+    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)?;
+    if !follow && run.is_none() {
+        anyhow::bail!(
+            "No workflow run '{}' in gateway scheduler store.",
+            workflow_id
+        );
+    }
+
+    if follow {
+        trace_workflow_follow(&config, &workflow_id, run.as_ref(), json_output).await
+    } else {
+        let events =
+            autonoetic_gateway::scheduler::load_workflow_events(&config, &workflow_id)?;
+        print_workflow_events_table(&workflow_id, run.as_ref(), &events, json_output)?;
+        Ok(())
+    }
+}
+
+async fn trace_workflow_follow(
+    config: &autonoetic_gateway::GatewayConfig,
+    workflow_id: &str,
+    run: Option<&WorkflowRun>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+    use tokio::time::{interval, Duration};
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut poll_interval = interval(Duration::from_secs(1));
+
+    println!(
+        "{}Following workflow '{}'.{} Press Ctrl+C to stop.",
+        color::BOLD,
+        workflow_id,
+        color::RESET
+    );
+    if let Some(r) = run {
+        println!(
+            "{}  root_session: {}  status: {:?}{}",
+            color::DIM,
+            r.root_session_id,
+            r.status,
+            color::RESET
+        );
+    }
+    println!();
+
+    if !json_output {
+        println!(
+            "{}{}{:<10} {:<28} {:<36} {:<18} {}",
+            color::DIM,
+            color::BOLD,
+            "DATE",
+            "TYPE",
+            "EVENT_ID",
+            "TASK",
+            color::RESET
+        );
+        println!("{}", color::separator(120));
+    }
+
+    loop {
+        poll_interval.tick().await;
+        let events = autonoetic_gateway::scheduler::load_workflow_events(config, workflow_id)?;
+        for ev in events {
+            if seen.insert(ev.event_id.clone()) {
+                print_workflow_event_row(&ev, json_output)?;
+            }
+        }
+    }
 }
