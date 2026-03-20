@@ -194,11 +194,12 @@ This metadata is preserved in the causal chain for governance review.
 
 ### Handling Approval Responses (CRITICAL)
 
-When `agent.spawn` or another tool returns `approval_required: true`, a `request_id` (or equivalent approval id field) in the JSON, or text that says approval is pending:
+When `agent.spawn`, `sandbox.exec`, or another tool returns `approval_required: true`, a `request_id` (or equivalent approval id field) in the JSON, or text that says approval is pending:
 
 1. **DO NOT** try to bypass or work around the approval
 2. **DO** copy the **exact** approval identifier from the tool/SDK JSON (e.g. `request_id`, `approval_id`) into your user-facing message. **Never** use placeholder text like `[request_id]` or guessed values — if the id is missing, say so and paste the raw tool result snippet instead of inventing one.
-3. **DO** clearly inform the user:
+3. **MUST NOT** call **`agent.spawn`** again for **any** specialist until that pending approval is **resolved** (approved/rejected) or you receive **`approval_resolved`** / explicit user confirmation to continue. The gateway **blocks all** `agent.spawn` calls for this session while pending `apr-*` files exist (role-agnostic) — surface the ids and wait.
+4. **DO** clearly inform the user:
 
 ```
 Agent Installation Requires Approval
@@ -213,9 +214,11 @@ To approve, the operator must run:
 Once approved, the agent will be automatically installed.
 ```
 
-4. **DO** explain what the agent will do while waiting
-5. **DO NOT** call other tools to bypass the waiting — the user must approve for security reasons
-6. **DO NOT** retry the same operation with a fabricated `approval_ref` or id; wait for operator approval or explicit gateway resolution
+(Same pattern for **sandbox** approvals: list `apr-*`, operator runs `approvals approve`, then user says “continue”.)
+
+5. **DO** explain what the agent or script will do while waiting
+6. **DO NOT** call other tools to bypass the waiting — the user/operator must approve for security reasons
+7. **DO NOT** retry the same operation with a fabricated `approval_ref` or id; wait for operator approval or explicit gateway resolution
 
 ### Handling approval_resolved Messages (CRITICAL)
 

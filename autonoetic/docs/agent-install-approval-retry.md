@@ -82,13 +82,34 @@ After approval, the gateway automatically completes the install:
 
 If auto-execute fails (e.g., payload missing), the gateway sends a resume event to the caller as a fallback. The caller can then retry manually with `install_approval_ref`.
 
-## File Locations
+## File Locations (gateway root)
+
+All paths below are **under `<agents_dir>/.gateway/`** (the gateway root). They are **not** directly under `agents/` except via that hidden `.gateway` directory.
 
 | File | Description |
 |------|-------------|
-| `.gateway/scheduler/approvals/pending/<id>.json` | Approval request |
-| `.gateway/scheduler/approvals/pending/<id>_payload.json` | Stored install payload |
-| `.gateway/scheduler/approvals/approved/<id>.json` | Approved request |
+| `scheduler/approvals/pending/<id>.json` | Approval request metadata (`ApprovalRequest`) |
+| `scheduler/approvals/pending/<id>_payload.json` | Install payload only (for `agent.install` auto-execute); **not** a full approval JSON — listing APIs skip this suffix |
+| `scheduler/approvals/approved/<id>.json` | Approved request record |
+
+Example (same tree as “File Structure After Install”):
+
+```
+agents/
+└── .gateway/
+    └── scheduler/
+        └── approvals/
+            ├── approved/
+            └── pending/          ← requests + optional *_payload.json
+```
+
+## Delegation pause rule (planner + gateway)
+
+**Policy:** While **any** approval tied to the **same root session** is still **pending** (e.g. `sandbox.exec` remote-access review, `agent.install` operator approval), the lead planner **must not** advance the workflow by delegating to another specialist.
+
+**Gateway enforcement:** For **any** caller, `agent.spawn` is **rejected** if `scheduler/approvals/pending/` contains any request whose `session_id` shares the same **root** as this spawn (child sessions look like `<root>/<agent>-<suffix>`). The gateway does not look at agent roles — only root session + pending files. The error lists pending `apr-*` ids so the operator can `approvals approve|reject` and the user can say “continue”.
+
+**Planner behavior:** Treat `approval_required` / pending `apr-*` like a **hard stop** for the next `agent.spawn` until approval resolves or you receive `approval_resolved` / user confirmation — aligned with the spawn guard above.
 
 ## Logging
 
@@ -148,6 +169,23 @@ agents/
             └── pending/
                 └── (cleaned up after install)
 ```
+
+## Gateway root for auto-execute
+
+Post-approval `agent.install` runs `AgentInstallTool` with **`gateway_dir = agents_dir/.gateway`** (same as the live gateway). Artifact bundles live under `.gateway/artifacts/`; using the wrong root caused “artifact not found” in older builds.
+
+## Remote access: two different mechanisms
+
+| Mechanism | When it runs | What it detects | Triggers human approval? |
+|-----------|--------------|-----------------|-------------------------|
+| **`sandbox.exec`** | Before each sandbox run | `RemoteAccessAnalyzer` on the **command string** + resolved script text (imports, `https://`, IPs, …) | Yes, if patterns found and no valid `approval_ref` |
+| **`agent.install` (analysis)** | During install | `AnalysisProvider` (default: pattern) on **artifact/SKILL files**: capabilities, security threats, `remote_access_detected` in `SecurityAnalysis` | Indirectly: high-risk install (e.g. `NetworkAccess`) or failed security / capability mismatch can require approval or reject |
+
+They do **not** share the same code path. Code that never mentions `urllib`/`https` in the analyzed snippet may **not** trigger sandbox approval even if it would call HTTP at runtime (e.g. dynamic import). Install-time analysis can still flag network-like patterns in **source files** when installing an agent.
+
+**Logs:** set `RUST_LOG=sandbox.exec=info` to see `will_require_approval` and `summary` on every `sandbox.exec` static scan.
+
+**Duplicate approvals:** If remote access is required and an `apr-*` is **already pending** for that **same** tool `session_id`, the gateway does **not** create another file; the tool response includes `approval_already_pending` and the existing `request_id` so LLMs cannot flood `pending/` by retrying different commands.
 
 ## Related Documentation
 
