@@ -4,6 +4,13 @@
 //! causal chain entries flow in.  The file is created on first write with a
 //! Markdown table header; subsequent invocations append rows.
 //!
+//! Rows are appended from per-agent [`SessionTracer`](crate::runtime::session_tracer::SessionTracer)
+//! and, for orchestration, from [`log_gateway_causal_event`](crate::execution::log_gateway_causal_event)
+//! when the gateway action starts with `workflow.` (mirrored durable workflow transitions).
+//!
+//! A sibling artifact `workflow_graph.md` in the same directory is rewritten on each workflow
+//! store append (`events.jsonl`) for a quick structural view (tasks + recent events).
+//!
 //! Both humans and agents can tail or read the file mid-session to understand
 //! what has happened so far.  Errors (DENIED, ERROR) are highlighted in the
 //! status column with bold markers so they stand out at a glance.
@@ -284,6 +291,69 @@ fn extract_details(
             let len = u64_field(payload, "assistant_reply_len");
             format!("type: {} \\| reply_len={}", evt, len)
         }
+        ("gateway", action) if action.starts_with("workflow.") => {
+            // Mirrored orchestration rows (`workflow_causal`); durable source is `events.jsonl`.
+            match action {
+                "workflow.started" => {
+                    let wf = str_field(payload, "workflow_id");
+                    let root = str_field(payload, "root_session_id");
+                    let lead = str_field(payload, "lead_agent_id");
+                    format!(
+                        "wf: `{}` \\| root: `{}` \\| lead: `{}`",
+                        cell(wf),
+                        cell(root),
+                        cell(lead)
+                    )
+                }
+                "workflow.task.spawned" => {
+                    let tid = str_field(payload, "task_id");
+                    let agent = str_field(payload, "target_agent_id");
+                    let child = str_field(payload, "child_session_id");
+                    format!(
+                        "task: `{}` \\| agent: `{}` \\| child: `{}`",
+                        cell(tid),
+                        cell(agent),
+                        cell(&truncate(child, 48))
+                    )
+                }
+                "workflow.task.completed" | "workflow.task.failed" => {
+                    let tid = str_field(payload, "task_id");
+                    let agent = str_field(payload, "target_agent_id");
+                    let ev = str_field(payload, "workflow_event_type");
+                    format!(
+                        "task: `{}` \\| agent: `{}` \\| event: `{}`",
+                        cell(tid),
+                        cell(agent),
+                        cell(ev)
+                    )
+                }
+                "workflow.task.awaiting_approval" => {
+                    let tid = str_field(payload, "task_id");
+                    let agent = str_field(payload, "target_agent_id");
+                    format!(
+                        "task: `{}` \\| agent: `{}` \\| **[approval]**",
+                        cell(tid),
+                        cell(agent)
+                    )
+                }
+                "workflow.task.updated" => {
+                    let tid = str_field(payload, "task_id");
+                    let ev = str_field(payload, "workflow_event_type");
+                    format!("task: `{}` \\| {}", cell(tid), cell(ev))
+                }
+                _ => {
+                    let wf = str_field(payload, "workflow_id");
+                    let tid = str_field(payload, "task_id");
+                    if wf.is_empty() {
+                        cell(&truncate(action, 100))
+                    } else if tid.is_empty() {
+                        format!("wf: `{}` \\| {}", cell(wf), cell(action))
+                    } else {
+                        format!("wf: `{}` \\| task: `{}`", cell(wf), cell(tid))
+                    }
+                }
+            }
+        }
         ("gateway", action) if action.starts_with("agent.spawn") => {
             let agent = str_field(payload, "agent_id");
             if action.ends_with("requested") {
@@ -362,9 +432,19 @@ fn format_status(
     payload: Option<&serde_json::Value>,
 ) -> String {
     match status {
-        EntryStatus::Error => "**[ERROR]**".to_string(),
+        EntryStatus::Error => {
+            if category == "gateway" && action == "workflow.task.failed" {
+                return "**[FAIL]**".to_string();
+            }
+            "**[ERROR]**".to_string()
+        }
         EntryStatus::Denied => "**[DENIED]**".to_string(),
         EntryStatus::Success => {
+            if category == "gateway" && action.starts_with("workflow.") {
+                if action == "workflow.task.awaiting_approval" {
+                    return "**[WAIT]**".to_string();
+                }
+            }
             if category == "tool_invoke" && action == "completed" {
                 let preview = str_field(payload, "result_preview");
                 // Surface approval-required pauses.
@@ -444,6 +524,44 @@ mod tests {
             base_session_id("demo-session/coder.default-abc"),
             "demo-session"
         );
+    }
+
+    #[test]
+    fn test_workflow_started_timeline_details() {
+        let details = extract_details(
+            "gateway",
+            "workflow.started",
+            Some(&serde_json::json!({
+                "workflow_id": "wf-abc12345",
+                "root_session_id": "demo-root",
+                "lead_agent_id": "planner.default"
+            })),
+        );
+        assert!(details.contains("wf-abc12345"));
+        assert!(details.contains("demo-root"));
+        assert!(details.contains("planner.default"));
+    }
+
+    #[test]
+    fn test_workflow_task_spawned_status_column() {
+        let s = format_status(
+            &EntryStatus::Success,
+            "gateway",
+            "workflow.task.spawned",
+            None,
+        );
+        assert_eq!(s, "ok");
+    }
+
+    #[test]
+    fn test_workflow_task_failed_uses_fail_status() {
+        let s = format_status(
+            &EntryStatus::Error,
+            "gateway",
+            "workflow.task.failed",
+            None,
+        );
+        assert!(s.contains("FAIL"));
     }
 
     #[test]

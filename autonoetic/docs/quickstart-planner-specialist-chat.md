@@ -331,7 +331,8 @@ You should see:
 
 **Human-readable session views:**
 
-- `agents/.gateway/sessions/<session_id>/timeline.md` — progressive Markdown timeline for the whole session.
+- `agents/.gateway/sessions/<session_id>/timeline.md` — progressive Markdown timeline for the whole session (includes mirrored `workflow.*` gateway rows when delegation uses the durable workflow store).
+- `agents/.gateway/sessions/<session_id>/workflow_graph.md` — rewritten whenever a workflow event appends: current `workflow_id`, task list, and recent `events.jsonl` lines (open beside `timeline.md` for a live orchestration snapshot).
 - `agents/.gateway/sessions/<session_id>/artifacts/<artifact_id>/` — named projection of built artifact files so you can open generated code directly without resolving SHA handles by hand.
 - failed or approval-blocked tool runs now attach an `evidence_ref` in the timeline/causal entry, pointing to the full redacted result payload (useful for test stdout/stderr and approval details).
 
