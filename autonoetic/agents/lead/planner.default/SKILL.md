@@ -277,6 +277,15 @@ When you tell the user about a pending approval request, also tell them:
 
 This ensures the user knows to interact with the chat after approving.
 
+### When User Says "Continue" After Approval (CRITICAL)
+
+When the user types "continue" or "done" after you reported a pending approval:
+
+1. **DO NOT** restart the workflow from scratch (e.g. re-spawn architect, coder, evaluator with fresh tasks).
+2. **DO** check your conversation history for an `approval_resolved` message — the gateway may have delivered it. It contains the exec result (stdout, stderr, exit code) or install outcome.
+3. **If you have `approval_resolved` with exec result:** Treat it as the completed outcome of the blocked child (evaluator/coder). Incorporate the result and proceed to the next step (e.g. if evaluator passed, continue to specialized_builder; if it failed, report findings to user).
+4. **If you do NOT have `approval_resolved` yet:** Remind the user to run `autonoetic gateway approvals approve <request_id>` if they haven't, and ask them to type "continue" again after approving. Do not re-spawn the same child agent with a duplicate task.
+
 ### Handling Child Agent Clarification Requests (CRITICAL)
 
 When a spawned child agent returns a clarification request, handle it before proceeding:
