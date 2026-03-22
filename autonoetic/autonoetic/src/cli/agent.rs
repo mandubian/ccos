@@ -4,7 +4,7 @@ use tracing::info;
 
 use autonoetic_gateway::llm::Message;
 use autonoetic_types::agent::LlmExchangeUsage;
-use autonoetic_types::config::{GatewayConfig, LlmPreset};
+use autonoetic_types::config::GatewayConfig;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// LLM configuration for template rendering
@@ -278,7 +278,7 @@ tls: false
 default_lead_agent_id: "planner.default"
 max_concurrent_spawns: 4
 max_pending_spawns_per_agent: 4
-background_scheduler_enabled: false
+background_scheduler_enabled: true
 
 # Agent install approval policy: always, risk_based (default), or never
 # agent_install_approval_policy: risk_based
@@ -686,6 +686,7 @@ pub async fn run_agent_with_runtime(
     .await
 }
 
+#[allow(dead_code)]
 pub fn load_agent_runtime_context(
     config_path: &Path,
     agent_id: &str,
@@ -717,6 +718,7 @@ pub async fn run_agent_with_runtime_with_driver(
         driver,
         agent_dir,
         autonoetic_gateway::runtime::tools::default_registry(),
+        None,
     );
     if let Some(cfg) = gateway_config.as_ref() {
         runtime = runtime
@@ -1003,6 +1005,7 @@ Use tools when needed.
             fallback_provider: None,
             fallback_model: None,
             chat_only: None,
+            context_window_tokens: None,
         });
         config.llm_preset_mapping.insert("coder".to_string(), "fast".to_string());
 
