@@ -93,8 +93,8 @@ pub struct JsonRpcRouter {
 }
 
 impl JsonRpcRouter {
-    pub fn new(config: GatewayConfig) -> Self {
-        let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    pub fn new(config: GatewayConfig, gateway_store: Option<Arc<crate::scheduler::gateway_store::GatewayStore>>) -> Self {
+        let execution = Arc::new(GatewayExecutionService::new(config.clone(), gateway_store));
         Self {
             config: Arc::new(config),
             execution,
@@ -788,7 +788,7 @@ mod tests {
         let router = JsonRpcRouter::new(GatewayConfig {
             agents_dir: temp.path().join("agents"),
             ..GatewayConfig::default()
-        });
+        }, None);
         (temp, router)
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
             max_concurrent_spawns: 2,
             max_pending_spawns_per_agent: 2,
             ..GatewayConfig::default()
-        });
+        }, None);
 
         let admission = router.agent_admission_semaphore("agent-a").await;
         let _permit1 = admission
@@ -1280,7 +1280,7 @@ mod tests {
             max_concurrent_spawns: 1,
             max_pending_spawns_per_agent: 2,
             ..GatewayConfig::default()
-        });
+        }, None);
 
         let _permit = router
             .execution_semaphore()

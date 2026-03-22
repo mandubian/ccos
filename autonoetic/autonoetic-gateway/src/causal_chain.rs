@@ -183,6 +183,7 @@ fn should_rotate_internal(current_entries: usize, current_size_bytes: u64) -> bo
     current_entries >= max_entries || current_size_bytes >= max_size
 }
 
+#[allow(dead_code)]
 fn load_last_hash(log_path: &PathBuf) -> anyhow::Result<String> {
     let (hash, _) = load_last_hash_and_count(log_path)?;
     Ok(hash)

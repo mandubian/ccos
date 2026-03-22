@@ -9,7 +9,12 @@ use std::path::Path;
 pub fn load_config(path: &Path) -> anyhow::Result<GatewayConfig> {
     if path.exists() {
         let contents = std::fs::read_to_string(path)?;
-        let config: GatewayConfig = serde_yaml::from_str(&contents)?;
+        let mut config: GatewayConfig = serde_yaml::from_str(&contents)?;
+        // Canonicalize agents_dir to absolute path so all components resolve to the same location
+        config.agents_dir = config
+            .agents_dir
+            .canonicalize()
+            .unwrap_or_else(|_| config.agents_dir.clone());
         Ok(config)
     } else {
         tracing::warn!("Config not found at {}, using defaults", path.display());

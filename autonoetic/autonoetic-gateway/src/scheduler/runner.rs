@@ -112,10 +112,15 @@ pub async fn handle_due_wake(
             WakeReason::ApprovalResolved { request_id } => request_id,
             _ => unreachable!(),
         };
-        let decision: ApprovalDecision = super::store::read_json_file(
-            &super::approval::approved_approvals_dir(config.as_ref())
-                .join(format!("{request_id}.json")),
-        )?;
+        let decision: ApprovalDecision = if let Some(store) = execution.gateway_store() {
+            if let Some(req) = store.get_approval(request_id)? {
+                req.into_decision()?
+            } else {
+                anyhow::bail!("Approval request not found in store: {}", request_id);
+            }
+        } else {
+            anyhow::bail!("GatewayStore is required to resolve approvals");
+        };
         outcome = "executed".to_string();
         Some(
             execution
@@ -145,16 +150,20 @@ pub async fn handle_due_wake(
                         let root = crate::runtime::content_store::root_session_id(session_id);
                         let wf_id = crate::scheduler::resolve_workflow_id_for_root_session(config.as_ref(), &root).ok().flatten();
                         match wf_id {
-                            Some(wf) => crate::scheduler::resolve_task_id_for_session(config.as_ref(), &wf, session_id).ok().flatten(),
+                            Some(wf) => crate::scheduler::resolve_task_id_for_session(config.as_ref(), None, &wf, session_id).ok().flatten(),
                             None => None,
                         }
                     },
+                    root_session_id: Some(crate::runtime::content_store::root_session_id(session_id).to_string()),
+                    status: None,
+                    decided_at: None,
+                    decided_by: None,
                 };
-                super::store::write_json_file(
-                    &super::approval::pending_approvals_dir(config.as_ref())
-                        .join(format!("{}.json", request.request_id)),
-                    &request,
-                )?;
+                if let Some(store) = execution.gateway_store() {
+                    store.create_approval(&request)?;
+                } else {
+                    anyhow::bail!("GatewayStore is required to create approvals");
+                }
                 persist_reevaluation_state(agent_dir, |state| {
                     state
                         .open_approval_request_ids
