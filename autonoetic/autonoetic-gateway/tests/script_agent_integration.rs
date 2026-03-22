@@ -48,7 +48,7 @@ async fn test_script_agent_execution_returns_stdout() -> anyhow::Result<()> {
     let agent_id = "script-echo-agent";
     install_script_agent(&workspace.agents_dir.join(agent_id), agent_id)?;
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let session_id = "session-script-test";
 
     let result = execution
@@ -79,7 +79,7 @@ async fn test_script_agent_logs_causal_events() -> anyhow::Result<()> {
     let agent_id = "script-log-agent";
     install_script_agent(&workspace.agents_dir.join(agent_id), agent_id)?;
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let session_id = "session-script-causal";
 
     let _ = execution
@@ -160,7 +160,7 @@ async fn test_script_agent_with_sandbox_failure_returns_error() -> anyhow::Resul
     let agent_id = "script-fail-agent";
     install_failing_script_agent(&workspace.agents_dir.join(agent_id), agent_id)?;
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let session_id = "session-script-fail";
 
     let result = execution
@@ -229,7 +229,7 @@ async fn test_script_agent_without_capabilities_cannot_access_tools() -> anyhow:
     let agent_id = "script-policy-agent";
     install_policy_restricted_agent(&workspace.agents_dir.join(agent_id), agent_id)?;
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let session_id = "session-script-policy";
 
     let result = execution
@@ -261,7 +261,7 @@ async fn test_script_agent_execution_time_under_100ms() -> anyhow::Result<()> {
     let agent_id = "script-perf-agent";
     install_script_agent(&workspace.agents_dir.join(agent_id), agent_id)?;
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let session_id = "session-script-perf";
 
     let start = Instant::now();

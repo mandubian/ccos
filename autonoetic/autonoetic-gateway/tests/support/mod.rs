@@ -210,7 +210,7 @@ pub async fn spawn_gateway_server(
     let addr = listener.local_addr()?;
     drop(listener);
     config.port = addr.port();
-    let router = JsonRpcRouter::new(config);
+    let router = JsonRpcRouter::new(config, None);
     let handle = tokio::spawn(async move { start_jsonrpc_server(addr, router).await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     Ok((addr, handle))
@@ -328,13 +328,13 @@ pub async fn require_single_pending_approval(
 ) -> anyhow::Result<ApprovalRequest> {
     for _ in 0..5 {
         run_scheduler_tick(execution.clone()).await?;
-        let approvals = load_approval_requests(config)?;
+        let approvals = load_approval_requests(config, execution.gateway_store().as_deref())?;
         if approvals.len() == 1 {
             return Ok(approvals.into_iter().next().expect("approval should exist"));
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    let approvals = load_approval_requests(config)?;
+    let approvals = load_approval_requests(config, None)?;
     anyhow::ensure!(
         approvals.len() == 1,
         "expected exactly 1 pending approval request, found {}",
@@ -350,7 +350,7 @@ pub async fn approve_pending_request_and_tick(
     decided_by: &str,
     reason: Option<String>,
 ) -> anyhow::Result<ApprovalDecision> {
-    let decision = approve_request(config, &request.request_id, decided_by, reason)?;
+    let decision = approve_request(config, execution.gateway_store().as_deref(), &request.request_id, decided_by, reason)?;
     run_scheduler_tick(execution).await?;
     Ok(decision)
 }

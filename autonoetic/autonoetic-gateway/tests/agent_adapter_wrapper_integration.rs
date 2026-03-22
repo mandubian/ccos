@@ -186,6 +186,7 @@ async fn test_generated_wrapper_executes_with_io_transformation() {
         Arc::new(EchoSummaryDriver),
         wrapper_dir,
         autonoetic_gateway::runtime::tools::default_registry(),
+        None,
     )
     .with_middleware(middleware)
     .with_session_id("session-wrapper-io");
@@ -320,6 +321,7 @@ async fn test_generated_wrapper_executes_with_multiple_io_transformations() {
         Arc::new(EchoSummaryConfidenceDriver),
         wrapper_dir,
         autonoetic_gateway::runtime::tools::default_registry(),
+        None,
     )
     .with_middleware(middleware)
     .with_session_id("session-wrapper-io-multi");
