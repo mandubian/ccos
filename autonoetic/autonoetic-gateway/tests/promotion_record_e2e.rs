@@ -235,6 +235,7 @@ async fn test_promotion_record_full_pass_flow() {
             Some("session-eval-test"),
             None,
             Some(&config),
+            None,
         )
         .expect("evaluator promotion.record should succeed");
 
@@ -264,6 +265,7 @@ async fn test_promotion_record_full_pass_flow() {
             Some("session-audit-test"),
             None,
             Some(&config),
+            None,
         )
         .expect("auditor promotion.record should succeed");
 
@@ -314,6 +316,7 @@ async fn test_promotion_record_full_pass_flow() {
             Some("session-install-test"),
             None,
             Some(&config),
+            None,
         )
         .expect("install should succeed with valid promotion records");
 

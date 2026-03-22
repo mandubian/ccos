@@ -197,7 +197,7 @@ async fn test_generated_skill_approval_and_execution() {
         ..Default::default()
     };
 
-    let execution_service = Arc::new(GatewayExecutionService::new(config.clone()));
+    let execution = Arc::new(GatewayExecutionService::new(config.clone(), None));
     let (listen_addr, server_task) = spawn_gateway_server(config.clone()).await.unwrap();
     let mut client = JsonRpcClient::connect(listen_addr).await.unwrap();
 
@@ -250,6 +250,7 @@ async fn test_generated_skill_approval_and_execution() {
         poc_driver,
         poc_dir.clone(),
         autonoetic_gateway::runtime::tools::default_registry(),
+        None,
     )
     .with_initial_user_message("PoC Execution".to_string())
     .with_session_id("poc_session".to_string());
@@ -314,7 +315,7 @@ async fn test_generated_skill_approval_and_execution() {
     // Tick scheduler to promote to ApprovalRequest
     let r_state = std::fs::read_to_string(learner_dir.join("state").join("reevaluation.json")).unwrap();
     println!("R_STATE: {}", r_state);
-    let draft_request = require_single_pending_approval(execution_service.clone(), &config)
+    let draft_request = require_single_pending_approval(execution.clone(), &config)
         .await
         .unwrap();
     assert_eq!(
@@ -352,7 +353,7 @@ async fn test_generated_skill_approval_and_execution() {
 
     // --- Step 4: Programmatically approve ---
     approve_pending_request_and_tick(
-        execution_service.clone(),
+        execution.clone(),
         &config,
         &draft_request,
         "admin",

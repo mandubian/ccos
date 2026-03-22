@@ -162,6 +162,7 @@ async fn test_promotion_reject_no_records() {
         Some("session-reject-test"),
         None,
         Some(&config),
+            None,
     );
 
     assert!(
@@ -237,6 +238,7 @@ async fn test_promotion_reject_evaluator_failed() {
         Some("session-reject-eval-fail"),
         None,
         Some(&config),
+            None,
     );
 
     // When evaluator_pass=false, the new validation code checks:
@@ -315,6 +317,7 @@ async fn test_promotion_reject_auditor_failed() {
         Some("session-reject-audit-fail"),
         None,
         Some(&config),
+            None,
     );
 
     // Both evaluator and auditor are claimed as passed=true, but no records exist
@@ -401,6 +404,7 @@ async fn test_promotion_reject_invalid_handle() {
         Some("session-reject-invalid"),
         None,
         Some(&config),
+            None,
     );
 
     // Even with a valid-format handle, if no promotion records exist → REJECT

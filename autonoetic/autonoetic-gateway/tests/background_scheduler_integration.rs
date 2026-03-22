@@ -104,7 +104,7 @@ async fn test_background_scheduler_idle_timer_through_public_api() -> anyhow::Re
         },
     )?;
 
-    let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    let execution = Arc::new(GatewayExecutionService::new(config.clone(), None));
     run_scheduler_tick(execution).await?;
 
     let state: BackgroundState = serde_json::from_str(&std::fs::read_to_string(
@@ -157,7 +157,7 @@ async fn test_background_scheduler_wake_on_new_work_through_public_api() -> anyh
     )?;
     append_inbox_event(&config, agent_id, "hello", Some("public-msg"))?;
 
-    let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    let execution = Arc::new(GatewayExecutionService::new(config.clone(), None));
     run_scheduler_tick(execution).await?;
 
     assert!(agent_dir
@@ -222,7 +222,7 @@ async fn test_background_scheduler_timer_action_is_recurring() -> anyhow::Result
         },
     )?;
 
-    let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    let execution = Arc::new(GatewayExecutionService::new(config.clone(), None));
     run_scheduler_tick(execution.clone()).await?;
 
     let reevaluation_after_first: ReevaluationState = serde_json::from_str(&std::fs::read_to_string(
@@ -253,11 +253,16 @@ async fn test_background_scheduler_timer_action_is_recurring() -> anyhow::Result
 async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow::Result<()> {
     let temp = tempdir()?;
     let agents_dir = temp.path().join("agents");
+    let gateway_dir = agents_dir.join(".gateway");
+    std::fs::create_dir_all(&gateway_dir)?;
     let config = GatewayConfig {
         agents_dir: agents_dir.clone(),
         background_scheduler_enabled: true,
         ..GatewayConfig::default()
     };
+    let store = std::sync::Arc::new(
+        autonoetic_gateway::scheduler::gateway_store::GatewayStore::open(&gateway_dir)?,
+    );
     let agent_id = "evolution-public-agent";
     let agent_dir = write_background_agent(
         &agents_dir,
@@ -290,7 +295,7 @@ async fn test_background_scheduler_evolution_flow_through_public_api() -> anyhow
         },
     )?;
 
-    let execution = Arc::new(GatewayExecutionService::new(config.clone()));
+    let execution = Arc::new(GatewayExecutionService::new(config.clone(), Some(store)));
     let request = require_single_pending_approval(execution.clone(), &config).await?;
     assert!(!agent_dir
         .join("skills")

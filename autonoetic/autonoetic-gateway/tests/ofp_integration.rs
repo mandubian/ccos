@@ -777,7 +777,7 @@ async fn test_registry_lifecycle_via_real_ofp_server() {
 
     // Create a dummy router for the test
     let config = autonoetic_types::config::GatewayConfig::default();
-    let router = std::sync::Arc::new(autonoetic_gateway::router::JsonRpcRouter::new(config));
+    let router = std::sync::Arc::new(autonoetic_gateway::router::JsonRpcRouter::new(config, None));
 
     let server = tokio::spawn(start_ofp_server(
         server_addr,
@@ -898,7 +898,7 @@ metadata:
         agents_dir,
         ..Default::default()
     };
-    let router = Arc::new(JsonRpcRouter::new(config));
+    let router = Arc::new(JsonRpcRouter::new(config, None));
 
     // 3. Start OFP server on a random port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1043,7 +1043,7 @@ metadata:
         agents_dir,
         ..Default::default()
     };
-    let router = Arc::new(JsonRpcRouter::new(config));
+    let router = Arc::new(JsonRpcRouter::new(config, None));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = listener.local_addr().unwrap();

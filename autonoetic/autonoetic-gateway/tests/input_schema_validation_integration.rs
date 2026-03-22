@@ -75,7 +75,7 @@ async fn test_spawn_logs_schema_validation_for_mismatched_and_valid_inputs() -> 
     let _base_url = EnvGuard::set(LLM_BASE_URL_OVERRIDE_ENV, stub.completion_url());
     let _api_key = EnvGuard::set(LLM_API_KEY_OVERRIDE_ENV, "test-key");
 
-    let execution = GatewayExecutionService::new(workspace.gateway_config());
+    let execution = GatewayExecutionService::new(workspace.gateway_config(), None);
     let mismatched_session_id = "session-schema-mismatch";
     let valid_session_id = "session-schema-valid";
 
