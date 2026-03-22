@@ -102,6 +102,12 @@ pub struct TaskRun {
     /// Join group this task belongs to (tasks in the same group are awaited together).
     #[serde(default)]
     pub join_group: Option<String>,
+    /// Original kickoff message for the child agent. Preserved across approval boundaries.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Original metadata passed through to the child. Preserved across approval boundaries.
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Join policy for a group of tasks.
@@ -158,6 +164,8 @@ pub struct WorkflowEventRecord {
     #[serde(default)]
     pub task_id: Option<String>,
     pub event_type: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub payload: serde_json::Value,
     pub occurred_at: String,

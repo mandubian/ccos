@@ -106,6 +106,8 @@ pub enum ScheduledAction {
         summary: String,
         requested_by_agent_id: String,
         install_fingerprint: String,
+        #[serde(default)]
+        payload: Option<serde_json::Value>,
     },
 }
 
@@ -231,12 +233,48 @@ pub struct ApprovalRequest {
     pub reason: Option<String>,
     #[serde(default)]
     pub evidence_ref: Option<String>,
+    #[serde(default)]
+    pub root_session_id: Option<String>,
     /// Workflow this approval belongs to (for task-level unblocking on resolution).
     #[serde(default)]
     pub workflow_id: Option<String>,
     /// Task this approval blocks (unblocked on approval resolution).
     #[serde(default)]
     pub task_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<ApprovalStatus>,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    #[serde(default)]
+    pub decided_by: Option<String>,
+}
+
+impl ApprovalRequest {
+    pub fn into_decision(self) -> anyhow::Result<ApprovalDecision> {
+        let status = self
+            .status
+            .ok_or_else(|| anyhow::anyhow!("Approval status is missing"))?;
+        let decided_at = self
+            .decided_at
+            .ok_or_else(|| anyhow::anyhow!("Decided at is missing"))?;
+        let decided_by = self
+            .decided_by
+            .ok_or_else(|| anyhow::anyhow!("Decided by is missing"))?;
+
+        Ok(ApprovalDecision {
+            request_id: self.request_id,
+            agent_id: self.agent_id,
+            session_id: self.session_id,
+            action: self.action,
+            status,
+            decided_at,
+            decided_by,
+            reason: self.reason,
+            root_session_id: self.root_session_id,
+            workflow_id: self.workflow_id,
+            task_id: self.task_id,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -257,6 +295,8 @@ pub struct ApprovalDecision {
     pub decided_by: String,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub root_session_id: Option<String>,
     /// Workflow this approval belongs to (copied from ApprovalRequest).
     #[serde(default)]
     pub workflow_id: Option<String>,

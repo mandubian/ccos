@@ -145,7 +145,7 @@ pub struct GatewayConfig {
     pub max_pending_spawns_per_agent: usize,
 
     /// Enable the gateway-owned background scheduler.
-    #[serde(default)]
+    #[serde(default = "default_background_scheduler_enabled")]
     pub background_scheduler_enabled: bool,
 
     /// Tick interval for background due checks.
@@ -305,6 +305,10 @@ fn default_max_pending_spawns_per_agent() -> usize {
     4
 }
 
+fn default_background_scheduler_enabled() -> bool {
+    true
+}
+
 fn default_background_tick_secs() -> u64 {
     5
 }
@@ -327,7 +331,7 @@ impl Default for GatewayConfig {
             tls: false,
             max_concurrent_spawns: default_max_concurrent_spawns(),
             max_pending_spawns_per_agent: default_max_pending_spawns_per_agent(),
-            background_scheduler_enabled: false,
+            background_scheduler_enabled: default_background_scheduler_enabled(),
             background_tick_secs: default_background_tick_secs(),
             background_min_interval_secs: default_background_min_interval_secs(),
             max_background_due_per_tick: default_max_background_due_per_tick(),
@@ -348,7 +352,7 @@ mod tests {
     #[test]
     fn test_background_scheduler_defaults() {
         let config = GatewayConfig::default();
-        assert!(!config.background_scheduler_enabled);
+        assert!(config.background_scheduler_enabled);
         assert_eq!(config.background_tick_secs, 5);
         assert_eq!(config.background_min_interval_secs, 60);
         assert_eq!(config.max_background_due_per_tick, 32);

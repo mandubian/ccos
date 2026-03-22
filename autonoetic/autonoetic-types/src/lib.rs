@@ -17,4 +17,5 @@ pub mod runtime_lock;
 pub mod schema_enforcement;
 pub mod task_board;
 pub mod tool_error;
+pub mod notification;
 pub mod workflow;
