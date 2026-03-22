@@ -40,12 +40,14 @@ The same schema is used for approval notifications regardless of delivery path.
 
 ## Storage Model
 
-- Pending approvals: `.gateway/scheduler/approvals/pending/<request_id>.json`
-- Approved decisions: `.gateway/scheduler/approvals/approved/<request_id>.json`
-- Rejected decisions: `.gateway/scheduler/approvals/rejected/<request_id>.json`
-- Session notifications: `.gateway/signal/<session_id>/<request_id>.json`
+Autonoetic now uses an embedded SQLite database (`GatewayStore`) for durable approval and notification storage, replacing the legacy file-based system.
 
-Delivery bookkeeping markers can exist beside signal files (for example `.delivered` markers).
+- **Database:** `.gateway/gateway.db`
+- **Approvals:** Stored in the `approvals` table with columns for `request_id`, `agent_id`, `session_id`, `status` (`pending`, `approved`, `rejected`), etc.
+- **Notifications:** Stored in the `notifications` table (replacing `.gateway/signal/` files), tracking delivery attempts and consumption status.
+- **Workflow Events:** Stored in the `workflow_events` table for resilient event logging.
+
+Delivery bookkeeping (like attempt counts and `consumed_at` timestamps) is natively tracked as columns within the SQLite schema.
 
 ## Delivery Ownership
 
@@ -57,12 +59,10 @@ Delivery bookkeeping markers can exist beside signal files (for example `.delive
 
 For terminal chat:
 
-1. chat detects pending approval signal files for its `session_id`,
-2. chat emits an `event.ingest` resume on its own socket with the structured approval payload,
-3. chat renders the assistant continuation,
-4. chat consumes the signal only after successful resume/render.
+1. chat observes the causal chain for `approval_resolved` workflow events or background continuation,
+2. chat renders the assistant continuation automatically based on the updated causal events.
 
-If resume fails, the signal remains pending for retry.
+Signal files are no longer polled or consumed by the CLI; this is now entirely managed by the Gateway's internal SQLite notification system.
 
 ## Background Scheduler Behavior
 

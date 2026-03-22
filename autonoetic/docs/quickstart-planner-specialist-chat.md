@@ -411,12 +411,12 @@ You should not need to type manual prompts like `continue` or `done` after appro
 - Approval-resolution messages use a structured payload (`type: "approval_resolved"` with `request_id`, `status`, `agent_id`, `install_completed`, `message`).
 - The gateway owns background polling/delivery; CLI approval commands only record the decision.
 - Chat acknowledges notification consumption only after successful resume/render.
-- Pending notifications are durable under `.gateway/signal/` until consumed.
+- Pending notifications are durable in the `GatewayStore` SQLite database until consumed.
 
 **Payload storage details:**
-- Stored at: `.gateway/scheduler/approvals/pending/<id>_payload.json`
-- Persists across gateway restarts
-- Cleaned up automatically after successful install
+- Stored directly in the `GatewayStore` SQLite `approvals` table.
+- Persists across gateway restarts natively.
+- Cleaned up or marked completed automatically after successful install.
 - Enables deterministic execution even if LLM output differs
 
 **Rejected requests** are not retried; the caller sees the rejection and should report to the user.
