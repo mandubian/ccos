@@ -621,6 +621,43 @@ The new workflow layer should sit above them:
 - Approval section updated: async spawn not blocked by pending approvals ✅
 - Session-path inference: `root_session_id()` still used in places; full cleanup deferred (non-breaking, backward-compatible)
 
+## Bugs Fixed
+
+### Bug 1: Queued tasks re-spawned on every scheduler tick while still Running ✅
+
+**Severity: High**
+
+**Location:** `scheduler.rs:217-240` (crash recovery) and `scheduler.rs:291-317` (normal spawn)
+
+**Problem:** Any queued task whose `TaskRun` is already `Running` is treated as crash recovery and immediately re-spawned. However, the queue file was only removed after terminal completion. So on the next normal tick, the same queued file was still present, the task was still `Running`, and the scheduler launched a duplicate execution.
+
+An intermediate fix attempted to dequeue after spawning, but this created a loss window: if the process crashed after `tokio::spawn` returned but before the task actually began executing, the queue file would be gone, the `TaskRun` would still be `Running`, and no recovery path would pick up the orphaned task.
+
+**Fix:**
+- Removed all dequeue calls from `process_queued_workflow_tasks`
+- The spawned task dequeues on terminal completion (success/failure) — this was already present
+- Crash recovery works because the queue file stays until actual completion
+- If we crash between spawn and completion, the queue file is still present and crash recovery will see `Running` + queue file → re-spawn (narrower window of possible duplication, not permanent loss)
+- If task is already `Running`, we now just skip with a log message instead of re-spawning
+
+**Test added:** `approval_resume_preserves_message_and_metadata` — drives a task through `Running → AwaitingApproval → Runnable` and verifies `message`/`metadata` are preserved at each step.
+
+### Bug 2: Approval-resumed tasks lose original execution inputs ✅
+
+**Severity: High**
+
+**Location:** `scheduler.rs:462` (resume path)
+
+**Problem:** The resume path called the shared executor with message `Resume after approval: <session_id>` and metadata `None`. This discarded the original kickoff message and any queued metadata that the child task was supposed to execute with. For tasks blocked on approval, the resumed run was not a continuation of the original delegated work; it was a new invocation with different inputs.
+
+**Fix:**
+- Added `message` and `metadata` fields to `TaskRun` struct (`autonoetic-types/src/workflow.rs`)
+- Scheduler copies these from `QueuedTaskRun` when creating `TaskRun`
+- Resume path now uses stored `task.message` and `task.metadata` instead of synthetic message / `None`
+- Sync spawn path in `tools.rs` also populates these fields
+
+**Regression test:** `approval_resume_preserves_message_and_metadata` in `workflow_store.rs`
+
 ## Testing Plan
 
 ### Backend orchestration tests

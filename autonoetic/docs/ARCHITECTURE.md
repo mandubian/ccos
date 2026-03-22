@@ -82,7 +82,8 @@ An agent is a SKILL.md manifest + instructions that runs inside a sandbox. Agent
 
 Key characteristics:
 - **Pure reasoner**: Makes decisions, but cannot execute
-- **Text-native**: State is plain text files, not databases
+- **Text-native**: Agent and workflow state are plain text/JSON files, prioritizing transparency over database opacity.
+  - *Note:* The Gateway uses an embedded SQLite database (`gateway.db`) purely for fast-moving transactional data: approvals, notifications, and workflow events.
 - **Capability-declared**: All permissions declared in manifest
 - **Role-based**: Each agent fills a specific role in the system
 
