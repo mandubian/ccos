@@ -25,6 +25,7 @@ pub struct ToolCallProcessor<'a> {
     turn_id: Option<String>,
     /// When set, passed to native tools (e.g. agent.install for approval policy).
     config: Option<&'a GatewayConfig>,
+    gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
 }
 
 impl<'a> ToolCallProcessor<'a> {
@@ -46,6 +47,7 @@ impl<'a> ToolCallProcessor<'a> {
         disclosure_state: &'a mut DisclosureState,
         secret_store: Option<&'a mut SecretStoreRuntime>,
         config: Option<&'a GatewayConfig>,
+        gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
     ) -> Self {
         Self {
             mcp_runtime,
@@ -56,6 +58,7 @@ impl<'a> ToolCallProcessor<'a> {
             session_id: None,
             turn_id: None,
             config,
+            gateway_store,
         }
     }
 
@@ -121,6 +124,10 @@ impl<'a> ToolCallProcessor<'a> {
             };
 
             results.push((tc.id.clone(), tc.name.clone(), result));
+
+            if tool_result_requires_approval(&results.last().expect("just pushed result").2) {
+                break;
+            }
         }
 
         Ok((had_any_success, results))
@@ -155,6 +162,7 @@ impl<'a> ToolCallProcessor<'a> {
                 self.session_id.as_deref(),
                 self.turn_id.as_deref(),
                 self.config,
+                self.gateway_store.clone(),
             )?
         } else {
             return Err(anyhow::Error::from(
@@ -236,13 +244,25 @@ impl<'a> ToolCallProcessor<'a> {
     }
 }
 
+fn tool_result_requires_approval(result: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(result)
+        .ok()
+        .and_then(|parsed| parsed.get("approval_required").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::ToolDefinition;
+    use crate::policy::PolicyEngine;
+    use crate::runtime::tools::{NativeTool, NativeToolRegistry};
     use crate::runtime::tools::default_registry;
     use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
     use autonoetic_types::capability::Capability;
     use autonoetic_types::tool_error::{tagged, ToolErrorType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn test_manifest() -> AgentManifest {
@@ -295,6 +315,7 @@ mod tests {
             &registry,
             &manifest,
             &mut disclosure_state,
+            None,
             None,
             None,
         );
@@ -352,6 +373,7 @@ mod tests {
             &mut disclosure_state,
             None,
             None,
+            None,
         );
 
         // Unknown tool is now recoverable so the agent can self-repair by
@@ -392,6 +414,7 @@ mod tests {
             &registry,
             &manifest,
             &mut disclosure_state,
+            None,
             None,
             None,
         );
@@ -438,6 +461,143 @@ mod tests {
                 "error_type2 was: {}", error_type2);
     }
 
+    struct ApprovalRequiredTool;
+
+    impl NativeTool for ApprovalRequiredTool {
+        fn name(&self) -> &'static str {
+            "test.approval"
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name().to_string(),
+                description: "Returns approval required".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            }
+        }
+
+        fn is_available(&self, _manifest: &AgentManifest) -> bool {
+            true
+        }
+
+        fn execute(
+            &self,
+            _manifest: &AgentManifest,
+            _policy: &PolicyEngine,
+            _agent_dir: &Path,
+            _gateway_dir: Option<&Path>,
+            _arguments_json: &str,
+            _session_id: Option<&str>,
+            _turn_id: Option<&str>,
+            _config: Option<&autonoetic_types::config::GatewayConfig>,
+            _gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
+        ) -> anyhow::Result<String> {
+            Ok(serde_json::json!({
+                "ok": false,
+                "approval_required": true,
+                "request_id": "apr-test1234"
+            })
+            .to_string())
+        }
+    }
+
+    struct CountingTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl NativeTool for CountingTool {
+        fn name(&self) -> &'static str {
+            "test.count"
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name().to_string(),
+                description: "Counts executions".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            }
+        }
+
+        fn is_available(&self, _manifest: &AgentManifest) -> bool {
+            true
+        }
+
+        fn execute(
+            &self,
+            _manifest: &AgentManifest,
+            _policy: &PolicyEngine,
+            _agent_dir: &Path,
+            _gateway_dir: Option<&Path>,
+            _arguments_json: &str,
+            _session_id: Option<&str>,
+            _turn_id: Option<&str>,
+            _config: Option<&autonoetic_types::config::GatewayConfig>,
+            _gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
+        ) -> anyhow::Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({ "ok": true }).to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_required_stops_remaining_tool_calls() {
+        let temp = tempdir().unwrap();
+        let manifest = test_manifest();
+        let mut mcp_runtime = crate::runtime::mcp::McpToolRuntime::empty();
+        let mut registry = NativeToolRegistry::new();
+        registry.register(Box::new(ApprovalRequiredTool));
+        let counting_calls = Arc::new(AtomicUsize::new(0));
+        registry.register(Box::new(CountingTool {
+            calls: Arc::clone(&counting_calls),
+        }));
+        let mut disclosure_state = DisclosureState::default();
+
+        let mut processor = ToolCallProcessor::new(
+            &mut mcp_runtime,
+            &registry,
+            &manifest,
+            &mut disclosure_state,
+            None,
+            None,
+            None,
+        );
+
+        let tool_calls = vec![
+            ToolCall {
+                id: "tc1".to_string(),
+                name: "test.approval".to_string(),
+                arguments: "{}".to_string(),
+            },
+            ToolCall {
+                id: "tc2".to_string(),
+                name: "test.count".to_string(),
+                arguments: "{}".to_string(),
+            },
+        ];
+
+        let (had_success, results) = processor
+            .process_tool_calls(
+                &tool_calls,
+                temp.path(),
+                None,
+                &mut SessionTracer::test_tracer(),
+            )
+            .await
+            .unwrap();
+
+        assert!(had_success, "approval-required tool result should still count as progress");
+        assert_eq!(results.len(), 1, "remaining tool calls should be skipped");
+        assert_eq!(counting_calls.load(Ordering::SeqCst), 0);
+        let parsed: serde_json::Value = serde_json::from_str(&results[0].2).unwrap();
+        assert_eq!(parsed["approval_required"], true);
+    }
+
     #[tokio::test]
     async fn test_in_session_repair_loop_recovery_from_structured_error() {
         let temp = tempdir().unwrap();
@@ -454,6 +614,7 @@ mod tests {
             &registry,
             &manifest,
             &mut disclosure_state,
+            None,
             None,
             None,
         );
