@@ -82,6 +82,7 @@ pub struct AgentExecutor {
     pub llm_usage_last_run: Vec<LlmExchangeUsage>,
     /// Optional OpenRouter models catalog (context + pricing) for UX and session price budgets.
     pub openrouter_catalog: Option<Arc<OpenRouterCatalog>>,
+    pub gateway_store: Option<Arc<crate::scheduler::gateway_store::GatewayStore>>,
 }
 
 impl AgentExecutor {
@@ -91,24 +92,26 @@ impl AgentExecutor {
         llm: std::sync::Arc<dyn LlmDriver>,
         agent_dir: PathBuf,
         registry: crate::runtime::tools::NativeToolRegistry,
+        gateway_store: Option<Arc<crate::scheduler::gateway_store::GatewayStore>>,
     ) -> Self {
         Self {
-            manifest,
+            manifest: manifest.clone(),
             instructions,
             llm,
             agent_dir,
-            gateway_dir: None,
             registry,
-            initial_user_message: "What is your next action?".to_string(),
+            gateway_dir: None,
+            initial_user_message: String::new(),
             guard: LoopGuard::new(5),
             session_id: None,
             session_started: false,
             turn_counter: 0,
             config: None,
             session_budget: None,
-            middleware: Middleware::default(),
+            middleware: manifest.middleware.clone().unwrap_or_default(),
             llm_usage_last_run: Vec::new(),
             openrouter_catalog: None,
+            gateway_store,
         }
     }
 
@@ -277,6 +280,8 @@ impl AgentExecutor {
         let policy = PolicyEngine::new(self.manifest.clone());
         let max_empty_other_retries = max_other_empty_retries();
         let mut empty_other_retries_used = 0usize;
+        // When a tool returns approval_required, force the next LLM call to end turn (no tools).
+        let mut approval_required_force_end_turn = false;
 
         loop {
             self.guard.check_loop()?;
@@ -300,13 +305,19 @@ impl AgentExecutor {
 
             // MCP tool exposure ... (skipped for brevity, but I must match exactly)
 
-            // MCP tool exposure is capability-gated by ToolInvoke allow-lists.
-            let mut tools: Vec<ToolDefinition> = mcp_runtime
-                .tool_definitions()?
-                .into_iter()
-                .filter(|def| policy.can_invoke_tool(&def.name))
-                .collect();
-            tools.extend(self.registry.available_definitions(&self.manifest));
+            // When approval_required was returned by a tool, force end turn: no further tool calls.
+            let tools: Vec<ToolDefinition> = if approval_required_force_end_turn {
+                approval_required_force_end_turn = false;
+                vec![]
+            } else {
+                let mut t: Vec<ToolDefinition> = mcp_runtime
+                    .tool_definitions()?
+                    .into_iter()
+                    .filter(|def| policy.can_invoke_tool(&def.name))
+                    .collect();
+                t.extend(self.registry.available_definitions(&self.manifest));
+                t
+            };
 
             let req = CompletionRequest {
                 model: model.clone(),
@@ -524,6 +535,7 @@ impl AgentExecutor {
                         &mut disclosure_state,
                         secret_store.as_mut(),
                         self.config.as_deref(),
+                        self.gateway_store.clone(),
                     )
                     .with_session_context(self.session_id.clone(), Some(turn_id.clone()));
 
@@ -536,6 +548,7 @@ impl AgentExecutor {
                         )
                         .await?;
 
+                    let mut seen_approval_required: Option<String> = None;
                     for (id, name, result) in results {
                         history.push(Message::tool_result(id.clone(), name, result.clone()));
 
@@ -548,7 +561,31 @@ impl AgentExecutor {
                                     self.guard.register_failure(&tc.name, &tc.arguments);
                                 }
                             }
+                            // If any tool returned approval_required, force end turn next iteration.
+                            if !approval_required_force_end_turn
+                                && parsed
+                                    .get("approval_required")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                            {
+                                approval_required_force_end_turn = true;
+                                seen_approval_required = parsed
+                                    .get("request_id")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from);
+                            }
                         }
+                    }
+                    if approval_required_force_end_turn {
+                        let request_id = seen_approval_required
+                            .as_deref()
+                            .unwrap_or("(see tool response)");
+                        history.push(Message::system(format!(
+                            "CRITICAL: The previous tool returned approval_required. You MUST end your turn immediately. \
+                            Do NOT call any more tools. Produce your final response (include request_id: {} and state that \
+                            execution is blocked until operator approval). The session will hibernate until the operator approves.",
+                            request_id
+                        )));
                     }
 
                     if had_any_success {
@@ -563,7 +600,7 @@ impl AgentExecutor {
 
                     // Inject compact workflow summary if any tasks are tracked
                     if let Some(cfg) = self.config.as_ref() {
-                        if let Ok(Some(summary)) = crate::scheduler::compact_workflow_summary(cfg, &session_id) {
+                        if let Ok(Some(summary)) = crate::scheduler::compact_workflow_summary(cfg, None, &session_id) {
                             history.push(Message::system(format!(
                                 "[workflow status] {}",
                                 summary
@@ -587,6 +624,7 @@ impl AgentExecutor {
                             });
                             if let Err(e) = crate::scheduler::checkpoint_planner(
                                 cfg,
+                                None,
                                 &wf_id,
                                 if planner_intent.is_empty() {
                                     format!("Turn {} ended", &turn_id[..turn_id.len().min(8)])
@@ -957,13 +995,16 @@ mod tests {
     use super::*;
     use crate::llm::{
         CompletionRequest, CompletionResponse, LlmDriver, StopReason, TokenUsage, ToolCall,
+        ToolDefinition,
     };
+    use crate::policy::PolicyEngine;
     use crate::runtime::reevaluation_state::execute_scheduled_action;
+    use crate::runtime::tools::{NativeTool, NativeToolRegistry};
     use autonoetic_types::agent::{AgentIdentity, RuntimeDeclaration};
     use autonoetic_types::background::ScheduledAction;
     use autonoetic_types::capability::Capability;
-    use autonoetic_types::disclosure::{DisclosureClass, DisclosurePolicy};
-    use sha2::Digest;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -1014,6 +1055,7 @@ mod tests {
                 evidence_ref: None,
             },
             &crate::runtime::tools::default_registry(),
+            None,
             None,
         )
         .expect("scheduled write should succeed");
@@ -1076,6 +1118,7 @@ mod tests {
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
         let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
         let reply = runtime
@@ -1098,6 +1141,7 @@ mod tests {
             }),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
         let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
         let reply = runtime
@@ -1166,6 +1210,7 @@ mod tests {
             Arc::new(driver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
 
         runtime
@@ -1181,6 +1226,136 @@ mod tests {
         assert!(system.contains("Autonoetic Gateway Foundation Rules"));
         assert!(system.contains("Python sandbox code can import `autonoetic_sdk`"));
         assert!(system.contains("Agent local rules"));
+    }
+
+    struct ApprovalRequiredLifecycleTool;
+
+    impl NativeTool for ApprovalRequiredLifecycleTool {
+        fn name(&self) -> &'static str {
+            "test.approval"
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.name().to_string(),
+                description: "Lifecycle approval test tool".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            }
+        }
+
+        fn is_available(&self, _manifest: &AgentManifest) -> bool {
+            true
+        }
+
+        fn execute(
+            &self,
+            _manifest: &AgentManifest,
+            _policy: &PolicyEngine,
+            _agent_dir: &Path,
+            _gateway_dir: Option<&Path>,
+            _arguments_json: &str,
+            _session_id: Option<&str>,
+            _turn_id: Option<&str>,
+            _config: Option<&autonoetic_types::config::GatewayConfig>,
+            _gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
+        ) -> anyhow::Result<String> {
+            Ok(serde_json::json!({
+                "ok": false,
+                "approval_required": true,
+                "request_id": "apr-lifecycle1234"
+            })
+            .to_string())
+        }
+    }
+
+    struct ApprovalThenEndTurnDriver {
+        calls: Arc<AtomicUsize>,
+        second_call_had_no_tools: Arc<Mutex<bool>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmDriver for ApprovalThenEndTurnDriver {
+        async fn complete(
+            &self,
+            request: &CompletionRequest,
+        ) -> anyhow::Result<CompletionResponse> {
+            let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call_index == 0 {
+                Ok(CompletionResponse {
+                    text: "trying tool".to_string(),
+                    tool_calls: vec![ToolCall {
+                        id: "tc1".to_string(),
+                        name: "test.approval".to_string(),
+                        arguments: "{}".to_string(),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    usage: TokenUsage::default(),
+                })
+            } else {
+                let no_tools = request.tools.is_empty()
+                    && request.messages.iter().any(|m| {
+                        m.role == crate::llm::Role::System
+                            && m.content.contains("approval_required")
+                            && m.content.contains("Do NOT call any more tools")
+                    });
+                *self
+                    .second_call_had_no_tools
+                    .lock()
+                    .expect("mutex should lock") = no_tools;
+
+                Ok(CompletionResponse {
+                    text: "Approval required. Request ID: apr-lifecycle1234. Waiting for operator approval."
+                        .to_string(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_required_blocks_more_tools_but_allows_final_llm_message() {
+        let manifest = manifest_with_capabilities(vec![]);
+        let temp = tempdir().expect("tempdir should create");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let second_call_had_no_tools = Arc::new(Mutex::new(false));
+        let driver = ApprovalThenEndTurnDriver {
+            calls: Arc::clone(&calls),
+            second_call_had_no_tools: Arc::clone(&second_call_had_no_tools),
+        };
+        let mut registry = NativeToolRegistry::new();
+        registry.register(Box::new(ApprovalRequiredLifecycleTool));
+
+        let mut runtime = AgentExecutor::new(
+            manifest,
+            "System prompt".to_string(),
+            Arc::new(driver),
+            temp.path().to_path_buf(),
+            registry,
+            None,
+        );
+        let mut history = vec![Message::system("System prompt"), Message::user("Hello")];
+
+        let reply = runtime
+            .execute_with_history(&mut history)
+            .await
+            .expect("execution should succeed");
+
+        assert_eq!(
+            reply.as_deref(),
+            Some("Approval required. Request ID: apr-lifecycle1234. Waiting for operator approval.")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(
+            *second_call_had_no_tools
+                .lock()
+                .expect("mutex should lock"),
+            "second LLM call should have no tools and should include approval guidance"
+        );
     }
 
     #[test]
@@ -1305,6 +1480,7 @@ Hope this helps!"#;
             Arc::new(ToolDriver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
         let mut history = vec![Message::user("go")];
         let res = runtime.execute_with_history(&mut history).await;
@@ -1348,6 +1524,7 @@ Hope this helps!"#;
             Arc::new(DisclosureDriver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
         let mut history = vec![Message::user("what is the answer?")];
         let reply = runtime
@@ -1370,6 +1547,7 @@ Hope this helps!"#;
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
 
         let mut tracer = crate::runtime::session_tracer::SessionTracer::test_tracer();
@@ -1407,6 +1585,7 @@ Hope this helps!"#;
             Arc::new(FixedTextDriver),
             temp.path().to_path_buf(),
             crate::runtime::tools::default_registry(),
+            None,
         );
 
         let mut tracer = crate::runtime::session_tracer::SessionTracer::test_tracer();
@@ -1436,19 +1615,57 @@ Hope this helps!"#;
 
 /// Persists conversation history to content store at hibernate points.
 fn persist_history_to_content_store(
-    agent_dir: &Path,
+    _agent_dir: &Path,
     session_id: &str,
     history: &[Message],
     gateway_dir: &Path,
     tracer: &mut SessionTracer,
 ) -> anyhow::Result<()> {
     use crate::runtime::content_store::ContentStore;
-    use crate::runtime::session_snapshot::SessionSnapshot;
+    const MAX_PERSISTED_MESSAGES: usize = 400;
 
     let store = ContentStore::new(gateway_dir)?;
 
+    // Merge with previously persisted history so reconnecting to the same
+    // session can restore prior turns instead of only the latest run window.
+    let mut merged_history: Vec<Message> = match store.read_by_name(session_id, "session_history") {
+        Ok(existing) => serde_json::from_slice(&existing).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+
+    if merged_history.is_empty() {
+        merged_history.extend_from_slice(history);
+    } else {
+        for msg in history {
+            if matches!(msg.role, crate::llm::Role::System) {
+                // Keep only the first system instruction block in persisted history
+                // to avoid duplicate foundation prompts on every turn.
+                continue;
+            }
+            merged_history.push(msg.clone());
+        }
+    }
+
+    // Bound persisted history size while preserving the first system message if present.
+    if merged_history.len() > MAX_PERSISTED_MESSAGES {
+        let keep = MAX_PERSISTED_MESSAGES;
+        let mut trimmed = Vec::with_capacity(keep);
+        if let Some(first) = merged_history.first().cloned() {
+            if matches!(first.role, crate::llm::Role::System) {
+                trimmed.push(first);
+                let tail_keep = keep.saturating_sub(1);
+                let tail_start = merged_history.len().saturating_sub(tail_keep);
+                trimmed.extend(merged_history[tail_start..].iter().cloned());
+                merged_history = trimmed;
+            } else {
+                let tail_start = merged_history.len().saturating_sub(keep);
+                merged_history = merged_history[tail_start..].to_vec();
+            }
+        }
+    }
+
     // Serialize history
-    let history_json = serde_json::to_string(history)?;
+    let history_json = serde_json::to_string(&merged_history)?;
     let history_handle = store.write(history_json.as_bytes())?;
 
     // Register in session
@@ -1461,7 +1678,7 @@ fn persist_history_to_content_store(
         target: "lifecycle",
         session_id = %session_id,
         handle = %history_handle,
-        message_count = history.len(),
+        message_count = merged_history.len(),
         "Persisted session history to content store"
     );
 

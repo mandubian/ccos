@@ -108,6 +108,8 @@ This records the promotion to the PromotionStore and causal chain. Without this 
 
 If your evaluation fails (evaluator_pass=false), you MUST still call `promotion.record` with pass=false to document the failure.
 
+Exception: if execution is blocked on operator approval, the evaluation is not complete yet. In that case, do not call `promotion.record` until the operator approves and you can finish the evaluation, or until approval is explicitly denied and you are reporting a final failed outcome.
+
 ## Running Tests
 
 When using `sandbox.exec`:
@@ -116,13 +118,16 @@ When using `sandbox.exec`:
 - Capture both stdout and stderr for the evaluation report
 - For promotable/reviewed executable artifacts, prefer `sandbox.exec` with `artifact_id` so validation runs against the closed artifact boundary
 
-### Remote access / operator approval (CRITICAL)
+### Remote access / operator approval (HARD STOP)
 
-If `sandbox.exec` returns `approval_required: true` (often `Remote access detected` in stderr):
+When `sandbox.exec` returns an approval request (`approval_required: true`, or an `approval` object with `request_id`):
 
-1. **DO NOT** keep calling `sandbox.exec` with **different** commands to bypass the check — the gateway only allows **one** pending sandbox approval per session; further calls return `approval_already_pending` with the **same** `request_id`.
-2. **DO** stop and treat evaluation as **blocked on operator approval**: report `evaluator_pass: false` with a finding that execution needs approval, paste the exact `request_id` (`apr-*`), and do **not** loop on alternate commands.
-3. After the operator approves, **retry with the exact same command** that was submitted for that `request_id`, plus `approval_ref` set to that id (see tool JSON `message` field).
+1. **Stop tool use immediately.** Do **not** call any more tools in this turn.
+2. You should still produce one final natural-language response for this turn that explains execution is blocked on operator approval and includes the exact `request_id` (e.g. `apr-*`) from the tool response.
+3. Treat this as a temporary blocked state, not a completed evaluation. Do not call `promotion.record` yet, because the evaluation has not finished.
+4. **DO NOT** retry with `approval_ref` in the same turn — `approval_ref` is only valid after the operator approves and the session is resumed. Retrying before approval causes errors. **Never** fabricate or guess an `approval_ref`; use only the exact `request_id` from a prior `approval_required` response, and only after the operator has approved.
+5. **DO NOT** try alternate commands or loop — the gateway allows only one pending sandbox approval per session.
+6. After the operator approves and the session resumes, you will receive an `approval_resolved` message. Then retry with the exact same command plus `approval_ref` set to that id, complete the evaluation, and only then record the final promotion outcome.
 
 ## Artifact-First Review Protocol
 
