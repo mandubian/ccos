@@ -3,7 +3,7 @@
 //! Verifies that promotion records actually exist in the causal chain
 //! (tamper-evidence for promotion claims).
 
-use crate::causal_chain::{read_all_entries_across_segments, CausalLogger};
+use crate::causal_chain::read_all_entries_across_segments;
 use autonoetic_types::causal_chain::CausalChainEntry;
 use autonoetic_types::promotion::PromotionRole;
 use std::path::Path;
@@ -113,6 +113,7 @@ impl PromotionLookup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::causal_chain::CausalLogger;
     use tempfile::tempdir;
 
     #[test]

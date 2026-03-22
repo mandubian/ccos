@@ -321,10 +321,11 @@ pub struct GatewayExecutionService {
     agent_execution_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// Shared per-session budget counters for all spawns using this gateway process.
     session_budget: Arc<SessionBudgetRegistry>,
+    gateway_store: Option<Arc<crate::scheduler::gateway_store::GatewayStore>>,
 }
 
 impl GatewayExecutionService {
-    pub fn new(config: GatewayConfig) -> Self {
+    pub fn new(config: GatewayConfig, gateway_store: Option<Arc<crate::scheduler::gateway_store::GatewayStore>>) -> Self {
         let session_budget = Arc::new(SessionBudgetRegistry::new(config.session_budget.clone()));
         Self {
             execution_semaphore: Arc::new(Semaphore::new(config.max_concurrent_spawns.max(1))),
@@ -333,11 +334,16 @@ impl GatewayExecutionService {
             config: Arc::new(config),
             http_client: reqwest::Client::new(),
             session_budget,
+            gateway_store,
         }
     }
 
     pub fn config(&self) -> Arc<GatewayConfig> {
         self.config.clone()
+    }
+
+    pub fn gateway_store(&self) -> Option<Arc<crate::scheduler::gateway_store::GatewayStore>> {
+        self.gateway_store.clone()
     }
 
     pub async fn spawn_agent_once(
@@ -576,6 +582,7 @@ impl GatewayExecutionService {
                 driver,
                 loaded.dir,
                 crate::runtime::tools::default_registry(),
+                self.gateway_store.clone(),
             )
             .with_gateway_dir(self.config.agents_dir.join(".gateway"))
             .with_config(self.config.clone())
@@ -667,6 +674,7 @@ impl GatewayExecutionService {
                 action,
                 &crate::runtime::tools::default_registry(),
                 Some(self.config.as_ref()),
+                self.gateway_store.clone(),
             )
         })
         .await

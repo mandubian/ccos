@@ -308,12 +308,12 @@ pub fn read_all_entries_across_segments(
 }
 
 #[allow(dead_code)]
-pub fn compress_segment(segment_path: &Path) -> anyhow::Result<PathBuf> {
+pub fn compress_segment(_segment_path: &Path) -> anyhow::Result<PathBuf> {
     anyhow::bail!("Compression requires flate2 crate - add to Cargo.toml dependencies");
 }
 
 #[allow(dead_code)]
-pub fn decompress_segment(compressed_path: &Path) -> anyhow::Result<PathBuf> {
+pub fn decompress_segment(_compressed_path: &Path) -> anyhow::Result<PathBuf> {
     anyhow::bail!("Decompression requires flate2 crate - add to Cargo.toml dependencies");
 }
 

@@ -30,6 +30,7 @@ pub fn should_wake(
     background: &BackgroundPolicy,
     state: &BackgroundState,
     reevaluation: &ReevaluationState,
+    gateway_store: Option<&crate::scheduler::gateway_store::GatewayStore>,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Option<WakeReason>> {
     let _ = session_id;
@@ -39,10 +40,18 @@ pub fn should_wake(
             if state.processed_approval_request_ids.contains(request_id) {
                 continue;
             }
-            if crate::scheduler::approved_approvals_dir(config)
-                .join(format!("{request_id}.json"))
-                .exists()
-            {
+
+            let resolved = if let Some(store) = gateway_store {
+                if let Some(req) = store.get_approval(request_id)? {
+                    req.status.is_some() // if status is set, it's resolved (approved/rejected)
+                } else {
+                    false
+                }
+            } else {
+                false // Fallback removed; GatewayStore must be provided
+            };
+
+            if resolved {
                 return Ok(Some(WakeReason::ApprovalResolved {
                     request_id: request_id.clone(),
                 }));
@@ -208,7 +217,8 @@ pub fn parse_timestamp(value: &str) -> anyhow::Result<DateTime<Utc>> {
 mod tests {
     use super::should_wake;
     use autonoetic_types::background::{
-        BackgroundPolicy, BackgroundState, ReevaluationState, WakePredicates,
+        ApprovalRequest, BackgroundPolicy, BackgroundState, ReevaluationState, ScheduledAction,
+        WakePredicates,
     };
     use autonoetic_types::config::GatewayConfig;
     use chrono::Utc;
@@ -217,20 +227,37 @@ mod tests {
     #[test]
     fn test_should_wake_approval_resolved_respects_wake_predicate() {
         let temp = tempdir().expect("tempdir should create");
+        let gateway_dir = temp.path().join("agents").join(".gateway");
+        std::fs::create_dir_all(&gateway_dir).unwrap();
         let config = GatewayConfig {
             agents_dir: temp.path().join("agents"),
             ..GatewayConfig::default()
         };
+        let store = crate::scheduler::gateway_store::GatewayStore::open(&gateway_dir).unwrap();
+
         let request_id = "apr-1234abcd";
-        let approved_path = crate::scheduler::approved_approvals_dir(&config)
-            .join(format!("{}.json", request_id));
-        std::fs::create_dir_all(
-            approved_path
-                .parent()
-                .expect("approved approvals dir should have parent"),
-        )
-        .expect("approved approvals dir should create");
-        std::fs::write(&approved_path, "{}").expect("approved request marker should write");
+        // Create an approval in the store and record its decision
+        let req = ApprovalRequest {
+            request_id: request_id.to_string(),
+            agent_id: "agent-a".to_string(),
+            session_id: "session-a".to_string(),
+            action: ScheduledAction::SandboxExec {
+                command: "test".to_string(),
+                dependencies: None,
+                requires_approval: true,
+                evidence_ref: None,
+            },
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            reason: None,
+            evidence_ref: None,
+            workflow_id: None,
+            task_id: None,
+            root_session_id: None,
+            status: None,
+            decided_at: None,
+            decided_by: None,
+        };
+        store.create_approval(&req).unwrap();
 
         let state = BackgroundState::default();
         let reevaluation = ReevaluationState {
@@ -251,10 +278,21 @@ mod tests {
             &background,
             &state,
             &reevaluation,
+            Some(&store),
             Utc::now(),
         )
         .expect("should_wake should evaluate");
         assert!(no_wake.is_none(), "approval wake should be gated off");
+
+        // Record the approval decision
+        store
+            .record_decision(
+                request_id,
+                "approved",
+                "test-user",
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .unwrap();
 
         background.wake_predicates.approval_resolved = true;
         let wake = should_wake(
@@ -264,6 +302,7 @@ mod tests {
             &background,
             &state,
             &reevaluation,
+            Some(&store),
             Utc::now(),
         )
         .expect("should_wake should evaluate");

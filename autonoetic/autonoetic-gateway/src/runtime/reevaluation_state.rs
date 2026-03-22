@@ -44,6 +44,7 @@ pub fn execute_scheduled_action(
     action: &ScheduledAction,
     registry: &NativeToolRegistry,
     _config: Option<&autonoetic_types::config::GatewayConfig>,
+    gateway_store: Option<std::sync::Arc<crate::scheduler::gateway_store::GatewayStore>>,
 ) -> anyhow::Result<String> {
     let policy = PolicyEngine::new(manifest.clone());
     match action {
@@ -102,6 +103,7 @@ pub fn execute_scheduled_action(
                 None,
                 None,
                 _config,
+                gateway_store,
             )?;
 
             let parsed: serde_json::Value = serde_json::from_str(&result).map_err(|error| {
@@ -170,6 +172,7 @@ mod tests {
             summary: "Test install".to_string(),
             requested_by_agent_id: "caller-agent".to_string(),
             install_fingerprint: "abc123".to_string(),
+            payload: None,
         };
         assert!(
             !action.is_executable_by_scheduler(),
@@ -181,7 +184,7 @@ mod tests {
         let agent_dir = temp.path();
         let registry = crate::runtime::tools::default_registry();
 
-        let result = execute_scheduled_action(&manifest, agent_dir, &action, &registry, None)
+        let result = execute_scheduled_action(&manifest, agent_dir, &action, &registry, None, None)
             .expect(
             "execute_scheduled_action(AgentInstall) must succeed with approval-resolved payload",
         );

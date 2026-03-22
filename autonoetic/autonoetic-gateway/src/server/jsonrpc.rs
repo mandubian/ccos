@@ -69,7 +69,7 @@ mod tests {
         let router = JsonRpcRouter::new(GatewayConfig {
             agents_dir: temp.path().join("agents"),
             ..GatewayConfig::default()
-        });
+        }, None);
         (temp, router)
     }
 
