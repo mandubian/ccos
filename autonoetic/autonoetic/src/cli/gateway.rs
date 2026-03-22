@@ -169,9 +169,13 @@ pub fn handle_gateway_approvals(
     command: &super::common::GatewayApprovalCommands,
 ) -> anyhow::Result<()> {
     let config = autonoetic_gateway::config::load_config(config_path)?;
+    let gateway_dir = autonoetic_gateway::execution::gateway_root_dir(&config);
+    let gateway_store =
+        autonoetic_gateway::scheduler::gateway_store::GatewayStore::open(&gateway_dir)?;
     match command {
         super::common::GatewayApprovalCommands::List { json } => {
-            let approvals = autonoetic_gateway::scheduler::load_approval_requests(&config)?;
+            let approvals =
+                autonoetic_gateway::scheduler::load_approval_requests(&config, Some(&gateway_store))?;
             if *json {
                 println!("{}", serde_json::to_string_pretty(&approvals)?);
                 return Ok(());
@@ -197,6 +201,7 @@ pub fn handle_gateway_approvals(
         super::common::GatewayApprovalCommands::Approve { request_id, reason } => {
             let decision = autonoetic_gateway::scheduler::approve_request(
                 &config,
+                Some(&gateway_store),
                 request_id,
                 "cli",
                 reason.clone(),
@@ -218,6 +223,7 @@ pub fn handle_gateway_approvals(
         super::common::GatewayApprovalCommands::Reject { request_id, reason } => {
             let decision = autonoetic_gateway::scheduler::reject_request(
                 &config,
+                Some(&gateway_store),
                 request_id,
                 "cli",
                 reason.clone(),

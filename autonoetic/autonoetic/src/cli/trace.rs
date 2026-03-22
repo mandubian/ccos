@@ -740,7 +740,7 @@ pub async fn handle_trace_follow(
                 } else {
                     let target_str = te.entry.target.as_deref().unwrap_or("-");
                     let reason_str = te.entry.reason.as_deref().unwrap_or("-");
-                    let target_display = if target_str.len() > 19 { format!("{}…", &target_str[..18]) } else { target_str.to_string() };
+                    let _target_display = if target_str.len() > 19 { format!("{}…", &target_str[..18]) } else { target_str.to_string() };
                     let reason_display = if reason_str.len() > 35 { format!("{}…", &reason_str[..34]) } else { reason_str.to_string() };
 
                     // Highlight reason in red for errors/denials, dim otherwise
@@ -1095,7 +1095,7 @@ pub async fn handle_trace_workflow(
         workflow_or_root.to_string()
     };
 
-    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)?;
+    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, None, &workflow_id)?;
     if !follow && run.is_none() {
         anyhow::bail!(
             "No workflow run '{}' in gateway scheduler store.",
@@ -1107,7 +1107,7 @@ pub async fn handle_trace_workflow(
         trace_workflow_follow(&config, &workflow_id, run.as_ref(), json_output).await
     } else {
         let events =
-            autonoetic_gateway::scheduler::load_workflow_events(&config, &workflow_id)?;
+            autonoetic_gateway::scheduler::load_workflow_events(&config, None, &workflow_id)?;
         print_workflow_events_table(&workflow_id, run.as_ref(), &events, json_output)?;
         Ok(())
     }
@@ -1158,7 +1158,7 @@ async fn trace_workflow_follow(
 
     loop {
         poll_interval.tick().await;
-        let events = autonoetic_gateway::scheduler::load_workflow_events(config, workflow_id)?;
+        let events = autonoetic_gateway::scheduler::load_workflow_events(config, None, workflow_id)?;
         for ev in events {
             if seen.insert(ev.event_id.clone()) {
                 print_workflow_event_row(&ev, json_output)?;
@@ -1202,7 +1202,7 @@ fn resolve_workflow_id_for_graph(
 ) -> anyhow::Result<String> {
     let s = session_or_wf.trim();
     if s.starts_with("wf-") {
-        if autonoetic_gateway::scheduler::load_workflow_run(config, s)?.is_none() {
+        if autonoetic_gateway::scheduler::load_workflow_run(config, None, s)?.is_none() {
             anyhow::bail!("No workflow run '{}' in gateway scheduler store.", s);
         }
         return Ok(s.to_string());
@@ -1254,9 +1254,10 @@ fn build_workflow_graph_view(
 ) -> anyhow::Result<WorkflowGraphView> {
     let tasks = autonoetic_gateway::scheduler::list_task_runs_for_workflow(
         config,
+        None,
         &run.workflow_id,
     )?;
-    let events = autonoetic_gateway::scheduler::load_workflow_events(config, &run.workflow_id)?;
+    let events = autonoetic_gateway::scheduler::load_workflow_events(config, None, &run.workflow_id)?;
     let start = events.len().saturating_sub(12);
     let recent_slice = &events[start..];
 
@@ -1404,7 +1405,7 @@ pub async fn handle_trace_graph(
     let config = autonoetic_gateway::config::load_config(config_path)?;
     let workflow_id = resolve_workflow_id_for_graph(&config, session_or_wf)?;
 
-    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)?
+    let run = autonoetic_gateway::scheduler::load_workflow_run(&config, None, &workflow_id)?
         .ok_or_else(|| anyhow::anyhow!("workflow run '{}' disappeared", workflow_id))?;
 
     if !follow {
@@ -1425,7 +1426,7 @@ pub async fn handle_trace_graph(
     let mut poll_interval = interval(Duration::from_secs(1));
     loop {
         poll_interval.tick().await;
-        let run = match autonoetic_gateway::scheduler::load_workflow_run(&config, &workflow_id)? {
+        let run = match autonoetic_gateway::scheduler::load_workflow_run(&config, None, &workflow_id)? {
             Some(r) => r,
             None => {
                 tracing::warn!("workflow run removed while following");

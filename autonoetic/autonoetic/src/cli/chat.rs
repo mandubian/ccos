@@ -59,6 +59,12 @@ struct PendingRequest {
     sent_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct SignalResumeRef {
+    signal_session_id: String,
+    request_id: String,
+}
+
 struct App {
     messages: Vec<ChatMessage>,
     input: String,
@@ -69,13 +75,17 @@ struct App {
     scroll_offset: usize,
     session_id: String,
     target_hint: String,
-    // Mouse selection
+    // Mouse selection - stored as CONTENT positions (row, col), not screen positions
     selecting: bool,
-    sel_start: Option<(u16, u16)>,
-    sel_end: Option<(u16, u16)>,
-    signal_resume_by_internal_id: HashMap<u64, String>,
+    sel_start: Option<(usize, usize)>,  // (content_row, content_col)
+    sel_end: Option<(usize, usize)>,     // (content_row, content_col)
+    signal_resume_by_internal_id: HashMap<u64, SignalResumeRef>,
     signal_resume_inflight: HashSet<String>,
     awaiting_approvals: HashSet<String>,
+    announced_pending_approvals: HashSet<String>,
+    seen_workflow_event_ids: HashSet<String>,
+    workflow_events_bootstrapped: bool,
+    workflow_status_line: String,
     // Persistent clipboard — must stay alive so arboard's background ownership
     // thread keeps running and clipboard managers have time to capture the content.
     clipboard: Option<arboard::Clipboard>,
@@ -99,8 +109,12 @@ impl App {
             signal_resume_by_internal_id: HashMap::new(),
             signal_resume_inflight: HashSet::new(),
             awaiting_approvals: HashSet::new(),
-            // Initialize once; kept alive so arboard's ownership thread persists.
-            clipboard: arboard::Clipboard::new().ok(),
+            announced_pending_approvals: HashSet::new(),
+            seen_workflow_event_ids: HashSet::new(),
+            workflow_events_bootstrapped: false,
+            workflow_status_line: "workflow: n/a".to_string(),
+            // Safe clipboard initialization - arboard can panic on headless/SSH systems
+            clipboard: std::panic::catch_unwind(|| arboard::Clipboard::new().ok()).unwrap_or(None),
         }
     }
 
@@ -147,9 +161,7 @@ impl App {
         self.awaiting_approvals.insert(request_id);
     }
 
-    fn resolve_awaiting_approval(&mut self, request_id: &str) {
-        self.awaiting_approvals.remove(request_id);
-    }
+
 
     fn awaiting_approval_preview(&self) -> String {
         if self.awaiting_approvals.is_empty() {
@@ -192,6 +204,163 @@ impl App {
             self.cursor_pos += next.len_utf8();
         }
     }
+}
+
+fn hydrate_session_history(
+    app: &mut App,
+    config: &autonoetic_types::config::GatewayConfig,
+    session_id: &str,
+) -> anyhow::Result<usize> {
+    let gateway_dir = config.agents_dir.join(".gateway");
+    let store = autonoetic_gateway::runtime::content_store::ContentStore::new(&gateway_dir)?;
+    let handle = match store.resolve_name_with_root(session_id, "session_history") {
+        Ok(handle) => handle,
+        Err(_) => return Ok(0),
+    };
+
+    let history_json = store.read_string(&handle)?;
+    let history: Vec<autonoetic_gateway::llm::Message> = serde_json::from_str(&history_json)
+        .map_err(|e| anyhow::anyhow!("Invalid session_history payload for {}: {}", session_id, e))?;
+
+    let mut restored = 0usize;
+    for msg in history {
+        match msg.role {
+            autonoetic_gateway::llm::Role::User => {
+                if !msg.content.trim().is_empty() {
+                    app.add_message(MessageRole::User, msg.content);
+                    restored += 1;
+                }
+            }
+            autonoetic_gateway::llm::Role::Assistant => {
+                if !msg.content.trim().is_empty() {
+                    app.add_message(MessageRole::Assistant, msg.content);
+                    restored += 1;
+                }
+            }
+            autonoetic_gateway::llm::Role::System => {
+                if !msg.content.trim().is_empty() {
+                    app.add_message(MessageRole::System, msg.content);
+                    restored += 1;
+                }
+            }
+            autonoetic_gateway::llm::Role::Tool => {}
+        }
+    }
+
+    Ok(restored)
+}
+
+fn signal_resume_key(signal_session_id: &str, request_id: &str) -> String {
+    format!("{}::{}", signal_session_id, request_id)
+}
+
+
+
+fn format_workflow_event_card(event: &autonoetic_types::workflow::WorkflowEventRecord) -> Option<String> {
+    let ts_short: String = event.occurred_at.chars().take(19).collect();
+    let task = event.task_id.as_deref().unwrap_or("-");
+    let status = event
+        .payload
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let text = match event.event_type.as_str() {
+        "workflow.started" => Some(format!("📋 [{}] Workflow started", ts_short)),
+        "task.spawned" => Some(format!("🚀 [{}] Task spawned: {}", ts_short, task)),
+        "task.awaiting_approval" => Some(format!("⏸ [{}] Task awaiting approval: {}", ts_short, task)),
+        "task.started" => Some(format!("▶ [{}] Task started: {}", ts_short, task)),
+        "task.completed" => Some(format!("✅ [{}] Task completed: {}", ts_short, task)),
+        "task.failed" => Some(format!("❌ [{}] Task failed: {}", ts_short, task)),
+        "workflow.join.satisfied" => Some(format!("✅ [{}] Workflow join satisfied", ts_short)),
+        "task.updated" if status == "runnable" => {
+            Some(format!("🔁 [{}] Task resumed after approval: {}", ts_short, task))
+        }
+        _ => None,
+    };
+
+    text
+}
+
+fn refresh_workflow_status_line(
+    app: &mut App,
+    config: &autonoetic_types::config::GatewayConfig,
+    root_session_id: &str,
+) {
+    tracing::debug!(
+        target: "chat",
+        agents_dir = %config.agents_dir.display(),
+        root_session_id = %root_session_id,
+        "refresh_workflow_status_line: resolving workflow"
+    );
+    let resolved = autonoetic_gateway::scheduler::resolve_workflow_id_for_root_session(
+        config,
+        root_session_id,
+    );
+    match &resolved {
+        Ok(Some(wf_id)) => {
+            tracing::debug!(target: "chat", workflow_id = %wf_id, "refresh_workflow_status_line: found workflow");
+        }
+        Ok(None) => {
+            tracing::debug!(target: "chat", "refresh_workflow_status_line: no workflow found");
+            // Show helpful hint when no workflow found
+            if app.workflow_status_line.starts_with("workflow: n/a") {
+                app.workflow_status_line = format!(
+                    "workflow: n/a (session: {})",
+                    if root_session_id.len() > 16 {
+                        format!("{}...", &root_session_id[..16])
+                    } else {
+                        root_session_id.to_string()
+                    }
+                );
+            }
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(target: "chat", error = %e, "refresh_workflow_status_line: resolution failed");
+            app.workflow_status_line = format!("workflow: error ({})", e);
+            return;
+        }
+    }
+    let Some(workflow_id) = resolved.ok().flatten() else {
+        return;
+    };
+
+    let status = autonoetic_gateway::scheduler::load_workflow_run(config, None, &workflow_id)
+        .ok()
+        .flatten()
+        .map(|run| format!("{:?}", run.status).to_lowercase())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let mut running = 0usize;
+    let mut queued = 0usize;
+    let mut awaiting = 0usize;
+    let mut done = 0usize;
+
+    if let Ok(tasks) = autonoetic_gateway::scheduler::list_task_runs_for_workflow(config, None, &workflow_id) {
+        for t in tasks {
+            match t.status {
+                autonoetic_types::workflow::TaskRunStatus::Pending => queued += 1,
+                autonoetic_types::workflow::TaskRunStatus::Runnable
+                | autonoetic_types::workflow::TaskRunStatus::Running => running += 1,
+                autonoetic_types::workflow::TaskRunStatus::AwaitingApproval => awaiting += 1,
+                autonoetic_types::workflow::TaskRunStatus::Succeeded
+                | autonoetic_types::workflow::TaskRunStatus::Failed
+                | autonoetic_types::workflow::TaskRunStatus::Cancelled => done += 1,
+                autonoetic_types::workflow::TaskRunStatus::Paused => {}
+            }
+        }
+    }
+
+    app.workflow_status_line = format!(
+        "wf:{} {} | run:{} queue:{} wait:{} done:{}",
+        workflow_id,
+        status,
+        running,
+        queued,
+        awaiting,
+        done
+    );
 }
 
 // ============================================================================
@@ -393,25 +562,25 @@ fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),    // Messages
             Constraint::Length(1), // Status
             Constraint::Length(1), // Separator
+            Constraint::Min(5),    // Messages
             Constraint::Length(3), // Input
         ])
         .split(area);
 
-    // Messages
-    draw_messages(f, app, chunks[0]);
-
     // Status
-    draw_status(f, app, chunks[1]);
+    draw_status(f, app, chunks[0]);
 
     // Separator
     let sep = Paragraph::new(Line::from(Span::styled(
-        "─".repeat(chunks[2].width as usize),
+        "─".repeat(chunks[1].width as usize),
         Style::default().fg(Color::DarkGray),
     )));
-    f.render_widget(sep, chunks[2]);
+    f.render_widget(sep, chunks[1]);
+
+    // Messages
+    draw_messages(f, app, chunks[2]);
 
     // Input
     draw_input(f, app, chunks[3]);
@@ -431,18 +600,17 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     // `row` is the absolute content-line index (0 = very first line of all messages).
     let mut row: usize = 0;
 
-    // Selection bounds come from mouse screen-row coordinates.
-    // Screen row r → content row (r + scroll_offset).
-    // Convert here so the inner loop compares against content rows only.
-    let sel_start = app.sel_start.map(|(_, r)| r);
-    let sel_end = app.sel_end.map(|(_, r)| r);
-    let (content_sel_top, content_sel_bot) = match (sel_start, sel_end) {
-        (Some(a), Some(b)) => {
-            let lo = a.min(b) as usize + app.scroll_offset;
-            let hi = a.max(b) as usize + app.scroll_offset;
-            (lo, hi)
+    // Selection bounds are stored as CONTENT coordinates (content_row, content_col).
+    let (content_sel_top, content_sel_bot, sel_col_start_override, sel_col_end_override) = 
+        match (app.sel_start, app.sel_end) {
+        (Some((r1, c1)), Some((r2, c2))) => {
+            let lo_row = r1.min(r2);
+            let hi_row = r1.max(r2);
+            let lo_col = c1.min(c2);
+            let hi_col = c1.max(c2);
+            (lo_row, hi_row, lo_col, hi_col)
         }
-        _ => (usize::MAX, usize::MAX),
+        _ => (usize::MAX, usize::MAX, 0, 0),
     };
 
     for msg in &app.messages {
@@ -456,7 +624,7 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
         for (i, text_line) in msg.content.lines().enumerate() {
             let prefix = if i == 0 { icon } else { "  " };
 
-            // Compare content row against content-row selection bounds.
+            // Compare content row against selection bounds.
             let is_selected =
                 row >= content_sel_top && row <= content_sel_bot && content_sel_top != usize::MAX;
 
@@ -464,14 +632,12 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
                 // For selected lines, render with highlight.
                 // Column bounds only apply at the first and last selected lines.
                 let sel_col_start = if row == content_sel_top {
-                    app.sel_start.map(|(c, _)| c).unwrap_or(0) as usize
+                    sel_col_start_override
                 } else {
                     0
                 };
                 let sel_col_end = if row == content_sel_bot {
-                    app.sel_end
-                        .map(|(c, _)| c)
-                        .unwrap_or(text_line.len() as u16) as usize
+                    sel_col_end_override
                 } else {
                     text_line.len()
                 };
@@ -555,6 +721,7 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+    let workflow = &app.workflow_status_line;
     let text = if !app.pending.is_empty() {
         let waiting = if app.awaiting_approvals.is_empty() {
             String::new()
@@ -562,22 +729,25 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             format!(" | waiting approvals: {}", app.awaiting_approvals.len())
         };
         format!(
-            "{} {} pending{} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
+            "{} {} pending{} | {} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
             app.spinner(),
             app.pending.len(),
-            waiting
+            waiting,
+            workflow,
         )
     } else if !app.awaiting_approvals.is_empty() {
         format!(
-            "Waiting approvals: {} ({}) | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
+            "Waiting approvals: {} ({}) | {} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
             app.awaiting_approvals.len(),
-            app.awaiting_approval_preview()
+            app.awaiting_approval_preview(),
+            workflow,
         )
     } else {
         format!(
-            "Session: {} | Target: {} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
+            "Session: {} | Target: {} | {} | Enter: send | Scroll: Shift+↑↓ | Quit: Ctrl+C",
             &app.session_id[..20.min(app.session_id.len())],
-            app.target_hint
+            app.target_hint,
+            workflow,
         )
     };
 
@@ -632,12 +802,7 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
         .unwrap_or_else(|| default_terminal_channel_id(&sender_id, target_hint));
     let gateway_addr = format!("127.0.0.1:{}", config.port);
 
-    // Connect
-    let stream = TcpStream::connect(&gateway_addr)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {}", gateway_addr, e))?;
-    let (read_half, write_half) = stream.into_split();
-    let mut gateway_lines = BufReader::new(read_half).lines();
+    // Connect handling is mostly inside the loop.
     let envelope = terminal_channel_envelope(&channel_id, &sender_id, &session_id);
     let config = Arc::new(config);
 
@@ -650,9 +815,38 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     terminal.clear()?;
 
     let mut app = App::new(session_id.clone(), target_hint.to_string());
+    if let Ok(restored) = hydrate_session_history(&mut app, config.as_ref(), &session_id) {
+        if restored > 0 {
+            app.add_message(
+                MessageRole::System,
+                format!("Restored {} message(s) from previous session history", restored),
+            );
+        }
+    }
+    
+    // Show session info and workflow hint
+    let root_session = autonoetic_gateway::runtime::content_store::root_session_id(&session_id);
     app.add_message(
         MessageRole::System,
-        format!("Connected to {}", gateway_addr),
+        format!("Session: {} (root: {})", session_id, root_session),
+    );
+    
+    // Check if workflow exists for this session
+    if let Ok(Some(wf_id)) = autonoetic_gateway::scheduler::resolve_workflow_id_for_root_session(&config, root_session) {
+        app.add_message(
+            MessageRole::System,
+            format!("🔗 Connected to workflow: {}", wf_id),
+        );
+    } else {
+        app.add_message(
+            MessageRole::System,
+            format!("ℹ No workflow found for root session '{}'. Use --session-id to connect to an existing workflow.", root_session),
+        );
+    }
+    
+    app.add_message(
+        MessageRole::System,
+        format!("Connecting to {}...", gateway_addr),
     );
 
     // Channel for sending messages from TUI to gateway
@@ -662,24 +856,67 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     let mut pending_map: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
     // Signal check interval
-    let mut signal_interval = tokio::time::interval(Duration::from_secs(3));
+    let mut signal_interval = tokio::time::interval(Duration::from_secs(1));
     signal_interval.tick().await;
 
+    // Open gateway store for approvals and signals (same path as gateway daemon)
+    let gateway_dir = autonoetic_gateway::execution::gateway_root_dir(config.as_ref());
+    let gateway_store = match autonoetic_gateway::scheduler::gateway_store::GatewayStore::open(&gateway_dir) {
+        Ok(store) => {
+            app.add_message(
+                MessageRole::System,
+                format!("✓ Gateway store connected: {}", gateway_dir.display()),
+            );
+            Some(store)
+        }
+        Err(e) => {
+            app.add_message(
+                MessageRole::System,
+                format!("⚠ Gateway store unavailable: {} (approvals may not be visible)", e),
+            );
+            None
+        }
+    };
+
     // Main loop
-    let result = run_loop(
-        &mut terminal,
-        &mut app,
-        write_half,
-        &mut gateway_lines,
-        &config,
-        &session_id,
-        &envelope,
-        &tx,
-        &mut rx,
-        &mut pending_map,
-        &mut signal_interval,
-    )
-    .await;
+    loop {
+        // Connect
+        let stream = match TcpStream::connect(&gateway_addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                app.add_message(MessageRole::System, format!("Gateway connection failed (reconnecting in 3s): {}", e));
+                terminal.draw(|f| draw(f, &app))?;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        let (read_half, write_half) = stream.into_split();
+        let mut gateway_lines = BufReader::new(read_half).lines();
+
+        let disconnected = run_loop(
+            &mut terminal,
+            &mut app,
+            write_half,
+            &mut gateway_lines,
+            &config,
+            gateway_store.as_ref(),
+            &session_id,
+            &envelope,
+            &tx,
+            &mut rx,
+            &mut pending_map,
+            &mut signal_interval,
+        )
+        .await?;
+
+        if !disconnected {
+            break; // User quit explicitly
+        }
+
+        app.add_message(MessageRole::System, "Gateway disconnected, reconnecting in 3s...".to_string());
+        terminal.draw(|f| draw(f, &app))?;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
 
     // Cleanup
     disable_raw_mode()?;
@@ -690,7 +927,7 @@ pub async fn handle_chat(config_path: &Path, args: &super::common::ChatArgs) -> 
     )?;
     terminal.show_cursor()?;
 
-    result
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -700,13 +937,14 @@ async fn run_loop<B: ratatui::backend::Backend>(
     mut write_half: tokio::net::tcp::OwnedWriteHalf,
     gateway_lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>>,
     config: &autonoetic_types::config::GatewayConfig,
+    gateway_store: Option<&autonoetic_gateway::scheduler::gateway_store::GatewayStore>,
     session_id: &str,
     envelope: &serde_json::Value,
     tx: &tokio::sync::mpsc::UnboundedSender<(u64, String)>,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<(u64, String)>,
     pending_map: &mut std::collections::HashMap<String, u64>,
     signal_interval: &mut tokio::time::Interval,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let mut needs_redraw = true;
     let mut last_spinner_tick = Instant::now();
 
@@ -726,17 +964,29 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
         // Use tokio::select to handle async events
         tokio::select! {
-            // Gateway response (highest priority)
+            biased;
+
+            // Signal check always gets priority to avoid starvation
+            _ = signal_interval.tick() => {
+                if check_signals(app, config, gateway_store, session_id, tx).await {
+                    needs_redraw = true;
+                }
+            }
+
+            // Gateway response
             result = gateway_lines.next_line() => {
                 match result {
                     Ok(Some(line)) => {
                         if let Ok(resp) = serde_json::from_str::<GatewayJsonRpcResponse>(&line) {
                             if let Some(internal_id) = pending_map.remove(&resp.id) {
                                 app.remove_pending(internal_id);
-                                let signal_resume_request_id =
+                                let signal_resume_ref =
                                     app.signal_resume_by_internal_id.remove(&internal_id);
-                                if let Some(request_id) = &signal_resume_request_id {
-                                    app.signal_resume_inflight.remove(request_id);
+                                if let Some(resume_ref) = &signal_resume_ref {
+                                    app.signal_resume_inflight.remove(&signal_resume_key(
+                                        &resume_ref.signal_session_id,
+                                        &resume_ref.request_id,
+                                    ));
                                 }
 
                                 if let Some(error) = resp.error {
@@ -774,36 +1024,18 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                         }
                                     }
 
-                                    if let Some(request_id) = signal_resume_request_id {
-                                        let gateway_dir = config.agents_dir.join(".gateway");
-                                        if let Err(e) = autonoetic_gateway::scheduler::signal::consume_signal(
-                                            &gateway_dir,
-                                            session_id,
-                                            &request_id,
-                                        ) {
-                                            app.add_message(
-                                                MessageRole::System,
-                                                format!(
-                                                    "Approval resume processed but signal cleanup failed for {}: {}",
-                                                    request_id, e
-                                                ),
-                                            );
-                                        }
-                                    }
+
                                 }
                                 needs_redraw = true;
                             }
                         }
                     }
                     Ok(None) => {
-                        app.add_message(MessageRole::System, "Gateway disconnected".to_string());
-                        needs_redraw = true;
-                        break;
+                        return Ok(true); // Disconnected
                     }
                     Err(e) => {
                         app.add_message(MessageRole::System, format!("Gateway error: {}", e));
-                        needs_redraw = true;
-                        break;
+                        return Ok(true); // Disconnected
                     }
                 }
             }
@@ -836,13 +1068,6 @@ async fn run_loop<B: ratatui::backend::Backend>(
                 }
             }
 
-            // Signal check
-            _ = signal_interval.tick() => {
-                if check_signals(app, config, session_id, tx).await {
-                    needs_redraw = true;
-                }
-            }
-
             // TUI input - poll with short timeout for responsive UI
             _ = tokio::time::sleep(Duration::from_millis(16)) => {  // ~60fps
                 // Drain all pending crossterm events
@@ -850,7 +1075,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     match event::read()? {
                         Event::Key(key) => {
                             if !handle_key(key, app, tx)? {
-                                return Ok(()); // Quit
+                                return Ok(false); // Clean Quit
                             }
                             needs_redraw = true;
                         }
@@ -867,8 +1092,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
             }
         }
     }
-
-    Ok(())
+    // Loop only exits via returns
 }
 
 fn handle_mouse(mouse: crossterm::event::MouseEvent, app: &mut App) -> bool {
@@ -883,19 +1107,46 @@ fn handle_mouse(mouse: crossterm::event::MouseEvent, app: &mut App) -> bool {
         }
         crossterm::event::MouseEventKind::Down(btn) => {
             if btn == crossterm::event::MouseButton::Left {
-                app.selecting = true;
-                app.sel_start = Some((mouse.column, mouse.row));
-                app.sel_end = Some((mouse.column, mouse.row));
-                true
+                // Only start selection if clicking in messages area (row >= 2)
+                if mouse.row >= 2 {
+                    // Convert screen coordinates to content coordinates
+                    // Layout: status (1 row) + separator (1 row) = messages start at row 2
+                    // Messages widget has left border (1 col) + prefix (2 cols) = text at col 3
+                    let content_row = (mouse.row as usize - 2) + app.scroll_offset;
+                    let content_col = (mouse.column as usize).saturating_sub(3);
+                    app.selecting = true;
+                    app.sel_start = Some((content_row, content_col));
+                    app.sel_end = Some((content_row, content_col));
+                    true
+                } else {
+                    // Clicked on status or separator - clear any existing selection
+                    if app.sel_start.is_some() || app.sel_end.is_some() {
+                        app.sel_start = None;
+                        app.sel_end = None;
+                        true
+                    } else {
+                        false
+                    }
+                }
             } else {
                 false
             }
         }
         crossterm::event::MouseEventKind::Up(btn) => {
             if btn == crossterm::event::MouseButton::Left && app.selecting {
-                app.sel_end = Some((mouse.column, mouse.row));
-                app.selecting = false;
-                copy_selection_to_clipboard(app);
+                // Only complete selection if mouse is in messages area
+                if mouse.row >= 2 {
+                    let content_row = (mouse.row as usize - 2) + app.scroll_offset;
+                    let content_col = (mouse.column as usize).saturating_sub(3);
+                    app.sel_end = Some((content_row, content_col));
+                    app.selecting = false;
+                    copy_selection_to_clipboard(app);
+                } else {
+                    // Mouse released outside messages area - cancel selection
+                    app.selecting = false;
+                    app.sel_start = None;
+                    app.sel_end = None;
+                }
                 true
             } else {
                 false
@@ -903,7 +1154,12 @@ fn handle_mouse(mouse: crossterm::event::MouseEvent, app: &mut App) -> bool {
         }
         crossterm::event::MouseEventKind::Drag(btn) => {
             if btn == crossterm::event::MouseButton::Left && app.selecting {
-                app.sel_end = Some((mouse.column, mouse.row));
+                // Only update if in messages area
+                if mouse.row >= 2 {
+                    let content_row = (mouse.row as usize - 2) + app.scroll_offset;
+                    let content_col = (mouse.column as usize).saturating_sub(3);
+                    app.sel_end = Some((content_row, content_col));
+                }
                 true // Need redraw to show selection highlight
             } else {
                 false
@@ -977,104 +1233,100 @@ fn handle_key(
 async fn check_signals(
     app: &mut App,
     config: &autonoetic_types::config::GatewayConfig,
+    store: Option<&autonoetic_gateway::scheduler::gateway_store::GatewayStore>,
     session_id: &str,
-    tx: &tokio::sync::mpsc::UnboundedSender<(u64, String)>,
+    _tx: &tokio::sync::mpsc::UnboundedSender<(u64, String)>,
 ) -> bool {
-    let gateway_dir = config.agents_dir.join(".gateway");
-    let Ok(signals) =
-        autonoetic_gateway::scheduler::signal::check_pending_signals(&gateway_dir, session_id)
-    else {
-        return false;
-    };
+    let root_session_id = autonoetic_gateway::runtime::content_store::root_session_id(session_id);
+    let mut processed_any = false;
 
-    if signals.is_empty() {
-        return false;
+    let previous_workflow_status = app.workflow_status_line.clone();
+    refresh_workflow_status_line(app, config, &root_session_id);
+    if app.workflow_status_line != previous_workflow_status {
+        processed_any = true;
+        // Show notification when workflow becomes active
+        if app.workflow_status_line.starts_with("wf:") && previous_workflow_status.starts_with("workflow: n/a") {
+            app.add_message(MessageRole::System, format!("🔗 Workflow connected: {}", app.workflow_status_line));
+            processed_any = true;
+        }
     }
 
-    for pending in signals {
-        match &pending.signal {
-            autonoetic_gateway::scheduler::signal::Signal::ApprovalResolved {
-                request_id,
-                agent_id,
-                status,
-                install_completed,
-                message,
-                ..
-            } => {
-                app.resolve_awaiting_approval(request_id);
-                if app.signal_resume_inflight.contains(request_id) {
-                    continue;
-                }
-
-                let icon = if status == "approved" { "✅" } else { "❌" };
-                app.add_message(
-                    MessageRole::Signal,
-                    format!("{} Approval {} for {}", icon, status, agent_id),
-                );
-
-                let payload = serde_json::json!({
-                    "type": "approval_resolved",
-                    "request_id": request_id,
-                    "agent_id": agent_id,
-                    "status": status,
-                    "install_completed": install_completed,
-                    "message": message
-                })
-                .to_string();
-
-                let internal_id = app.next_id();
-                app.add_pending(internal_id);
-                app.signal_resume_inflight.insert(request_id.clone());
-                app.signal_resume_by_internal_id
-                    .insert(internal_id, request_id.clone());
-
-                if tx.send((internal_id, payload)).is_err() {
-                    app.remove_pending(internal_id);
-                    app.signal_resume_inflight.remove(request_id);
-                    app.signal_resume_by_internal_id.remove(&internal_id);
-                    app.add_message(
-                        MessageRole::System,
-                        format!(
-                            "Failed to enqueue approval resume for {}; will retry",
-                            request_id
-                        ),
-                    );
-                }
-            }
-            autonoetic_gateway::scheduler::signal::Signal::WorkflowJoinSatisfied {
-                workflow_id,
-                join_task_ids,
-                message,
-                ..
-            } => {
-                let icon = "✅";
-                app.add_message(
-                    MessageRole::Signal,
-                    format!(
-                        "{} Workflow join satisfied: {} ({} tasks completed)",
-                        icon,
-                        workflow_id,
-                        join_task_ids.len()
-                    ),
-                );
-
-                let payload = serde_json::json!({
-                    "type": "workflow_join_satisfied",
-                    "workflow_id": workflow_id,
-                    "join_task_ids": join_task_ids,
-                    "message": message,
-                })
-                .to_string();
-
-                let internal_id = app.next_id();
-                app.add_pending(internal_id);
-                if tx.send((internal_id, payload)).is_err() {
-                    app.remove_pending(internal_id);
+    match autonoetic_gateway::scheduler::resolve_workflow_id_for_root_session(
+        config,
+        &root_session_id,
+    ) {
+        Ok(Some(workflow_id)) => {
+            if let Ok(events) = autonoetic_gateway::scheduler::load_workflow_events(config, store, &workflow_id) {
+                if !app.workflow_events_bootstrapped {
+                    let recap_count = events.len().min(20);
+                    if recap_count > 0 {
+                        app.add_message(MessageRole::System, "── workflow recap ──".to_string());
+                        let start_idx = events.len().saturating_sub(recap_count);
+                        for event in &events[start_idx..] {
+                            if let Some(card) = format_workflow_event_card(event) {
+                                app.add_message(MessageRole::Signal, card);
+                            }
+                            app.seen_workflow_event_ids.insert(event.event_id.clone());
+                        }
+                        app.add_message(MessageRole::System, "── live updates ──".to_string());
+                    }
+                    app.workflow_events_bootstrapped = true;
+                } else {
+                    for event in events {
+                        if !app.seen_workflow_event_ids.insert(event.event_id.clone()) {
+                            continue;
+                        }
+                        if let Some(card) = format_workflow_event_card(&event) {
+                            app.add_message(MessageRole::Signal, card);
+                            processed_any = true;
+                        }
+                    }
                 }
             }
         }
+        Ok(None) => {
+            // No workflow found - this is normal if session is not connected to a workflow
+        }
+        Err(e) => {
+            tracing::warn!(target: "chat", error = %e, "Failed to resolve workflow");
+        }
     }
-    true
+
+    if let Ok(pending_approvals) =
+        autonoetic_gateway::scheduler::approval::pending_approval_requests_for_root(
+            config,
+            store,
+            &root_session_id,
+        )
+    {
+        let mut still_pending: HashSet<String> = HashSet::new();
+        for request in pending_approvals {
+            still_pending.insert(request.request_id.clone());
+            app.add_awaiting_approval(request.request_id.clone());
+            if app
+                .announced_pending_approvals
+                .insert(request.request_id.clone())
+            {
+                let mut detail = format!(
+                    "⏸ Approval required: {} ({} by {})",
+                    request.request_id,
+                    request.action.kind(),
+                    request.agent_id
+                );
+                if let Some(reason) = request.reason.as_ref().filter(|r| !r.trim().is_empty()) {
+                    detail.push_str(&format!(" - {}", reason));
+                }
+                app.add_message(MessageRole::Signal, detail);
+                processed_any = true;
+            }
+        }
+        app.awaiting_approvals.retain(|id| still_pending.contains(id));
+        app.announced_pending_approvals
+            .retain(|id| still_pending.contains(id));
+    }
+
+
+    processed_any
 }
 
 /// Copy the selected text region to clipboard.
@@ -1083,29 +1335,22 @@ async fn check_signals(
 /// thread stays alive after the write — clipboard managers have time to see the
 /// content before it is released.
 fn copy_selection_to_clipboard(app: &mut App) {
-    let (Some(start), Some(end)) = (app.sel_start, app.sel_end) else {
+    let (Some((start_row, start_col)), Some((end_row, end_col))) = (app.sel_start, app.sel_end) else {
         return;
     };
 
-    // Normalise selection direction.
-    let (top, bottom) = if start.1 <= end.1 {
-        (start, end)
+    // Normalize selection direction.
+    let (top_row, top_col, bot_row, bot_col) = if start_row <= end_row {
+        (start_row, start_col, end_row, end_col)
     } else {
-        (end, start)
+        (end_row, end_col, start_row, start_col)
     };
 
-    // Build a flat list of all rendered content lines.
+    // Build a flat list of all content lines (without prefix for clipboard).
     let mut lines: Vec<String> = Vec::new();
     for msg in &app.messages {
-        let icon = match msg.role {
-            MessageRole::User => "> ",
-            MessageRole::Assistant => "  ",
-            MessageRole::System => "  ",
-            MessageRole::Signal => "  ",
-        };
-        for (i, line) in msg.content.lines().enumerate() {
-            let prefix = if i == 0 { icon } else { "  " };
-            lines.push(format!("{}{}", prefix, line));
+        for line in msg.content.lines() {
+            lines.push(line.to_string());
         }
         lines.push(String::new()); // blank separator between messages
     }
@@ -1113,35 +1358,31 @@ fn copy_selection_to_clipboard(app: &mut App) {
         lines.push(format!("{} Working...", app.spinner()));
     }
 
-    // Screen row r → content row (r + scroll_offset).
-    let content_start = app.scroll_offset;
-    let screen_start_row = top.1 as usize;
-    let screen_end_row = bottom.1 as usize;
-    let start_col = top.0 as usize;
-    let end_col = bottom.0 as usize;
-
     let mut selected: Vec<String> = Vec::new();
 
-    for screen_row in screen_start_row..=screen_end_row {
-        let content_row = content_start + screen_row;
-        if content_row >= lines.len() {
+    for row in top_row..=bot_row {
+        if row >= lines.len() {
             break;
         }
-        let line = &lines[content_row];
+        let line = &lines[row];
 
-        if screen_row == screen_start_row && screen_row == screen_end_row {
-            let col_s = start_col.min(line.len());
-            let col_e = end_col.min(line.len());
+        if row == top_row && row == bot_row {
+            // Single line selection
+            let col_s = top_col.min(line.len());
+            let col_e = bot_col.min(line.len());
             if col_e > col_s {
                 selected.push(line[col_s..col_e].to_string());
             }
-        } else if screen_row == screen_start_row {
-            let col_s = start_col.min(line.len());
+        } else if row == top_row {
+            // First line of multi-line selection
+            let col_s = top_col.min(line.len());
             selected.push(line[col_s..].to_string());
-        } else if screen_row == screen_end_row {
-            let col_e = end_col.min(line.len());
+        } else if row == bot_row {
+            // Last line of multi-line selection
+            let col_e = bot_col.min(line.len());
             selected.push(line[..col_e].to_string());
         } else {
+            // Middle line
             selected.push(line.clone());
         }
     }
@@ -1151,21 +1392,29 @@ fn copy_selection_to_clipboard(app: &mut App) {
         return;
     }
 
-    // Reuse the persistent clipboard object; fall back to a fresh one if it was
-    // never initialised (e.g. running in a headless environment).
-    let written = if let Some(cb) = app.clipboard.as_mut() {
-        cb.set_text(&selected_text).is_ok()
-    } else {
-        false
-    };
-
-    if !written {
-        // Last-resort: try allocating a new clipboard (still better than nothing,
-        // but the "dropped quickly" warning may still appear).
-        if let Ok(mut cb) = arboard::Clipboard::new() {
-            let _ = cb.set_text(&selected_text);
-            app.clipboard = Some(cb);
+    // Safe clipboard copy - catch panics from arboard
+    // arboard can panic on systems without a clipboard manager (headless, SSH, etc.)
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Reuse the persistent clipboard object; fall back to a fresh one if it was
+        // never initialised (e.g. running in a headless environment).
+        if let Some(cb) = app.clipboard.as_mut() {
+            if cb.set_text(&selected_text).is_ok() {
+                return true;
+            }
         }
+        // Last-resort: try allocating a new clipboard
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if cb.set_text(&selected_text).is_ok() {
+                app.clipboard = Some(cb);
+                return true;
+            }
+        }
+        false
+    }));
+
+    if result.is_err() {
+        // Clipboard operation panicked - silently ignore to avoid terminal corruption
+        tracing::warn!("Clipboard operation panicked, ignoring");
     }
 }
 
