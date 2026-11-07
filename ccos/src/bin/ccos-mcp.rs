@@ -168,24 +168,13 @@ impl ccos::approval::ApprovalConsumer for SkillApprovalAutoActivator {
             return;
         }
 
-        match &request.category {
-            ccos::approval::ApprovalCategory::SynthesisApproval { capability_id, .. } => {
-                if let Err(e) = self.activate_for_capability(capability_id).await {
-                    eprintln!(
-                        "[ccos-mcp] Warning: approved skill auto-activation failed for '{}': {}",
-                        capability_id, e
-                    );
-                }
+        if let ccos::approval::ApprovalCategory::SynthesisApproval { capability_id, .. } = &request.category {
+            if let Err(e) = self.activate_for_capability(capability_id).await {
+                eprintln!(
+                    "[ccos-mcp] Warning: approved skill auto-activation failed for '{}': {}",
+                    capability_id, e
+                );
             }
-            ccos::approval::ApprovalCategory::EffectApproval { capability_id, effects, .. } if effects.iter().any(|e| e == "skill.approval") => {
-                if let Err(e) = self.activate_for_capability(capability_id).await {
-                    eprintln!(
-                        "[ccos-mcp] Warning: approved skill auto-activation failed for '{}': {}",
-                        capability_id, e
-                    );
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -207,9 +196,6 @@ async fn reload_approved_learned_skills(
         .filter(|r| r.status.is_approved())
         .filter_map(|r| match r.category {
             ccos::approval::ApprovalCategory::SynthesisApproval { capability_id, .. } => {
-                Some(capability_id)
-            }
-            ccos::approval::ApprovalCategory::EffectApproval { capability_id, effects, .. } if effects.iter().any(|e| e == "skill.approval") => {
                 Some(capability_id)
             }
             _ => None,

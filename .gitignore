@@ -78,3 +78,9 @@ capabilities/agents/
 storage/
 .rtfs_repl_history
 .rtfs_ccos_repl_history
+
+# Runtime gateway state (SQLite, sessions) — never commit
+autonoetic/agents/.gateway/
+
+# OpenCode local state
+.opencode/
