@@ -1,7 +1,3 @@
-# Track all chat JSON files with Git LFS
-chats/chat_*.json filter=lfs diff=lfs merge=lfs -text
-chats/*.md filter=lfs diff=lfs merge=lfs -text
-chats/chat_118.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_120.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_115.json filter=lfs diff=lfs merge=lfs -text
-chats/chat_117.json filter=lfs diff=lfs merge=lfs -text
+# No LFS-tracked patterns: the chats archive moved to the separate
+# `ccos-chats` repository, and `chats/` LFS objects were purged from
+# this repo's history to stay under the GitHub LFS storage budget.
